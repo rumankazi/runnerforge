@@ -1,0 +1,109 @@
+---
+title: RunnerForge
+description: Self-hosted Github Actions Runners on GCP
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Card, Cards } from 'fumadocs-ui/components/card';
+import { Activity, Network, ScrollText, Shield, Workflow } from 'lucide-react';
+
+<Cards>
+  <Card
+    icon={<Network />}
+    title="Architecture"
+    description="Two-layer design — slow-changing infrastructure and per-job orchestration."
+    href="/docs/design/architecture"
+  />
+  <Card
+    icon={<Workflow />}
+    title="Webhook flow"
+    description="The per-job lifecycle for every webhook event type."
+    href="/docs/design/webhook-flow"
+  />
+  <Card
+    icon={<ScrollText />}
+    title="Decisions"
+    description="ADRs — the why behind every major technical choice."
+    href="/docs/design/decisions"
+  />
+  <Card
+    icon={<Shield />}
+    title="Security"
+    description="Webhook validation, GitHub App auth, IAM, and data boundaries."
+    href="/docs/design/security"
+  />
+  <Card
+    icon={<Activity />}
+    title="Observability"
+    description="Logging, metrics, monitoring, and the dashboard strategy."
+    href="/docs/design/observability"
+  />
+</Cards>
+
+For a proper design we need to have clean requirements, restrictions/constraints and acceptance criteria.
+
+## Requirements
+
+- Github Jobs on queue get self-hosted runners _on demand_.
+- Github Jobs on completed and failure state ensure the VMs are cleaned up.
+- Self-hosted runners must be on GCP.
+- Each job queued must get its requested type of runner.
+- Concurrent runner requests should be handled gracefully.
+- Requested runner should be available in ≤ 1 minute.
+- No sensitive data from users should be accessed. Only the events related to job queue status.
+- Users should be able to see and visualize the required metrics on their usage in the website.
+- Admins must also be able to get metrics about the overall usage of the system including the per user based usage.
+
+<Callout type="warn" title="Open question">
+  Per-user usage metrics for admins need a legal review before implementation — confirm what we can
+  collect and surface without explicit user consent.
+</Callout>
+
+## Constraints
+
+- Runner provisioning is on-demand only — no pre-warmed pool. See [decisions](./decisions.mdx) for rationale.
+- Cost must be zero when idle. No always-on infrastructure beyond image storage.
+- The runner images and dependency lifecycle must be maintained either with automation or manually.
+- DORA metrics must be defined from the start to keep an eye on reliability of the system:
+  - **Deployment frequency** — how often we deploy changes to the orchestrator.
+  - **Lead time for changes** — time from commit to production deploy.
+  - **Change failure rate** — percentage of deployments that cause incidents.
+  - **Mean time to recovery (MTTR)** — how quickly we recover from failures.
+
+## Acceptance criteria
+
+- Users get their runner on demand in ≤ 1 minute.
+- Reliability is ensured with at least 99% uptime.
+- All the orphaned VMs are ensured to be cleaned up.
+- All dependencies and images are up to date.
+
+## Roadmap
+
+### Phase 1 — Webhook foundation
+
+Set up the GitHub App. Build the FastAPI `/webhook` endpoint on Cloud Run. Validate webhook signatures (HMAC-SHA256). Parse payloads for all event types (`queued`, `in_progress`, `completed`, `failed`). Log everything as structured JSON. No VMs at this stage — just receive webhooks and understand the data.
+
+### Phase 2 — GitHub App authentication chain
+
+Implement the full auth flow: private key → JWT → installation access token → registration token. Build the GitHub client module that handles this.
+
+### Phase 3 — VM lifecycle
+
+Build the Compute client module. On `queued`: create a GCE VM from a stock image, pass registration token via metadata, attach `job_id` as a VM label. On `completed`/`failed`: find VM by label, delete it. Write the startup script that configures and starts the runner. At this point we have a working end-to-end system.
+
+### Phase 4 — Packer and hardening
+
+Build a Packer image with the runner binary, Docker, and dependencies pre-installed. Cut boot-to-ready from minutes to ~35 seconds. Add the Cloud Scheduler sweep for orphaned VMs (timeout safety net). Add structured logging for observability. This is where the project becomes portfolio-ready.
+
+### Phase 5 — Warm pools (future)
+
+Maintain a configurable minimum pool of pre-booted runners per label set. Shift from "create on webhook" to "maintain pool levels." On-demand overflow when the pool is exhausted. Time-of-day scaling schedules.
+
+### Phase 6 — Production patterns (future)
+
+Headroom-based scaling, queue-aware autoscaling, burst buffers, per-label cost tracking, user-facing metrics dashboard (Firestore or BigQuery), multi-zone distribution.
+
+<Callout type="info" title="Scope">
+  Phases 1–4 are the initial build. Phases 5–6 are aspirational — they document how the system would
+  evolve at production scale, not what's being built right now.
+</Callout>

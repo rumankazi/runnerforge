@@ -1,0 +1,147 @@
+---
+title: Observability
+description: Logging, metrics, monitoring, and the user-facing dashboard strategy.
+---
+
+Observability is built in layers, starting with structured logging from day one and adding richer tooling as the system matures.
+
+## Layer 1: Structured logging (Phase 1)
+
+Every webhook request logs a structured JSON object to stdout. Cloud Run automatically forwards stdout to Cloud Logging with no additional setup.
+
+### Log schema for queued events
+
+```json
+{
+  "event": "queued",
+  "job_id": "12345",
+  "repo": "user/repo",
+  "labels": ["self-hosted", "linux", "large"],
+  "machine_type": "e2-standard-4",
+  "steps": {
+    "webhook_received": "2026-05-17T10:00:00Z",
+    "signature_validated_ms": 2,
+    "token_fetched_ms": 180,
+    "vm_created_ms": 3200,
+    "total_ms": 3382
+  },
+  "status": "success"
+}
+```
+
+### Log schema for completed events
+
+```json
+{
+  "event": "completed",
+  "job_id": "12345",
+  "repo": "user/repo",
+  "conclusion": "success",
+  "steps": {
+    "webhook_received": "2026-05-17T10:05:00Z",
+    "vm_found": true,
+    "vm_deleted_ms": 1500,
+    "total_ms": 1520
+  },
+  "status": "success"
+}
+```
+
+### Log schema for sweep actions
+
+```json
+{
+  "event": "sweep",
+  "vms_checked": 3,
+  "vms_deleted": 1,
+  "deleted_vms": [
+    {
+      "vm_name": "runner-12345",
+      "job_id": "12345",
+      "age_minutes": 135,
+      "reason": "job_completed_vm_not_cleaned"
+    }
+  ],
+  "total_ms": 4200
+}
+```
+
+These logs are searchable in Cloud Logging immediately. Queries like "show me all requests where `token_fetched_ms > 500`" or "all sweep deletions in the last 24 hours" work out of the box.
+
+## Layer 2: Cloud Monitoring dashboards (Phase 3–4)
+
+Cloud Run automatically reports request count, latency percentiles, instance count, error rate, and memory/CPU usage. These dashboards exist without writing any code.
+
+For custom metrics specific to RunnerForge, we use **log-based metrics** — Cloud Monitoring watches the structured logs and extracts numeric fields into time-series data. No additional infrastructure needed.
+
+### Metrics to track
+
+**System health:**
+- Webhook request rate (by event type)
+- Webhook processing latency (P50, P95, P99)
+- Error rate (failed webhook processing)
+- Active VMs (current count)
+- Cloud Run instance count over time
+
+**Runner lifecycle:**
+- VM creation latency (`vm_created_ms`)
+- Registration token fetch latency (`token_fetched_ms`)
+- VM boot-to-ready time (measured from creation to first job execution, derived from GitHub API timestamps)
+- VM cleanup latency (`vm_deleted_ms`)
+- Orphaned VMs cleaned per sweep
+
+**Reliability:**
+- Webhook signature validation failures (potential security issue)
+- VM creation failures (GCE API errors, quota exhaustion)
+- VMs that failed to register (created but never picked up a job)
+- Sweep deletion count (higher than expected indicates webhook delivery issues)
+
+## Layer 3: Firestore for user-facing metrics (Phase 4)
+
+When building the user-facing dashboard, add a lightweight Firestore write after each successful webhook processing. This is written asynchronously — fire and forget — so it does not slow down the critical path. If the Firestore write fails, the structured log still has the data.
+
+### Firestore data model
+
+Collection: `jobs`
+
+```
+jobs/{job_id}
+  repo: "user/repo"
+  owner: "user"
+  labels: ["self-hosted", "linux", "large"]
+  machine_type: "e2-standard-4"
+  status: "completed"
+  conclusion: "success"
+  created_at: timestamp
+  completed_at: timestamp
+  vm_name: "runner-12345"
+  timings:
+    boot_ms: 34000
+    registration_ms: 2100
+    job_duration_ms: 185000
+    total_ms: 221100
+  cost_estimate: 0.0032
+```
+
+### User dashboard queries
+
+- "My repos' runner usage this month" — query by `owner`, aggregate by `repo`.
+- "Job count by label" — query by `owner`, group by `labels`.
+- "Total runner-hours" — sum `job_duration_ms` by `owner`.
+- "Estimated cost" — sum `cost_estimate` by `owner` and `repo`.
+- "Success/failure rate" — count by `conclusion` grouped by `repo`.
+
+### Admin dashboard queries
+
+Everything in the user dashboard, plus:
+
+- Total system usage across all users.
+- Average boot time by machine type.
+- Failure rate by machine type (identifies problematic configurations).
+- Peak concurrent VMs over time.
+- Cost burn rate — total estimated cost per day/week/month.
+- Slowest steps — identify bottlenecks by looking at P95 timings per step.
+
+## BigQuery (future consideration)
+
+For long-term historical analytics ("average boot time trend over 6 months", "cost per repo per quarter"), a log sink from Cloud Logging to BigQuery provides SQL-queryable access to all historical log data. This is serverless and pay-per-query — no infrastructure to manage. Not needed for the initial build, but the structured logging format is already compatible.

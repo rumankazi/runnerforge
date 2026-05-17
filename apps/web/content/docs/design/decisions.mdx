@@ -1,0 +1,167 @@
+---
+title: Decisions
+description: Architecture Decision Records — the why behind every major technical choice.
+---
+
+Each decision follows the ADR (Architecture Decision Record) format: context, options considered, decision, and consequences.
+
+<Record type="adr" id="001" status="accepted" />
+
+## Cloud Run over GKE for the orchestrator
+
+### Context
+
+The orchestrator needs to receive HTTP webhooks, process them, and call external APIs (GitHub, GCE). Traffic is bursty and unpredictable — long idle periods followed by bursts when developers push code.
+
+### Options considered
+
+- **GKE Autopilot** — managed Kubernetes with pay-per-pod pricing. Familiar ecosystem, but the control plane alone costs ~$72/month regardless of usage.
+- **Cloud Run** — fully managed, scales to zero, pay-per-request. No cluster to manage.
+- **Always-on VM** — a single small VM running the FastAPI app. Simple, but always costs money even when idle.
+
+### Decision
+
+Cloud Run. The zero-idle-cost model is the deciding factor for a portfolio project with sporadic usage. The orchestrator's workload (receive webhook, make a few API calls, return) is a natural fit for request-based serverless compute.
+
+### Consequences
+
+- True zero cost when idle.
+- Each webhook request runs in an isolated container — no shared state, no race conditions.
+- Cold start adds ~1 second to the first request after idle, which is acceptable given the overall 35-second VM boot time.
+- Cannot run long-lived background processes. The orphan cleanup sweep is handled via Cloud Scheduler triggering a separate endpoint, not an in-process loop.
+
+---
+
+<Record type="adr" id="002" status="accepted" />
+
+## GCE VMs over Kubernetes pods for runners
+
+### Context
+
+Runners need to execute arbitrary CI/CD workflows, which often include Docker builds, service containers, and potentially untrusted code.
+
+### Options considered
+
+- **Kubernetes pods on GKE** — fast startup (2–5 seconds), but Docker-in-Docker is messy and has security implications. Pods on the same node share a kernel. GKE also requires the ~$72/month control plane.
+- **GCE VMs** — full isolation (separate kernel per runner), Docker runs natively, but boot time is 30–45 seconds with a pre-baked image.
+- **Firecracker/gVisor** — micro-VM or sandboxed container runtimes. Strong isolation with near-container speed, but significantly more complex to set up and operate.
+
+### Decision
+
+GCE VMs with Packer-built images. Full isolation without kernel sharing, native Docker support, and zero idle cost (VMs only exist during job execution).
+
+### Consequences
+
+- 30–45 second boot time vs 2–5 seconds for pods. Acceptable for the current use case.
+- No GKE control plane cost.
+- Docker runs natively — no Docker-in-Docker hacks needed.
+- Each VM is fully isolated. A malicious workflow cannot affect other jobs.
+- VM lifecycle management (creation, label tracking, deletion, orphan cleanup) is our responsibility.
+
+---
+
+<Record type="adr" id="003" status="accepted" />
+
+## Python (FastAPI) over Rust or Go for the orchestrator
+
+### Context
+
+The orchestrator is an API choreography service — it receives webhooks, calls GitHub and GCE APIs, and returns. It is not compute-bound.
+
+### Options considered
+
+- **Rust** — excellent performance and memory safety, but a steep learning curve (borrow checker, async runtimes). Would consume weeks of the project timeline on language mechanics rather than platform engineering concepts.
+- **Go** — strong concurrency model, popular in platform tooling. Viable choice, but adds a new language to the learning scope.
+- **Python (FastAPI)** — already known, mature Kubernetes and GCP client libraries, async support, automatic OpenAPI documentation.
+
+### Decision
+
+Python with FastAPI. The project's value is in the platform engineering architecture, not the implementation language. Python lets us focus on the orchestration patterns, and it is the language most commonly found in platform tooling.
+
+### Consequences
+
+- Faster development — no time spent learning a new language.
+- FastAPI provides automatic OpenAPI docs, which is good for portfolio presentation.
+- Target roles expect Python fluency for platform tooling.
+- If performance ever becomes a bottleneck (unlikely for this workload), the orchestrator could be rewritten in Go without changing the architecture.
+
+---
+
+<Record type="adr" id="004" status="accepted" />
+
+## GCE VM labels over a database for state tracking
+
+### Context
+
+The orchestrator needs to track which VMs belong to which jobs, so it can clean them up on `completed`/`failed` webhooks and identify orphans during sweep.
+
+### Options considered
+
+- **Firestore or Cloud SQL** — a dedicated database storing job-to-VM mappings. Full query flexibility, but adds infrastructure, cost, and a write in the critical webhook path.
+- **Redis / Memorystore** — fast in-memory store. Always-on cost, and data is lost on restart.
+- **GCE VM labels and metadata** — attach `job_id`, `repo`, and `runner=runnerforge` as labels directly on the VM. Query via the GCE API's label filter.
+
+### Decision
+
+GCE VM labels. The VMs themselves are the source of truth. On `completed`: find VM with matching `job_id` label, delete it. On sweep: list all VMs with `runner=runnerforge`, check creation timestamps and job status.
+
+### Consequences
+
+- No database infrastructure to provision, manage, or pay for.
+- The Cloud Run orchestrator stays completely stateless — no writes to worry about in the critical path.
+- Query performance is fine for the expected scale (tens of VMs, not thousands).
+- At production scale with thousands of concurrent runners, this approach would need to be revisited — GCE API list calls aren't designed for high-frequency querying. A lightweight store (Firestore) would make sense at that point.
+
+---
+
+<Record type="adr" id="005" status="accepted" />
+
+## On-demand provisioning over warm pools
+
+### Context
+
+Runner startup latency is ~35 seconds with a Packer image. A warm pool of pre-booted runners could reduce this to near-zero, but at the cost of always-on infrastructure.
+
+### Options considered
+
+- **On-demand** — create a VM only when a `queued` webhook arrives. 35-second latency, zero idle cost.
+- **Warm pool** — maintain a minimum number of pre-booted, pre-registered runners per label set. Near-instant job assignment, but ongoing cost even when no jobs are running.
+- **Hybrid** — warm pool for common labels, on-demand for rare ones.
+
+### Decision
+
+On-demand only for the initial build (Phases 1–4). The 35-second latency is well within the ≤ 1 minute requirement, and zero idle cost is a hard constraint for the project.
+
+### Consequences
+
+- Every job waits ~35 seconds for a runner. Acceptable for the current scope.
+- Zero cost when no jobs are running.
+- The architecture supports adding warm pools later (Phase 5) without structural changes — the warm pool manager would simply pre-create VMs using the same Compute client module.
+
+---
+
+<Record type="adr" id="006" status="accepted" />
+
+## Structured logging over Firestore for initial observability
+
+### Context
+
+We need observability from day one to understand boot times, failure rates, and system behavior. The question is where to store this data.
+
+### Options considered
+
+- **Firestore from day one** — write a document per job with timing data. Full query flexibility for dashboards immediately.
+- **Structured JSON logs to Cloud Logging** — log structured data from the FastAPI app. Cloud Run automatically sends stdout to Cloud Logging. Use log-based metrics for dashboards.
+- **Both** — structured logs plus Firestore writes.
+
+### Decision
+
+Structured logging only for Phases 1–3. Add Firestore in Phase 4 when building user-facing dashboards.
+
+### Consequences
+
+- Zero additional infrastructure for observability in the early phases.
+- Every step is timed and logged: `signature_validated_ms`, `token_fetched_ms`, `vm_created_ms`.
+- Cloud Monitoring can create dashboards from log-based metrics without any database.
+- No database write in the critical webhook path — keeps the handler fast and simple.
+- Firestore is added later as a convenience layer for user-facing queries, not as the source of truth.

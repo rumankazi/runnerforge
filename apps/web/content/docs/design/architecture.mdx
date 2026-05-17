@@ -1,0 +1,80 @@
+---
+title: Architecture
+description: Contains the architecture of RunnerForge
+---
+
+RunnerForge uses a two-layer architecture: a slow-changing infrastructure layer provisioned once, and a fast per-job orchestration layer that handles the webhook-driven runner lifecycle.
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+import diagram from '../../images/architecture-phase-1.json';
+
+<Excalidraw data={diagram} />
+
+## Components
+
+### GitHub App
+
+The GitHub App serves two purposes: it receives webhook events and authenticates with the GitHub API. Users install the app on their repositories, and GitHub automatically sends `workflow_job` webhook events to the configured endpoint whenever a runner is needed or a job completes.
+
+The app is configured with a webhook URL (the Cloud Run endpoint), a webhook secret for signature validation, and permissions scoped to `workflow_job` events only.
+
+### Cloud Run — the orchestrator
+
+A single Cloud Run service running a FastAPI application. This is the brain of the system. It receives webhook POSTs, validates signatures, routes events by type, and manages the VM lifecycle.
+
+Cloud Run scales to zero when no webhooks are arriving — zero running containers, zero cost. When a webhook hits the endpoint, Cloud Run spins up a container in under a second to handle the request. Each request runs in its own isolated container instance with a concurrency setting of 1, so concurrent webhooks are handled by separate containers automatically.
+
+The FastAPI app contains:
+
+- **POST /webhook** — the single entry point. Validates the HMAC-SHA256 signature, parses the payload, and routes to the appropriate handler.
+- **Event router** — reads the `action` field from the webhook payload and dispatches to the queued handler or the completed/failed handler.
+- **GitHub client** — handles the GitHub App authentication chain and requests registration tokens.
+- **Compute client** — calls the GCE API to create and delete VMs.
+- **POST /sweep** — a separate endpoint triggered by Cloud Scheduler on a cron schedule to clean up orphaned VMs.
+
+### GCE VMs — ephemeral runners
+
+{/* TODO: Add context around what is ephemeral runners, spot vms, etc. for differentiating. */}
+
+Each runner is an isolated GCE VM created from a pre-baked Packer image. The VM boots, a startup script reads the registration token from instance metadata, configures the GitHub Actions runner binary with the correct labels, and starts the runner process in ephemeral mode (`--ephemeral`).
+
+The runner registers itself with GitHub — the orchestrator never tells GitHub about the runner directly. GitHub sees the newly registered runner, matches it to the queued job by labels, and assigns the job. After the job completes, the runner process exits. The orchestrator receives a `completed` webhook and deletes the VM.
+
+VMs are tagged with labels including `job_id`, `repo`, and `runner=runnerforge`, which allows the orchestrator to find and manage them via the GCE API without needing a separate database.
+
+### Packer image
+
+Packer builds a custom GCE VM image ahead of time with everything pre-installed: the GitHub Actions runner binary, Docker, and any common dependencies workflows might need. This image is stored in the GCP project as a custom image.
+
+When a VM boots from this image, there is no installation step — the software is already on disk. The startup script only needs to configure the runner for the specific job (set the registration token, labels, and repo URL) and start the process. This cuts boot-to-ready time from 4–5 minutes (stock image + install) to approximately 35 seconds.
+
+### Terraform
+
+Terraform provisions all the slow-changing infrastructure: the Cloud Run service, IAM roles and service accounts, networking configuration, Cloud Scheduler jobs, and any other GCP resources. This runs once (or when infrastructure changes), not per job.
+
+The separation is deliberate: Terraform handles what changes rarely, the FastAPI app handles what changes per job. Different tools, different lifecycles, different concerns.
+
+## Two-layer separation
+
+| Layer          | What it does                                              | How often             | Tool                 |
+| -------------- | --------------------------------------------------------- | --------------------- | -------------------- |
+| Infrastructure | Provisions Cloud Run, IAM, networking, scheduler          | Once / on change      | Terraform            |
+| Image building | Builds runner VM image with pre-installed dependencies    | On dependency updates | Packer               |
+| Orchestration  | Receives webhooks, creates/deletes VMs, manages lifecycle | Per job               | FastAPI on Cloud Run |
+
+## Cost model
+
+When idle — no jobs running, no developers pushing code — the entire system costs effectively nothing:
+
+- Cloud Run: sleeping at zero instances, $0.
+- GCE VMs: none exist, $0.
+- Packer image: stored in GCP, pennies per month.
+- Networking: no traffic, $0.
+  When a job runs, the cost is the Cloud Run request time (fractions of a cent for a few seconds of compute) plus the GCE VM for the duration of the job (a few cents for a small VM running 5–10 minutes).
+
+<Callout type="idea" title="Why not GKE?">
+  GKE was rejected specifically because its control plane costs ~$72/month regardless of usage. For
+  a portfolio project with sporadic traffic, true zero idle cost is the dominant design goal. See
+  [ADR-001](/docs/RunnerForge/decisions) for the full rationale.
+</Callout>

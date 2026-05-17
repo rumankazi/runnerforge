@@ -1,0 +1,153 @@
+---
+title: Security
+description: Webhook validation, GitHub App authentication, IAM configuration, and data access boundaries.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+## Webhook signature validation
+
+Every webhook POST from GitHub includes an `X-Hub-Signature-256` header containing an HMAC-SHA256 signature of the request body, computed with the webhook secret configured on the GitHub App.
+
+The orchestrator validates every incoming request before processing:
+
+1. Read the raw request body (before any JSON parsing).
+2. Compute `HMAC-SHA256(webhook_secret, raw_body)`.
+3. Compare the result against the value in the `X-Hub-Signature-256` header using a constant-time comparison (to prevent timing attacks).
+4. If the signatures don't match, reject with HTTP 401 and log the attempt.
+
+This prevents unauthorized actors from triggering VM creation by sending crafted POST requests to the endpoint.
+
+## GitHub App authentication chain
+
+The GitHub App authentication flow has multiple steps. Each produces a token with a different scope and lifetime.
+
+<Steps>
+  <Step>
+    **Generate a JWT.** Using the GitHub App's private key (stored securely, not in source control), generate a short-lived JSON Web Token:
+
+    - **Issuer:** the GitHub App ID.
+    - **Issued at:** current time.
+    - **Expiration:** current time + 10 minutes (GitHub's maximum).
+    - **Algorithm:** RS256.
+
+    This JWT identifies the app itself, not any specific installation.
+  </Step>
+  <Step>
+    **Exchange JWT for an installation access token.** Using the JWT, call the GitHub API:
+
+    ```
+    POST /app/installations/{installation_id}/access_tokens
+    Authorization: Bearer {jwt}
+    ```
+
+    This returns an installation access token scoped to the specific GitHub organization or user that installed the app. This token expires after 1 hour. The `installation_id` comes from the webhook payload (`installation.id` field).
+  </Step>
+  <Step>
+    **Request a registration token.** Using the installation access token, call the GitHub API:
+
+    ```
+    POST /repos/{owner}/{repo}/actions/runners/registration-token
+    Authorization: Bearer {installation_access_token}
+    ```
+
+    This returns a one-time-use registration token that the runner uses to register itself with GitHub. The token expires after 1 hour.
+  </Step>
+</Steps>
+
+### Token lifecycle summary
+
+| Token | How it's created | Lifetime | Purpose |
+|---|---|---|---|
+| JWT | Signed with private key | 10 minutes | Authenticate as the GitHub App |
+| Installation access token | JWT → GitHub API | 1 hour | Act on behalf of the installation |
+| Registration token | Installation token → GitHub API | 1 hour, single use | Runner self-registration |
+
+### Private key storage
+
+The GitHub App private key must be stored securely. Options for GCP:
+
+- **GCP Secret Manager** — the recommended approach. The Cloud Run service accesses the secret at runtime via the Secret Manager API or as a mounted volume. The secret is encrypted at rest and access is controlled via IAM.
+- **Environment variable** — simpler but less secure. The key is set as a Cloud Run environment variable. Visible in the Cloud Run configuration UI and in Terraform state unless marked as sensitive.
+
+<Callout type="warn" title="Don't use env vars for the private key">
+  Env vars are visible in the Cloud Run UI and end up in Terraform state files. Use Secret Manager from the start — it's roughly the same setup effort and avoids ever needing a rotation/migration later.
+</Callout>
+
+For the initial build, Secret Manager is the target. The Terraform configuration should create the secret and grant the Cloud Run service account read access.
+
+## IAM and least privilege
+
+The Cloud Run service runs with a dedicated service account (not the default compute service account). This service account is granted only the permissions it needs.
+
+### Required roles
+
+**For GCE VM management:**
+- `roles/compute.instanceAdmin.v1` — create, delete, and manage VM instances.
+- Scoped to the specific GCP project.
+
+**For reading the Packer image:**
+- `roles/compute.imageUser` — use custom images as boot disks for new VMs.
+
+**For Secret Manager access:**
+- `roles/secretmanager.secretAccessor` — read the GitHub App private key.
+- Scoped to the specific secret, not all secrets in the project.
+
+**For Cloud Logging (automatic):**
+- Cloud Run services automatically write to Cloud Logging. No additional role needed.
+
+**For Firestore (Phase 4):**
+- `roles/datastore.user` — read and write documents.
+- Added when the user-facing dashboard is built.
+
+### What the service account cannot do
+
+<Callout type="success" title="Intentionally restricted">
+  These boundaries are not accidental — they're enforced by IAM scoping and GitHub App permission scoping. None of the following are reachable by RunnerForge:
+</Callout>
+
+- Access user source code, pull requests, or repository contents.
+- Read or modify GitHub Actions workflow files.
+- Access any GitHub data beyond `workflow_job` event payloads and registration tokens.
+- Access other GCP projects or resources outside the RunnerForge project.
+
+## Data access boundaries
+
+RunnerForge is designed to access the minimum data required for runner orchestration.
+
+### Data the system accesses
+
+- `workflow_job` webhook payloads: job ID, action (queued/completed), requested labels, repository name, installation ID, conclusion.
+- Registration tokens: short-lived, single-use tokens for runner authentication.
+- GCE VM metadata: instance names, labels, creation timestamps, status.
+
+### Data the system does not access
+
+- Repository source code.
+- Pull request contents or comments.
+- Workflow file definitions (`.github/workflows/*.yml`).
+- User credentials or personal access tokens.
+- Other GitHub events (push, pull_request, issues, etc.).
+
+The GitHub App is configured with permissions scoped exclusively to `workflow_job` events. Users can verify this in the app's permission settings before installation.
+
+## Network security
+
+### Cloud Run ingress
+
+Cloud Run is configured to accept traffic from all sources (required for GitHub webhooks to reach the endpoint). The webhook signature validation serves as the authentication layer instead of network-level restrictions.
+
+### GCE VM egress
+
+Runner VMs need outbound internet access to:
+
+- Register with GitHub (api.github.com).
+- Download workflow dependencies (npm, pip, Docker Hub, etc.).
+- Report job results back to GitHub.
+
+VMs do not need to accept inbound connections. No external IP is strictly necessary if Cloud NAT is configured, but for simplicity in the initial build, VMs are created with ephemeral external IPs.
+
+### Internal communication
+
+Cloud Run communicates with the GCE API over Google's internal network (no public internet traversal). Authentication is via the service account's ambient credentials, not API keys or tokens stored in code.

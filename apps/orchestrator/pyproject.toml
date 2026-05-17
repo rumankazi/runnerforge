@@ -1,0 +1,8 @@
+[project]
+name = "runnerforge"
+version = "0.1.0"
+description = "Self-hosted runners on GCP for Github Actions"
+readme = "README.md"
+authors = [{ name = "Ruman Kazi", email = "kaziruman@gmail.com" }]
+requires-python = ">=3.12"
+dependencies = []

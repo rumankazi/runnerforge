@@ -1,0 +1,136 @@
+---
+title: Webhook flow
+description: The per-job lifecycle — what happens for each webhook event type.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+Every runner lifecycle is driven by GitHub webhook events. The orchestrator receives a single POST to `/webhook` and routes based on the `action` field in the payload.
+
+## Event types
+
+GitHub sends `workflow_job` webhooks with the following actions:
+
+- **`queued`** — a job needs a runner. This triggers VM creation.
+- **`in_progress`** — a runner picked up the job. Logged for observability, no action needed.
+- **`completed`** — the job finished (success or failure). This triggers VM cleanup.
+
+<Callout type="warn" title="Webhooks are one-shot">
+  GitHub sends each event exactly once. There are no repeated pings for queued jobs — if a webhook is lost, the job stays queued indefinitely until the orphan-cleanup sweep catches it.
+</Callout>
+
+## Webhook validation
+
+Every incoming request is validated before processing:
+
+<Steps>
+  <Step>Read the raw request body.</Step>
+  <Step>Compute HMAC-SHA256 of the body using the webhook secret (configured when creating the GitHub App).</Step>
+  <Step>Compare the result against the `X-Hub-Signature-256` header.</Step>
+  <Step>If they don't match, reject the request with 401.</Step>
+</Steps>
+
+This ensures the webhook genuinely came from GitHub, not a random POST to the endpoint.
+
+## Queued flow
+
+When `action` is `queued`, the orchestrator runs:
+
+<Steps>
+  <Step>
+    **Parse the payload.** Extract `workflow_job.id` (the job ID), `workflow_job.labels` (the requested runner labels like `self-hosted`, `linux`, `large`), `repository.full_name` (the repo), and `installation.id` (for authentication).
+  </Step>
+  <Step>
+    **Authenticate with GitHub.** Use the GitHub App's private key to generate a JWT, exchange it for an installation access token, then request a registration token for the target repository.
+  </Step>
+  <Step>
+    **Create the GCE VM.** Call the GCE API to create a VM with:
+    - The Packer-built custom image as the boot disk.
+    - Instance metadata containing the registration token and repo URL.
+    - VM labels: `job_id={id}`, `repo={owner-repo}`, `runner=runnerforge`, `labels={requested-labels}`.
+    - Machine type selected based on the requested labels (mapping defined in configuration).
+  </Step>
+  <Step>
+    **Log structured data.** Log a JSON object with the job ID, repo, labels, and timing for each step (`token_fetched_ms`, `vm_created_ms`, `total_ms`).
+  </Step>
+  <Step>
+    **Return 200.** The orchestrator's job is done. The VM boots independently.
+  </Step>
+</Steps>
+
+After the orchestrator returns, the VM lifecycle continues on its own:
+
+<Steps>
+  <Step>VM boots from the Packer image (~30 seconds).</Step>
+  <Step>The startup script reads the registration token from instance metadata.</Step>
+  <Step>The runner binary is configured with `./config.sh --url {repo_url} --token {token} --labels {labels} --ephemeral --unattended`.</Step>
+  <Step>The runner starts with `./run.sh`.</Step>
+  <Step>The runner process registers itself with GitHub.</Step>
+  <Step>GitHub matches the runner to the queued job by labels and assigns it.</Step>
+  <Step>The runner executes the job.</Step>
+</Steps>
+
+## Completed flow
+
+When `action` is `completed`:
+
+<Steps>
+  <Step>
+    **Parse the payload.** Extract `workflow_job.id` and `workflow_job.conclusion` (success, failure, cancelled).
+  </Step>
+  <Step>
+    **Find the VM.** Call the GCE API to list VMs filtered by label `job_id={id}`.
+  </Step>
+  <Step>
+    **Delete the VM.** If a matching VM is found, delete it. If no VM is found (it may have already been cleaned up or never created), log a warning and move on.
+  </Step>
+  <Step>
+    **Log structured data.** Log the job ID, conclusion, VM deletion result, and timing.
+  </Step>
+  <Step>
+    **Return 200.**
+  </Step>
+</Steps>
+
+The `--ephemeral` flag on the runner means the runner process exits after one job, but the VM itself does not self-delete — a process cannot easily delete the machine it is running on. The orchestrator handles VM deletion via this webhook.
+
+## Failed and cancelled jobs
+
+The `completed` webhook covers both successful and failed jobs — the `conclusion` field indicates the outcome. There is no separate `failed` action. The cleanup logic is identical regardless of conclusion: find the VM by `job_id` label and delete it.
+
+If a job is cancelled before a runner picks it up, GitHub may send a `completed` webhook with `conclusion: cancelled`. The VM might still be booting or registering. The orchestrator still attempts to find and delete it.
+
+## Orphan cleanup sweep
+
+Since webhooks are one-shot (not retried indefinitely), there are failure scenarios where a VM is created but the cleanup webhook is never received:
+
+- The orchestrator crashes after creating the VM but before returning 200, causing GitHub to retry and potentially create a duplicate.
+- A network issue causes the `completed` webhook to be lost entirely.
+- A VM fails to boot or the runner fails to register, so the job times out on GitHub's side but the VM still exists.
+
+To handle these, Cloud Scheduler triggers a `POST /sweep` endpoint on a regular interval (every 10 minutes):
+
+<Steps>
+  <Step>List all GCE VMs with label `runner=runnerforge`.</Step>
+  <Step>For each VM, check the creation timestamp.</Step>
+  <Step>
+    If a VM is older than the maximum allowed duration (e.g., 2 hours):
+    - Check the job status via the GitHub API using the `job_id` label.
+    - If the job is completed, cancelled, or no longer exists, delete the VM.
+    - If the job is somehow still running past the hard limit, delete the VM anyway — something is wrong.
+  </Step>
+  <Step>Log all actions taken for observability.</Step>
+</Steps>
+
+<Callout type="info" title="Safety net">
+  The webhook-driven cleanup handles the happy path; the sweep catches everything else. Both paths are required — one alone is not enough.
+</Callout>
+
+## Concurrency
+
+Multiple webhooks arriving simultaneously are handled by Cloud Run's auto-scaling. Each webhook request gets its own container instance (concurrency set to 1). The containers are fully isolated and share no state.
+
+Two jobs requesting the same labels at the same time: each gets its own VM, each VM registers independently, GitHub assigns them to their respective jobs via label matching and queue ordering.
+
+Duplicate webhooks for the same job (rare, caused by network retries): the second request creates a second VM. The extra VM registers with GitHub but finds no matching queued job. The orphan cleanup sweep deletes it.
