@@ -1,0 +1,14 @@
+name: Test
+
+on:
+  push:
+
+jobs:
+  test:
+    runs-on: [self-hosted, runnerforge-test]
+    steps:
+      - name: initialization
+        uses: actions/checkout@v6
+
+      - name: hello
+        run: echo "Hello world!"
