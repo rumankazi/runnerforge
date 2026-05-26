@@ -2,3 +2,133 @@
 title: Phase 1
 description: Phase 1 Development progress
 ---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+## Phase 1.1
+
+We will start with preparing the backend first. We want to be able to create webhook using Github App so that we get the webhook events to our server. We will work on processing the data later. For phase 1.1, we will just validate the header is authenticated.
+
+### Github App
+
+<Steps>
+  <Step>Test App created `runnerforge-test`</Step>
+  <Step>
+    Created proxy webhook url using smee.io.
+
+    ```bash
+    smee -u https://smee.io/F4sLg91moPQcA -t http://127.0.0.1:8000/webhook
+    ```
+
+  </Step>
+  <Step>
+  Created secret to be used for HMAC validation:
+
+    ```bash
+    openssl rand -hex 32
+    ```
+
+  </Step>
+  <Step>
+  Enabled SSL verification
+  </Step>
+  <Step>
+  Repository permissions
+  ```
+  Actions : Read-only
+  ```
+  </Step>
+  <Step>
+  Subscribe to events: `Workflow job`
+  </Step>
+</Steps>
+
+### HMAC
+
+HMAC (Hash-based Message Authentication Code) lets two parties share a secret (here `WEBHOOK_SECRET`, we created during step 3 of Github App creation).
+
+The signature proves:
+
+- The sender knows the secret (authenticity)
+- The message wasn't tempered with after signing (integrity)
+
+It's not encryption - the payload stays readable.
+
+import diagram from '../../images/github-app-hmac.excalidraw.json';
+
+<Excalidraw data={diagram} />
+
+Both sides have the same secret (random string generated). Both run the same algorithm (HMAC-SHA256).
+
+<Callout title="Why attacker can't forge?">
+  They can see the payload and the signature on the wire (well, they can't - it's HTTPS - but even
+  if they could), they can't generate a valid signature of a payload they crafted, because HMAC
+  outputs can't be reversed to extract the secret.
+</Callout>
+
+### Endpoint: /webhook
+
+```python
+WEBHOOK_SECRET = os.environ["GITHUB_WEBHOOK_SECRET"].encode()
+
+@app.post("/webhook", status_code=200)
+async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()]):
+    body = await request.body()
+    # calculate the expected hmac using secret + body
+    expected = "sha256=" + hmac.new(WEBHOOK_SECRET, body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, x_hub_signature_256):
+        raise HTTPException(status_code=401, detail="Invalid signature provided")
+
+    parsed_body = json.loads(body)
+    print(json.dumps(parsed_body, indent=2))
+    return {"ok": True}
+```
+
+## Phase 1.2
+
+Focus on event routing and payload modeling
+
+### Pydantic model
+
+The fields (for now) that we need from the payload:
+(we will expand the required fields as we need in future)
+
+For `queued` action:
+
+- action
+- workflow_job.id
+- workflow_job.labels
+- repository.full_name
+- installation.id
+
+For `completed` action:
+
+- action
+- workflow_job.id
+- workflow_job.conclusion
+
+```python title="models.py"
+from pydantic import BaseModel
+
+class WorkflowJob(BaseModel):
+    id: int
+    labels: list[str]
+    conclusion: str | None = None
+
+class Repository(BaseModel):
+    full_name: str
+
+class Installation(BaseModel):
+    id: int
+
+class WorkflowJobEvent(BaseModel):
+    action: str # queued | in_progress | completed
+    workflow_job: WorkflowJob
+    repository: Repository
+    installation: Installation
+```
+
+We could have also complicated this using Discriminated Union, but we will defer this for later and only if we need it.
+
+<include>./refs/models.py</include>
