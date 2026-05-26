@@ -17,7 +17,7 @@ WEBHOOK_SECRET = os.environ["GITHUB_WEBHOOK_SECRET"].encode()
 async def root():
     return {"message": "Hello World"}
 
-
+#TODO: migrate to webhook.py
 @app.post("/webhook", status_code=200)
 async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()]):
     body = await request.body()
@@ -26,5 +26,23 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         raise HTTPException(status_code=401, detail="Invalid signature provided")
 
     event = WorkflowJobEvent.model_validate(json.loads(body))
-    print(event.action, event.workflow_job.id, event.workflow_job.labels)
+    match event.action:
+        case "queued":
+            handle_queued(event)
+        case "in_progress":
+            handle_in_progress(event)
+        case "completed":
+            handle_completed(event)
+        case _:
+            print(f"Ignoring unknown action: {event.action}")
     return {"ok": True}
+
+#TODO: should migrate to handlers.py
+def handle_queued(event):
+    print(f"Would create VM for the job {event.workflow_job.id}, labels={event.workflow_job.labels}")
+
+def handle_in_progress(event):
+    print(f"job {event.workflow_job.id} picked up by a runner")
+
+def handle_completed(event):
+    print(f"would delete VM for job {event.workflow_job.id}, conclusion={event.workflow_job.conclusion}")
