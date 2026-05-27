@@ -1,6 +1,8 @@
 # RunnerForge
 
-Self-hosted runners on GCP for Github Actions
+Self-hosted runners on GCP for Github Actions.
+
+**Installing the GitHub App?** See [Trust & threat model](apps/web/content/docs/design/trust.mdx) for what we ask for, what limits the damage if we're compromised, and how you can verify our claims.
 
 ## Development
 

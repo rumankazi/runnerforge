@@ -119,13 +119,13 @@
     {
       "id": "GGn4USoAgeq8SVbODc3Ho",
       "type": "rectangle",
-      "x": 605.7228033236622,
-      "y": 592.4834681407355,
+      "x": 597.2032720736622,
+      "y": 592.4912806407355,
       "width": 385.1787158950122,
       "height": 171.6673942707575,
       "angle": 0,
       "strokeColor": "#1e1e1e",
-      "backgroundColor": "#b2f2bb",
+      "backgroundColor": "#a5d8ff",
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
@@ -138,8 +138,8 @@
         "type": 3
       },
       "seed": 1952949407,
-      "version": 954,
-      "versionNonce": 766966769,
+      "version": 981,
+      "versionNonce": 1025048808,
       "isDeleted": false,
       "boundElements": [
         {
@@ -151,15 +151,15 @@
           "type": "arrow"
         }
       ],
-      "updated": 1779707280506,
+      "updated": 1779862653503,
       "link": null,
       "locked": false
     },
     {
       "id": "dqt2DkqrBeuLHBbNdgkcJ",
       "type": "text",
-      "x": 610.7228033236622,
-      "y": 617.0073816079865,
+      "x": 602.2032720736622,
+      "y": 617.0151941079865,
       "width": 372.64971923828125,
       "height": 122.61956733625536,
       "angle": 0,
@@ -175,11 +175,11 @@
       "index": "a5",
       "roundness": null,
       "seed": 308787391,
-      "version": 1244,
-      "versionNonce": 474207633,
+      "version": 1270,
+      "versionNonce": 253273064,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1779707280506,
+      "updated": 1779862653503,
       "link": null,
       "locked": false,
       "text": "4. body = raw bytes\n5. received_sig = header value\n6. expected sig = HMAC_SHA256(secret, body)\n7. compare expected_sig vs received_sig\nmatch -> 200, process\nno match -> 401, reject",
@@ -232,10 +232,10 @@
     {
       "id": "kuOetcWngY7nmjRVU2mVJ",
       "type": "arrow",
-      "x": 795.5447466979683,
-      "y": 532.0120309269878,
-      "width": 2.578345843109399,
-      "height": 55.56665452029758,
+      "x": 793.1705909656046,
+      "y": 528.5184043608446,
+      "width": 0.29051742689205184,
+      "height": 61.9251672592726,
       "angle": 0,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "#b2f2bb",
@@ -251,11 +251,11 @@
         "type": 2
       },
       "seed": 762434815,
-      "version": 424,
-      "versionNonce": 775423249,
+      "version": 450,
+      "versionNonce": 1730930408,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1779707280593,
+      "updated": 1779862653504,
       "link": null,
       "locked": false,
       "points": [
@@ -264,8 +264,8 @@
           0
         ],
         [
-          2.578345843109399,
-          55.56665452029758
+          0.29051742689205184,
+          61.9251672592726
         ]
       ],
       "startBinding": {

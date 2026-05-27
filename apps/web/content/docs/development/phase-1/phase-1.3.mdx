@@ -1,0 +1,35 @@
+---
+title: Phase 1.3
+description: Github App auth chain
+---
+
+We will be focusing on the github authentication.
+
+First,
+
+## What do we mean by github authentication?
+
+Up to now, we were a passive receiver, with no communication back to github.
+In this phase, we will start calling github api.
+
+For this Github needs to know:
+
+- who is this? (authentication - proving identity)
+- are you allowed to do this? (authorization - checking permissions)
+
+## What does it achieve?
+
+The concrete end product of phase 1.3: **registration token**
+
+A short-lived string Github gives, that says:
+
+> whoever has this allowed to register a self-hostd runner on this specific repo.
+
+This token gets baked into GCE VM's metadata (Phase 1.4).
+When VM boots, it reads the token, run `./config.sh --token <token> --url <repo>`, and the runner process registers itself with Github.
+
+## Why do we need three tokens (and not one)?
+
+import diagram from '../../../images/tokens.excalidraw.json';
+
+<Excalidraw data={diagram} height={600} />
