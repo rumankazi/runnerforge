@@ -1,15 +1,42 @@
 import hashlib
 import hmac
 import json
+import logging
+import time
 from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
 from runnerforge.config import WEBHOOK_SECRET
 from runnerforge.github_client import get_installation_token, get_registration_token
+from runnerforge.logger import setup_logging
 from runnerforge.models import WorkflowJobEvent
 
+setup_logging()
+logger = logging.getLogger(__name__)
 app = FastAPI()
+
+
+@app.middleware("http")
+async def access_log_middleware(request: Request, call_next):
+    start = time.monotonic()
+    response = await call_next(request)
+    duration = time.monotonic() - start
+    logger.info(
+        f"{request.method} {request.url.path}",
+        extra={
+            "httpRequest": {
+                "requestMethod": request.method,
+                "requestUrl": str(request.url),
+                "status": response.status_code,
+                "latency": f"{duration:.6f}s",
+                "remoteIp": request.client.host if request.client else "",
+                "userAgent": request.headers.get("user-agent", ""),
+                "protocol": f"HTTP/{request.scope.get('http_version', '1.1')}",
+            }
+        },
+    )
+    return response
 
 
 @app.get("/")
@@ -35,28 +62,38 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         case "completed":
             handle_completed(event)
         case _:
-            print(f"Ignoring unknown action: {event.action}")
+            logger.warning("Ignoring unknown action", extra={"action": event.action})
     return {"ok": True}
 
 
 # TODO: should migrate to handlers.py
 async def handle_queued(event):
-    print(
-        f"Would create VM for the job {event.workflow_job.id}, labels={event.workflow_job.labels}"
+    logger.info(
+        "Creating VM",
+        extra={"job_id": event.workflow_job.id, "labels": event.workflow_job.labels},
     )
-
     installation_id = event.installation.id
     installation_token = await get_installation_token(installation_id)
-    print("Got Installation Token!")
-    registration_token = await get_registration_token(installation_token=installation_token, repo_full_name=event.repository.full_name)
-    print(f"Got the registration token {registration_token}")
+    logger.info("Installation token created", extra={"installation_id": installation_id})
+    await get_registration_token(
+        installation_token=installation_token,
+        repo_full_name=event.repository.full_name,
+    )
+    logger.info(
+        "Registration token received",
+        extra={"job_id": event.workflow_job.id, "repo": event.repository.full_name},
+    )
 
 
 def handle_in_progress(event):
-    print(f"job {event.workflow_job.id} picked up by a runner")
+    logger.info("Job picked up by a runner", extra={"job_id": event.workflow_job.id})
 
 
 def handle_completed(event):
-    print(
-        f"would delete VM for job {event.workflow_job.id}, conclusion={event.workflow_job.conclusion}"
+    logger.info(
+        "Would delete VM",
+        extra={
+            "job_id": event.workflow_job.id,
+            "conclusion": event.workflow_job.conclusion,
+        },
     )

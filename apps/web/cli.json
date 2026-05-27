@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json.schemastore.org/fumadocs-cli.json",
+  "aliases": {
+    "uiDir": "./components/ui",
+    "componentsDir": "./components",
+    "layoutDir": "./layouts",
+    "cssDir": "./styles",
+    "libDir": "./lib"
+  },
+  "baseDir": "",
+  "uiLibrary": "radix-ui",
+  "framework": "next",
+  "commands": {}
+}
