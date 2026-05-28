@@ -1,28 +1,57 @@
-
 import json
 import logging
 import os
 import sys
+from contextvars import ContextVar
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 
+# -----LogFormatter----#
 _STANDARD_ATTRS = {
-    "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
-    "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
-    "created", "msecs", "relativeCreated", "thread", "threadName",
-    "processName", "process", "message", "taskName"
+    "name",
+    "msg",
+    "args",
+    "levelname",
+    "levelno",
+    "pathname",
+    "filename",
+    "module",
+    "exc_info",
+    "exc_text",
+    "stack_info",
+    "lineno",
+    "funcName",
+    "created",
+    "msecs",
+    "relativeCreated",
+    "thread",
+    "threadName",
+    "processName",
+    "process",
+    "message",
+    "taskName",
 }
 
 _IGNORED_EXTRAS = {
-    "color_message" # for avoiding the uvicorn log noise
+    "color_message"  # for avoiding the uvicorn log noise
 }
+
+
+def _extract_extras(record):
+    return {
+        k: v
+        for k, v in record.__dict__.items()
+        if k not in _STANDARD_ATTRS and k not in _IGNORED_EXTRAS
+    }
+
 
 class ColorFormatter(logging.Formatter):
     _COLORS = {
-        "DEBUG":    "\033[36m",   # cyan
-        "INFO":     "\033[32m",   # green
-        "WARNING":  "\033[33m",   # yellow
-        "ERROR":    "\033[31m",   # red
-        "CRITICAL": "\033[1;31m", # bold red
+        "DEBUG": "\033[36m",  # cyan
+        "INFO": "\033[32m",  # green
+        "WARNING": "\033[33m",  # yellow
+        "ERROR": "\033[31m",  # red
+        "CRITICAL": "\033[1;31m",  # bold red
     }
     _RESET = "\033[0m"
 
@@ -32,10 +61,7 @@ class ColorFormatter(logging.Formatter):
         self._use_color = sys.stderr.isatty()
 
     def format(self, record):
-        extras = {
-            k: v for k, v in record.__dict__.items()
-            if k not in _STANDARD_ATTRS and k not in _IGNORED_EXTRAS
-        }
+        extras = _extract_extras(record)
         timestamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
         level = f"{record.levelname:<8}"
         if self._use_color:
@@ -50,16 +76,14 @@ class ColorFormatter(logging.Formatter):
 
 
 class JsonFormatter(logging.Formatter):
-
     def format(self, record):
-        extras = {
-            k: v for k, v in record.__dict__.items()
-            if k not in _STANDARD_ATTRS and k not in _IGNORED_EXTRAS
-        }
+        extras = _extract_extras(record)
         formatted_record = {
             "severity": record.levelname,
             "message": record.getMessage(),
-            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "timestamp": datetime.fromtimestamp(
+                record.created, tz=timezone.utc
+            ).isoformat(),
             "logger": record.name,
             "logging.googleapis.com/sourceLocation": {
                 "file": record.pathname,
@@ -72,6 +96,34 @@ class JsonFormatter(logging.Formatter):
             formatted_record["exception"] = self.formatException(record.exc_info)
         return json.dumps(formatted_record, default=str)
 
+
+# -----LogContext-------#
+@dataclass(frozen=True)
+class LogContext:
+    request_id: str | None = None
+    repo: str | None = None
+    owner: str | None = None
+    sender: str | None = None
+    run_id: int | None = None
+    installation_id: int | None = None
+
+
+_context_var: ContextVar[LogContext] = ContextVar("ctx", default=LogContext())
+
+
+def update_context(**kwargs):
+    _context_var.set(replace(_context_var.get(), **kwargs))
+
+
+class ContextFilter(logging.Filter):
+    def filter(self, record):
+        for name, value in asdict(_context_var.get()).items():
+            if value is not None:
+                setattr(record, name, value)
+        return True
+
+
+# ------Setup, Wiring-----#
 def setup_logging():
     # K_SERVICE is set automatically on Cloud Run; absence means local dev
     if os.environ.get("K_SERVICE"):
@@ -81,6 +133,7 @@ def setup_logging():
 
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)
+    handler.addFilter(ContextFilter())
 
     root = logging.getLogger()
     root.handlers.clear()

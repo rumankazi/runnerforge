@@ -3,14 +3,19 @@ import hmac
 import json
 import logging
 import time
+import uuid
 from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
 from runnerforge.config import WEBHOOK_SECRET
 from runnerforge.github_client import get_installation_token, get_registration_token
-from runnerforge.logger import setup_logging
+from runnerforge.logger import (
+    setup_logging,
+    update_context,
+)
 from runnerforge.models import WorkflowJobEvent
+from runnerforge.utils import parse_github_response
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -20,6 +25,7 @@ app = FastAPI()
 @app.middleware("http")
 async def access_log_middleware(request: Request, call_next):
     start = time.monotonic()
+    update_context(request_id=str(uuid.uuid4()))
     response = await call_next(request)
     duration = time.monotonic() - start
     logger.info(
@@ -45,14 +51,35 @@ async def root():
 
 
 # TODO: migrate to webhook.py
-@app.post("/webhook", status_code=200)
+@app.post(
+    "/webhook",
+    status_code=200,
+    summary="Receive GitHub workflow_job webhook",
+    description="Validates HMAC signature, parses the event, dispatches to handlers.",
+    tags=["webhooks"],
+)
 async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()]):
     body = await request.body()
+
+    # HMAC validation
     expected = "sha256=" + hmac.new(WEBHOOK_SECRET, body, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, x_hub_signature_256):
         raise HTTPException(status_code=401, detail="Invalid signature provided")
 
-    event = WorkflowJobEvent.model_validate(json.loads(body))
+    event = parse_github_response(
+        WorkflowJobEvent,
+        data=json.loads(body),
+        cause_hint="Github returned an unexpected token response. Likely cause: App is missing required permissions (Actions: Read, Administration: Write). Check https://github.com/settings/apps/runnerforge-test/permissions. ",
+        logger=logger,
+    )
+    # After "first" response(/webhook hit), setup the context vars
+    update_context(
+        repo=event.repository.full_name,
+        owner=event.repository.owner.login,
+        sender=event.sender.login,
+        run_id=event.workflow_job.run_id,
+        installation_id=event.installation.id,
+    )
 
     match event.action:
         case "queued":
@@ -74,14 +101,13 @@ async def handle_queued(event):
     )
     installation_id = event.installation.id
     installation_token = await get_installation_token(installation_id)
-    logger.info("Installation token created", extra={"installation_id": installation_id})
     await get_registration_token(
         installation_token=installation_token,
         repo_full_name=event.repository.full_name,
     )
     logger.info(
         "Registration token received",
-        extra={"job_id": event.workflow_job.id, "repo": event.repository.full_name},
+        extra={"job_id": event.workflow_job.id},
     )
 
 
