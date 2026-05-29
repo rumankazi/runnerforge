@@ -6,6 +6,9 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 
+_APP_VERSION = os.environ.get("APP_VERSION", "dev")
+_GIT_SHA = os.environ.get("GIT_SHA", "unknown")[:7]   # short SHA
+
 # -----LogFormatter----#
 _STANDARD_ATTRS = {
     "name",
@@ -98,6 +101,8 @@ class JsonFormatter(logging.Formatter):
 
 
 # -----LogContext-------#
+# Sets up a set of context vars at startup to be attached to logs
+# This would help us distinguish different users making the request
 @dataclass(frozen=True)
 class LogContext:
     request_id: str | None = None
@@ -120,6 +125,8 @@ class ContextFilter(logging.Filter):
         for name, value in asdict(_context_var.get()).items():
             if value is not None:
                 setattr(record, name, value)
+        record.app_version = _APP_VERSION
+        record.get_sha = _GIT_SHA
         return True
 
 
@@ -136,9 +143,9 @@ def setup_logging():
     handler.addFilter(ContextFilter())
 
     root = logging.getLogger()
-    root.handlers.clear()
-    root.setLevel(logging.INFO)
-    root.addHandler(handler)
+    root.handlers.clear()       # To ensure idempotency
+    root.setLevel(logging.INFO) # setting root logger level, defaults to WARNING otherwise
+    root.addHandler(handler)    # Adding updated handler with formatter and filter
 
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         lg = logging.getLogger(name)
