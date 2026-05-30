@@ -30,6 +30,7 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+*,cover
 
 # Coverage / test
 coverage/
@@ -37,12 +38,12 @@ coverage/
 
 # Secrets / local env
 *.pem
+!apps/orchestrator/tests/fixtures/*
 .env.local
 
 # Editor / OS
 .DS_Store
 Thumbs.db
-.vscode/
 .idea/
 
 # Vercel

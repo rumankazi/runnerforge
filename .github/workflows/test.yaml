@@ -1,14 +1,13 @@
-name: Test
+name: Qualify
 
 on:
   push:
 
 jobs:
-  test:
-    runs-on: [self-hosted, runnerforge-test]
+  qualify:
+    runs-on: ubuntu-latest
     steps:
-      - name: initialization
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-      - name: hello
-        run: echo "Hello world!"
+      - name: Setup python
+        uses: actions/setup-python@v5

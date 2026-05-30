@@ -8,6 +8,8 @@ FIXTURES = Path(__file__).parent / "fixtures"
 os.environ.setdefault("GITHUB_WEBHOOK_SECRET", "test-secret")
 os.environ.setdefault("GITHUB_APP_ID", "12345")
 os.environ.setdefault("GITHUB_APP_PRIVATE_KEY_PATH", str(FIXTURES / "private_key.pem"))
+os.environ.setdefault("GCP_PROJECT_ID", "test-project")
+os.environ.setdefault("GCP_ZONE", "europe-west4-a")
 
 
 @pytest.fixture(scope="session")

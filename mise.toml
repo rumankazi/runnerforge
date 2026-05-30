@@ -1,0 +1,2 @@
+[tools]
+# rely on each app's own mise.toml for app-specific versions

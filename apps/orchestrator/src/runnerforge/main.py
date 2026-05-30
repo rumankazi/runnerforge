@@ -102,7 +102,7 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         case "in_progress":
             handle_in_progress(event)
         case "completed":
-            handle_completed(event)
+            await handle_completed(event)
         case _:
             logger.warning("Ignoring unknown action", extra={"action": event.action})
     return {"ok": True}
