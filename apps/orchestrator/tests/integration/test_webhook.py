@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import logging
+from unittest.mock import AsyncMock
 
 import httpx
 import respx
@@ -17,7 +18,9 @@ def _sign(body: bytes) -> str:
 
 
 @respx.mock
-def test_webhook_queued_event_triggers_github_auth_chain(fixtures_dir, caplog):
+def test_webhook_queued_event_triggers_github_auth_chain(
+    fixtures_dir, monkeypatch, caplog
+):
     body = (fixtures_dir / "queued_job_payload.json").read_bytes()
 
     install_route = respx.post(
@@ -49,6 +52,9 @@ def test_webhook_queued_event_triggers_github_auth_chain(fixtures_dir, caplog):
         )
     )
 
+    # Mock create_vm so we don't hit real GCP
+    create_vm_mock = AsyncMock(return_value="op-test-12345")
+    monkeypatch.setattr("runnerforge.handlers.create_vm", create_vm_mock)
     with caplog.at_level(logging.INFO):
         response = client.post(
             "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
@@ -114,22 +120,6 @@ def test_webhook_rejects_invalid_signature_without_calling_github(fixtures_dir, 
 
 
 @respx.mock
-def test_webhook_completed_event_does_not_call_github(fixtures_dir, caplog):
-    # Use a copy of queued payload with action="completed" + conclusion="success"
-    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
-    payload["action"] = "completed"
-    payload["workflow_job"]["conclusion"] = "success"
-    body = json.dumps(payload).encode()
-    with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
-
-    assert response.status_code == 200
-    assert any("Would delete VM" in r.message for r in caplog.records)
-
-
-@respx.mock
 def test_webhook_in_progress_event_does_not_call_github(fixtures_dir, caplog):
     # Use a copy of queued payload with action="completed" + conclusion="success"
     payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
@@ -143,6 +133,57 @@ def test_webhook_in_progress_event_does_not_call_github(fixtures_dir, caplog):
 
     assert response.status_code == 200
     assert any("picked up by a runner" in r.message for r in caplog.records)
+
+
+@respx.mock
+def test_webhook_completed_event_triggers_vm_deletion(
+    fixtures_dir, monkeypatch, caplog
+):
+    # Use a copy of queued payload with action="completed" + conclusion="success"
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload["action"] = "completed"
+    payload["workflow_job"]["conclusion"] = "success"
+    body = json.dumps(payload).encode()
+    # Mock delete_vm, to we don't hit real GCP
+    find_mock = AsyncMock(return_value=["runnerforge-77678867086"])
+    monkeypatch.setattr("runnerforge.handlers.find_vms_by_job_id", find_mock)
+
+    delete_mock = AsyncMock(return_value="op-test-delete")
+    monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
+
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+        )
+
+    assert response.status_code == 200
+    assert any("VM deletion submitted" in r.message for r in caplog.records)
+
+
+@respx.mock
+def test_webhook_completed_event_warns_when_no_vm_found(
+    fixtures_dir, monkeypatch, caplog
+):
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload["action"] = "completed"
+    payload["workflow_job"]["conclusion"] = "success"
+    body = json.dumps(payload).encode()
+
+    find_mock = AsyncMock(return_value=[])  # ← no VMs found
+    delete_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.handlers.find_vms_by_job_id", find_mock)
+    monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
+
+    response = client.post(
+        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+    )
+
+    assert response.status_code == 200
+    delete_mock.assert_not_awaited()
+    assert any(
+        r.levelno == logging.WARNING and "No VM found" in r.message
+        for r in caplog.records
+    )
 
 
 @respx.mock
