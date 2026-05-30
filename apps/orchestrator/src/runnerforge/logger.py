@@ -5,9 +5,12 @@ import sys
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
+from types import MappingProxyType
+
+from runnerforge.config import GCP_PROJECT_ID
 
 _APP_VERSION = os.environ.get("APP_VERSION", "dev")
-_GIT_SHA = os.environ.get("GIT_SHA", "unknown")[:7]   # short SHA
+_GIT_SHA = os.environ.get("GIT_SHA", "unknown")[:7]  # short SHA
 
 # -----LogFormatter----#
 _STANDARD_ATTRS = {
@@ -49,13 +52,15 @@ def _extract_extras(record):
 
 
 class ColorFormatter(logging.Formatter):
-    _COLORS = {
-        "DEBUG": "\033[36m",  # cyan
-        "INFO": "\033[32m",  # green
-        "WARNING": "\033[33m",  # yellow
-        "ERROR": "\033[31m",  # red
-        "CRITICAL": "\033[1;31m",  # bold red
-    }
+    _COLORS = MappingProxyType(
+        {
+            "DEBUG": "\033[36m",  # cyan
+            "INFO": "\033[32m",  # green
+            "WARNING": "\033[33m",  # yellow
+            "ERROR": "\033[31m",  # red
+            "CRITICAL": "\033[1;31m",  # bold red
+        }
+    )
     _RESET = "\033[0m"
 
     def __init__(self):
@@ -65,7 +70,11 @@ class ColorFormatter(logging.Formatter):
 
     def format(self, record):
         extras = _extract_extras(record)
-        timestamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+        timestamp = (
+            datetime.fromtimestamp(record.created, tz=timezone.utc)
+            .astimezone()
+            .strftime("%H:%M:%S")
+        )
         level = f"{record.levelname:<8}"
         if self._use_color:
             color = self._COLORS.get(record.levelname, "")
@@ -97,6 +106,13 @@ class JsonFormatter(logging.Formatter):
         formatted_record.update(extras)
         if record.exc_info:
             formatted_record["exception"] = self.formatException(record.exc_info)
+
+        trace_id = getattr(record, "trace_id", None)
+        if trace_id and GCP_PROJECT_ID:
+            formatted_record["logging.googleapis.com/trace"] = (
+                f"projects/{GCP_PROJECT_ID}/traces/{trace_id}"
+            )
+
         return json.dumps(formatted_record, default=str)
 
 
@@ -106,6 +122,7 @@ class JsonFormatter(logging.Formatter):
 @dataclass(frozen=True)
 class LogContext:
     request_id: str | None = None
+    trace_id: str | None = None
     repo: str | None = None
     owner: str | None = None
     sender: str | None = None
@@ -113,7 +130,7 @@ class LogContext:
     installation_id: int | None = None
 
 
-_context_var: ContextVar[LogContext] = ContextVar("ctx", default=LogContext())
+_context_var: ContextVar[LogContext] = ContextVar("ctx", default=LogContext())  # noqa: B039
 
 
 def update_context(**kwargs):
@@ -126,7 +143,7 @@ class ContextFilter(logging.Filter):
             if value is not None:
                 setattr(record, name, value)
         record.app_version = _APP_VERSION
-        record.get_sha = _GIT_SHA
+        record.git_sha = _GIT_SHA
         return True
 
 
@@ -143,9 +160,11 @@ def setup_logging():
     handler.addFilter(ContextFilter())
 
     root = logging.getLogger()
-    root.handlers.clear()       # To ensure idempotency
-    root.setLevel(logging.INFO) # setting root logger level, defaults to WARNING otherwise
-    root.addHandler(handler)    # Adding updated handler with formatter and filter
+    root.handlers.clear()  # To ensure idempotency
+    root.setLevel(
+        logging.INFO
+    )  # setting root logger level, defaults to WARNING otherwise
+    root.addHandler(handler)  # Adding updated handler with formatter and filter
 
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         lg = logging.getLogger(name)

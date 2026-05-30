@@ -1,5 +1,3 @@
-import hashlib
-import hmac
 import json
 import logging
 import time
@@ -9,23 +7,36 @@ from typing import Annotated
 from fastapi import FastAPI, Header, HTTPException, Request
 
 from runnerforge.config import WEBHOOK_SECRET
-from runnerforge.github_client import get_installation_token, get_registration_token
+from runnerforge.handlers import handle_completed, handle_in_progress, handle_queued
 from runnerforge.logger import (
     setup_logging,
     update_context,
 )
 from runnerforge.models import WorkflowJobEvent
-from runnerforge.utils import parse_github_response
+from runnerforge.security import verify_github_signature
+from runnerforge.validation import parse_github_response
 
 setup_logging()
 logger = logging.getLogger(__name__)
 app = FastAPI()
 
 
+def parse_trace_id(header: str | None) -> str | None:
+    """Extracts TRACE_ID from 'TRACE_ID/SPAN_ID;o=1' format."""
+    if not header:
+        return None
+    trace_id = header.split("/", 1)[0]
+    return trace_id or None
+
+
 @app.middleware("http")
 async def access_log_middleware(request: Request, call_next):
     start = time.monotonic()
-    update_context(request_id=str(uuid.uuid4()))
+    # we could also use incoming X-Cloud-Trace-Context header (cloud trace propagation)
+    # useful once we have multiple services
+    trace_id = parse_trace_id(request.headers.get("X-Cloud-Trace-Context"))
+    request_id = trace_id or str(uuid.uuid4())
+    update_context(request_id=request_id, trace_id=trace_id)
     response = await call_next(request)
     duration = time.monotonic() - start
     logger.info(
@@ -45,12 +56,11 @@ async def access_log_middleware(request: Request, call_next):
     return response
 
 
-@app.get("/")
-async def root():
-    return {"message": "Hello World"}
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
 
 
-# TODO: migrate to webhook.py
 @app.post(
     "/webhook",
     status_code=200,
@@ -62,14 +72,19 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
     body = await request.body()
 
     # HMAC validation
-    expected = "sha256=" + hmac.new(WEBHOOK_SECRET, body, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, x_hub_signature_256):
+    if not verify_github_signature(
+        body=body, header_signature=x_hub_signature_256, secret=WEBHOOK_SECRET
+    ):
+        logger.warning(
+            "Webhook signature validation failed",
+            extra={"signature_prefix": x_hub_signature_256[:10]},
+        )
         raise HTTPException(status_code=401, detail="Invalid signature provided")
 
     event = parse_github_response(
         WorkflowJobEvent,
         data=json.loads(body),
-        cause_hint="Github returned an unexpected token response. Likely cause: App is missing required permissions (Actions: Read, Administration: Write). Check https://github.com/settings/apps/runnerforge-test/permissions. ",
+        cause_hint="Webhook payload did not match the expected WorkflowJob schema. GitHub may have changed their payload format, or a non-workflow_job event was delivered.",
         logger=logger,
     )
     # After "first" response(/webhook hit), setup the context vars
@@ -91,35 +106,3 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         case _:
             logger.warning("Ignoring unknown action", extra={"action": event.action})
     return {"ok": True}
-
-
-# TODO: should migrate to handlers.py
-async def handle_queued(event):
-    logger.info(
-        "Creating VM",
-        extra={"job_id": event.workflow_job.id, "labels": event.workflow_job.labels},
-    )
-    installation_id = event.installation.id
-    installation_token = await get_installation_token(installation_id)
-    await get_registration_token(
-        installation_token=installation_token,
-        repo_full_name=event.repository.full_name,
-    )
-    logger.info(
-        "Registration token received",
-        extra={"job_id": event.workflow_job.id},
-    )
-
-
-def handle_in_progress(event):
-    logger.info("Job picked up by a runner", extra={"job_id": event.workflow_job.id})
-
-
-def handle_completed(event):
-    logger.info(
-        "Would delete VM",
-        extra={
-            "job_id": event.workflow_job.id,
-            "conclusion": event.workflow_job.conclusion,
-        },
-    )

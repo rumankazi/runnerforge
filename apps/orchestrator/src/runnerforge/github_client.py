@@ -11,22 +11,56 @@ import time
 
 import httpx
 import jwt
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_random_exponential,
+)
 
-from runnerforge.utils import parse_github_response
 from runnerforge.config import GITHUB_APP_ID, PRIVATE_KEY
 from runnerforge.models import InstallationTokenResponse, RegistrationTokenResponse
+from runnerforge.validation import parse_github_response
 
 logger = logging.getLogger(__name__)
 
 
-def generate_app_jwt() -> str:
-    iat = int(time.time()) - 60  # to absorb small clock skew
+def _is_retriable_github_error(exc: BaseException) -> bool:
+    """Retry on network errors and 5xx server errors, NOT on 4xx (bad request, bad auth)"""
+    if isinstance(exc, (httpx.NetworkError, httpx.TimeoutException)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return False
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_random_exponential(multiplier=1, min=1, max=8),
+    retry=retry_if_exception(_is_retriable_github_error),
+    reraise=True,
+)
+async def _post_with_retry(
+    client: httpx.AsyncClient, url: str, headers: dict
+) -> httpx.Response:
+    r = await client.post(url, headers=headers)
+    r.raise_for_status()
+    return r
+
+
+def generate_app_jwt(
+    app_id: str | None = None, private_key: str | None = None, now: int | None = None
+) -> str:
+    app_id = app_id or GITHUB_APP_ID
+    private_key = private_key or PRIVATE_KEY
+    now = now if now is not None else int(time.time())
+    iat = now - 60  # to absorb small clock skew
     jwt_payload = {
         "iat": iat,  # issued at
         "exp": iat + 600,  # expires at
-        "iss": GITHUB_APP_ID,  # github app id
+        "iss": app_id,  # issuer
     }
-    return jwt.encode(jwt_payload, PRIVATE_KEY, algorithm="RS256")
+    return jwt.encode(jwt_payload, private_key, algorithm="RS256")
 
 
 async def get_installation_token(installation_id: int) -> str:
@@ -37,9 +71,8 @@ async def get_installation_token(installation_id: int) -> str:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    async with httpx.AsyncClient() as client:
-        r = await client.post(url=url, headers=headers)
-        r.raise_for_status()
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+        r = await _post_with_retry(client=client, url=url, headers=headers)
         data = r.json()
 
     response = parse_github_response(
@@ -59,9 +92,8 @@ async def get_registration_token(installation_token: str, repo_full_name: str) -
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    async with httpx.AsyncClient() as client:
-        r = await client.post(url, headers=headers)
-        r.raise_for_status()
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+        r = await _post_with_retry(client=client, url=url, headers=headers)
         data = r.json()
 
     response = parse_github_response(
