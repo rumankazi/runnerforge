@@ -1,0 +1,110 @@
+---
+title: Phase 1.6
+description: Packer runner image + startup script
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+After phase 1.5, our orchestrator creates real VMs — but the VMs boot stock Debian and do nothing. Phase 1.6 makes the VMs *useful*: a Packer-built image with the GitHub Actions runner pre-installed, and a startup script that registers the runner with GitHub on boot.
+
+End result: a real GitHub workflow push triggers a real VM that actually executes the job.
+
+## What this phase achieves
+
+```
+GitHub workflow_job queued
+  → /webhook → handle_queued
+  → registration token from GitHub API
+  → create_vm with:
+      • boot disk from our Packer image (10 GB, OS + runner binary)
+      • separate data disk (50 GB pd-balanced, blank)
+      • metadata: { registration-token, repo-url, startup-script }
+
+  → VM boots
+  → startup script (from metadata) runs:
+      • mounts data disk at /home/runner/_work
+      • registers the runner with GitHub using the token
+      • starts the runner with --ephemeral --unattended
+
+  → GitHub assigns the queued job to our runner
+  → runner executes the job
+  → runner reports completion → exits (--ephemeral)
+
+GitHub workflow_job completed
+  → /webhook → handle_completed
+  → find_vms_by_job_id → delete_vm
+  → VM + both disks (auto_delete=True) are deleted
+```
+
+## Architectural decisions
+
+### Separate boot and data disks
+
+Boot disk stays small (10 GB — OS + runner binary, baked into the image). Data disk is sized for actual job work (50 GB, pd-balanced SSD). Mounted at `/home/runner/_work` where the runner executes jobs.
+
+Rationale:
+- Cleaner separation between immutable runner setup and ephemeral job data.
+- Easier to monitor / size each independently as needs evolve.
+- Could later swap disk types per workload (HDD for big builds, SSD for I/O-heavy jobs).
+
+### Pinned runner version
+
+The Packer script pins the GitHub Actions runner version explicitly (not `latest`). Same image is reproducible across rebuilds modulo OS package updates.
+
+When upgrading the runner: update the version in [`scripts/install-runner.sh`](https://github.com/rumankazi/runnerforge/blob/main/infra/packer/scripts/install-runner.sh), rebuild the image with `packer build .`, and the family pointer auto-updates.
+
+### Inline startup script via instance metadata
+
+The startup script is passed in metadata at VM creation rather than baked into the image. Reason: the script needs the registration token, which is dynamic per job. Metadata is the natural delivery vehicle for per-VM secrets.
+
+## Detailed sub-pages
+
+The implementation has three new pieces that deserve their own explanations:
+
+- [Packer template walkthrough](/docs/development/phase-1/phase-1.6/packer) — what Packer does, the HCL2 template structure, the build flow.
+- [install-runner.sh breakdown](/docs/development/phase-1/phase-1.6/install-runner) — line-by-line explanation of the build-time provisioning script.
+- [Startup script](/docs/development/phase-1/phase-1.6/startup-script) — the runtime script that runs on every VM boot, fetches metadata, and starts the runner.
+
+## Known lifecycle gaps
+
+These are deferred, not solved by this phase:
+
+- **Image retention.** Each `packer build` creates a new image (`runnerforge-runner-{timestamp}`). Old ones accumulate at roughly $0.50/image/month. No automated cleanup yet — manual or revisit during phase 1.8 (Terraform).
+- **Runner version upgrades.** Manual edit + rebuild. Could be CI-driven later (Dependabot on the version pin).
+- **Runner registration cleanup.** With `--ephemeral` the runner deregisters itself with GitHub. With timing edge cases (crashed runners), zombie entries can accumulate in GitHub's runner list — Phase 1.7 sweep can address this.
+
+## Phase 1.6 status — DONE
+
+| Item | Status |
+|---|---|
+| Packer + base image build | ✅ |
+| Runner binary + Docker provisioner | ✅ |
+| Startup script (mount data disk, register runner) | ✅ |
+| Wire into `create_vm` (data disk + metadata) | ✅ |
+| Real-GitHub end-to-end (job actually executes) | ✅ Verified |
+| Test updates + coverage | ✅ 100% coverage maintained |
+
+A real GitHub workflow push triggered the full loop: webhook → token chain → VM created with both disks → startup script mounted data disk + registered runner → runner picked up the queued job → job executed → completion webhook → VM deleted.
+
+## Lessons learned
+
+The biggest surprises this phase:
+
+- **Build-time vs runtime scripts are different lifecycles.** `install-runner.sh` runs once during `packer build` on a throwaway VM. `startup-script.sh` runs every VM boot in production. Conflating the two leads to either trying to put per-job secrets in the image or trying to install software at every boot.
+- **Mount point matters for `GITHUB_WORKSPACE`.** The runner uses `_work/` *relative to its installation directory* as the work dir by default. Mounting the data disk anywhere else means workflows execute on the boot disk (small, full quickly). Match the default: `/home/runner/actions-runner/_work`.
+- **Data disks don't take `source_image`.** A blank disk is just a blank volume. The startup script formats and mounts it. Confusing GCE field shape — accepting `source_image` on a non-boot disk in the API but ignoring or misusing it.
+- **proto-plus filter kwarg quirk** (carryover from Phase 1.5) reappeared in muscle memory — always use attribute-setting for protobuf requests; constructor kwargs can silently drop fields.
+- **GCE startup script logs aren't in Cloud Logging by default.** Without the Cloud Ops Agent (not installed in our image), VM-internal logs live only in serial console output, lost on VM deletion. Flagged for Phase 1.7+ hardening.
+
+## Known limitations carried forward
+
+- **Image retention.** Each `packer build` produces a new immutable image; old ones accumulate at ~$0.50/image/month. Manual cleanup or Phase 1.8 (Terraform retention policy).
+- **VM-internal logs.** As noted above — Ops Agent install needed for persistent Cloud Logging integration.
+- **Single tenant.** All VMs land in one GCP project; multi-tenant SaaS would need per-installation quotas/billing — out of scope.
+
+## What's next
+
+Phase 1.6 completes the *functional* runner lifecycle — orchestrator can create runners that actually execute jobs. Production hardening continues:
+
+- **Phase 1.7** — Sweep endpoint + Cloud Scheduler for orphan cleanup. The webhook is the happy path; sweep catches failures (dropped webhooks, crashed startup scripts, jobs that exceed max lifetime).
+- **Phase 1.8** — Terraform-managed infrastructure + Cloud Run deploy + Secret Manager for the GitHub App private key. The orchestrator becomes a real deployed service rather than a local dev session.

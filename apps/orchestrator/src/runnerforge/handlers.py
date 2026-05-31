@@ -1,6 +1,7 @@
 import logging
 
 from runnerforge.compute_client import create_vm, delete_vm, find_vms_by_job_id
+from runnerforge.config import STARTUP_SCRIPT
 from runnerforge.github_client import get_installation_token, get_registration_token
 from runnerforge.models import WorkflowJobEvent
 
@@ -37,9 +38,9 @@ async def handle_queued(event: WorkflowJobEvent):
 
     metadata = {
         "registration-token": registration_token,
-        # TODO: later (phase 1.6): startup-script will read these
         "repo-url": f"https://github.com/{event.repository.full_name}",
         "runner-labels": ",".join(event.workflow_job.labels),
+        "startup-script": STARTUP_SCRIPT,
     }
 
     logger.info(

@@ -68,6 +68,13 @@ def test_webhook_queued_event_triggers_github_auth_chain(
         reg_route.calls.last.request.headers["Authorization"]
         == "Bearer ghs_installation_token"
     )
+    call_kwargs = create_vm_mock.call_args.kwargs
+    assert "startup-script" in call_kwargs["metadata"]
+    assert "#!/bin/bash" in call_kwargs["metadata"]["startup-script"]  # smoke check
+
+    # Observability contract: handler logs key progress events
+    assert any("Registration token received" in r.message for r in caplog.records)
+    assert any("Creating VM" in r.message for r in caplog.records)
 
 
 @respx.mock

@@ -1,0 +1,175 @@
+---
+title: Packer template
+description: How the runnerforge-runner image is built
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+[HashiCorp Packer](https://www.packer.io/) builds machine images from a declarative template. Think "Dockerfile, but for VM disk snapshots." We use it to produce a custom GCE image with the GitHub Actions runner binary + Docker pre-installed, so VMs created from it are ready to register in under a minute.
+
+## Why pre-bake an image
+
+The alternative is "install everything at boot via the startup script." Tradeoffs:
+
+| Approach | Boot-to-ready | Failure mode | Reproducibility |
+|---|---|---|---|
+| **Install at boot** | 4-5 minutes (apt update, download runner, install Docker, etc.) | Any apt mirror outage = boot fails | Depends on whatever's live in mirrors that day |
+| **Pre-baked image** (us) | ~35 seconds (boot + config + register) | Image build can fail safely without affecting prod | Reproducible from the same template + version pins |
+
+For an orchestrator that creates VMs per-job, the latency difference is the difference between "tolerable" and "absurd." Pre-bake.
+
+## Build flow
+
+```
+You: packer build infra/packer/
+  ↓
+Packer reads runner-image.pkr.hcl, finds plugin requirements
+  ↓
+Packer auto-authenticates via Application Default Credentials (ADC)
+  ↓
+Packer creates a temporary VM in europe-west4-a from Debian 12
+  ↓
+Packer SSHes into the temp VM as user 'packer'
+  ↓
+Packer runs all provisioners on it:
+    - shell: scripts/install-runner.sh (creates runner user, installs binary + Docker)
+  ↓
+Packer snapshots the temp VM's boot disk → creates a custom image
+  ↓
+Packer deletes the temp VM
+  ↓
+You: image lives at projects/runnerforge/global/images/runnerforge-runner-{timestamp}
+     family pointer 'runnerforge-runner' auto-updates to latest
+```
+
+## Template anatomy
+
+The full template is at [`infra/packer/runner-image.pkr.hcl`](https://github.com/rumankazi/runnerforge/blob/main/infra/packer/runner-image.pkr.hcl). Four blocks:
+
+### `packer {}` — plugin requirements
+
+```hcl
+packer {
+  required_plugins {
+    googlecompute = {
+      source  = "github.com/hashicorp/googlecompute"
+      version = "~> 1"
+    }
+  }
+}
+```
+
+Plugins are like Terraform providers — they implement support for specific clouds. `googlecompute` is the GCP builder. The `~> 1` constraint means "any v1.x, no v2." `packer init .` downloads them.
+
+### `variable {}` — input parameters
+
+```hcl
+variable "project_id" {
+  type        = string
+  description = "GCP project to publish the image to"
+  default     = "runnerforge"
+}
+
+variable "zone" {
+  type        = string
+  default     = "europe-west4-a"
+}
+```
+
+Like function parameters with defaults. Can be overridden on the command line: `packer build -var "project_id=other-project" .`
+
+<Callout type="info" title="Zone here is for the BUILD, not the image">
+  GCE images are **global** resources — `projects/X/global/images/...` — accessible from any zone. The `zone` variable tells Packer where to boot the *temporary* build VM, not where the image lives. After the build, the image works in any zone of the project.
+</Callout>
+
+### `source "TYPE" "NAME"` — the builder
+
+```hcl
+source "googlecompute" "runnerforge_runner" {
+  project_id              = var.project_id
+  source_image_family     = "debian-12"
+  source_image_project_id = ["debian-cloud"]
+  zone                    = var.zone
+  machine_type            = "e2-medium"
+  ssh_username            = "packer"
+  disk_size               = 10
+
+  image_name   = "runnerforge-runner-{{timestamp}}"
+  image_family = "runnerforge-runner"
+}
+```
+
+Each field:
+
+- **`source_image_family` + `source_image_project_id`** — the base to start from. `debian-12` family in the `debian-cloud` public project. Family pointers auto-track the latest.
+- **`zone`** — where the temporary build VM runs. Build cost is trivial (~5 min on e2-medium = fractions of a cent).
+- **`ssh_username`** — the user Packer creates and SSHes in as. `packer` is the convention; it's deleted before image snapshot.
+- **`disk_size`** — temp build VM's boot disk size. The resulting image inherits this as its max disk size.
+- **`image_name`** — output image's name. Must be unique per build. `{{timestamp}}` is a Packer template function that injects the current Unix timestamp, giving you e.g. `runnerforge-runner-1748621234`.
+- **`image_family`** — the moving pointer to the *latest* image in the family. Always points to the most recent successful build. This is what `create_vm` references at runtime.
+
+No `account_file` because Packer auto-discovers Application Default Credentials (the same ADC the orchestrator uses) — set up via `gcloud auth application-default login` in phase 1.5.
+
+### `build {}` — the recipe
+
+```hcl
+build {
+  name    = "runnerforge-runner"
+  sources = ["source.googlecompute.runnerforge_runner"]
+
+  provisioner "shell" {
+    script          = "scripts/install-runner.sh"
+    execute_command = "sudo bash '{{ .Path }}'"
+  }
+}
+```
+
+Ties one or more sources together with provisioners. Provisioners run sequentially on the temp build VM via SSH. We have one: a shell script that does the heavy lifting (see [install-runner.sh breakdown](/docs/development/phase-1/phase-1.6/install-runner)).
+
+**`execute_command`** overrides how Packer runs the script. By default, Packer uses `chmod +x '{{ .Path }}' && '{{ .Path }}'` which runs as the SSH user (`packer`). Our script does apt installs, creates users, and touches `/etc/` — all root-only. So we wrap with `sudo bash`.
+
+## Family pointer vs specific image
+
+```
+projects/runnerforge/global/images/family/runnerforge-runner
+                                          └─ moving pointer (always latest)
+
+projects/runnerforge/global/images/runnerforge-runner-1748621234
+                                  └─ specific snapshot (immutable)
+```
+
+For dev, reference the family — VMs always boot from the latest image. For production releases, pin a specific image so a bad Packer build doesn't immediately break new VMs.
+
+Our `create_vm` (`_DEFAULT_IMAGE` constant) currently uses the stock Debian family pointer. Phase 1.6 item 5 changes this to `projects/runnerforge/global/images/family/runnerforge-runner` — the family of *our* images.
+
+## Verifying a build
+
+```bash
+# List images in the family
+gcloud compute images list --filter="family=runnerforge-runner"
+
+# See what the family pointer currently resolves to
+gcloud compute images describe-from-family runnerforge-runner --project=runnerforge
+
+# Quick smoke test: boot a VM from the image and SSH in
+gcloud compute instances create test-image \
+  --image-family=runnerforge-runner \
+  --image-project=runnerforge \
+  --machine-type=e2-micro \
+  --zone=europe-west4-a
+
+gcloud compute ssh test-image --zone=europe-west4-a
+# On the VM:
+ls /home/runner/actions-runner/      # runner binary present
+docker --version                      # Docker installed
+exit
+
+# Cleanup
+gcloud compute instances delete test-image --zone=europe-west4-a --quiet
+```
+
+## Lessons learned
+
+- **`source_image_project_id` is a list** (`["debian-cloud"]`), not a string. Packer supports multi-project search; we only need one. Forgetting the list wrapper produces a confusing type error.
+- **`execute_command` matters.** Without `sudo bash`, the script fails on the first `apt-get` with "Permission denied." Easy to miss when copying examples that assume a privileged builder.
+- **Image builds are slow.** Each `packer build` takes ~5-8 minutes. Iterate the script locally on a manually-booted VM first when possible; only `packer build` once you're confident.

@@ -5,8 +5,9 @@ from google.cloud import compute_v1
 
 from runnerforge.config import GCP_PROJECT_ID, GCP_ZONE
 
-_DEFAULT_IMAGE = "projects/debian-cloud/global/images/family/debian-12"
+_BOOT_IMAGE = "projects/runnerforge/global/images/family/runnerforge-runner"
 _BOOT_DISK_SIZE_GB = 10
+_DATA_DISK_SIZE_GB = 50
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +17,7 @@ async def create_vm(
     machine_type: str,
     labels: dict[str, str],
     metadata: dict[str, str] | None = None,
-    image: str = _DEFAULT_IMAGE,
-    disk_size_gb: int = _BOOT_DISK_SIZE_GB,
+    data_disk_size_gb: int = _DATA_DISK_SIZE_GB,
     zone: str = GCP_ZONE,
     project_id: str = GCP_PROJECT_ID,
 ) -> str:
@@ -26,16 +26,27 @@ async def create_vm(
 
     instance = compute_v1.Instance()
 
-    # Boot disk
+    # Disks
     instance.disks = [
+        # Boot disk - OS + runner binary (small, from our Packer image)
         compute_v1.AttachedDisk(
             boot=True,
             auto_delete=True,  # this is THE boot disk
             initialize_params=compute_v1.AttachedDiskInitializeParams(
-                source_image=image,
-                disk_size_gb=disk_size_gb,
+                disk_name="boot",
+                source_image=_BOOT_IMAGE,
+                disk_size_gb=_BOOT_DISK_SIZE_GB,
             ),
-        )
+        ),
+        # Data disk - workflow execution space (larger, blank, formatted  at boot)
+        compute_v1.AttachedDisk(
+            boot=False,
+            auto_delete=True,
+            initialize_params=compute_v1.AttachedDiskInitializeParams(
+                disk_size_gb=data_disk_size_gb,
+                disk_type=f"zones/{zone}/diskTypes/pd-balanced",
+            ),
+        ),
     ]
 
     # network
@@ -83,7 +94,12 @@ async def find_vms_by_job_id(
 
     instances = await asyncio.to_thread(lambda: list(client.list(request=request)))
 
-    return [i.name for i in instances]
+    result = [i.name for i in instances]
+    logger.info(
+        "VM lookup by job_id",
+        extra={"job_id": job_id, "match_count": len(result)},
+    )
+    return result
 
 
 async def delete_vm(
