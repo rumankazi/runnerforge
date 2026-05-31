@@ -32,8 +32,6 @@ def parse_trace_id(header: str | None) -> str | None:
 @app.middleware("http")
 async def access_log_middleware(request: Request, call_next):
     start = time.monotonic()
-    # we could also use incoming X-Cloud-Trace-Context header (cloud trace propagation)
-    # useful once we have multiple services
     trace_id = parse_trace_id(request.headers.get("X-Cloud-Trace-Context"))
     request_id = trace_id or str(uuid.uuid4())
     update_context(request_id=request_id, trace_id=trace_id)

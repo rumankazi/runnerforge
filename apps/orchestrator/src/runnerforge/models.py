@@ -13,7 +13,7 @@ class WorkflowJob(BaseModel):
     run_attempt: int
 
 
-class Login(BaseModel):
+class User(BaseModel):
     id: int
     login: str
     type: str
@@ -21,7 +21,7 @@ class Login(BaseModel):
 
 class Repository(BaseModel):
     full_name: str
-    owner: Login
+    owner: User
 
 
 class Installation(BaseModel):
@@ -33,7 +33,7 @@ class WorkflowJobEvent(BaseModel):
     workflow_job: WorkflowJob
     repository: Repository
     installation: Installation
-    sender: Login
+    sender: User
 
 
 class Permissions(BaseModel):
