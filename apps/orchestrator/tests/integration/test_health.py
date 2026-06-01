@@ -4,7 +4,7 @@ from runnerforge.main import app
 client = TestClient(app)
 
 
-def test_healthz_returns_ok():
-    response = client.get("/healthz")
+def test_health_returns_ok():
+    response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}

@@ -1,0 +1,18 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'apps/orchestrator/Dockerfile'
+      - '-t'
+      - 'europe-west4-docker.pkg.dev/$PROJECT_ID/orchestrator/orchestrator:${_TAG}'
+      - '.'
+
+images:
+  - 'europe-west4-docker.pkg.dev/$PROJECT_ID/orchestrator/orchestrator:${_TAG}'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _TAG: '0.1.1'

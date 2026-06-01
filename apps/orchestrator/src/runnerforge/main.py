@@ -56,8 +56,8 @@ async def access_log_middleware(request: Request, call_next):
     return response
 
 
-@app.get("/healthz")
-async def healthz():
+@app.get("/health")
+async def health():
     return {"status": "ok"}
 
 
