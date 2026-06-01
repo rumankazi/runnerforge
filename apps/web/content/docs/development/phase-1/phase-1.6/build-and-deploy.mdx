@@ -1,0 +1,132 @@
+---
+title: Build and deploy
+description: Operational runbook — how to actually build a new Packer image and deploy it for runner VMs to consume
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+This is the runbook. Every command you need to build, publish, and clean up runner VM images.
+
+## Prerequisites
+
+One-time setup per development machine.
+
+```bash
+# Install Packer (macOS via Homebrew)
+brew install packer
+
+# Authenticate to GCP — Packer uses Application Default Credentials
+gcloud auth application-default login
+
+# Set the active project (so commands default to it)
+gcloud config set project runnerforge
+```
+
+Verify:
+
+```bash
+packer version       # should be 1.10+
+gcloud auth list     # should show your account
+```
+
+## Build a new runner image
+
+The build runs on a temporary GCE VM, installs everything via [`install-runner.sh`](https://github.com/rumankazi/runnerforge/blob/main/infra/packer/scripts/install-runner.sh), creates a custom image, and tears down the VM. ~5 minutes end-to-end.
+
+```bash
+cd infra/packer
+
+# First time only — downloads the googlecompute plugin per versions.hcl
+packer init .
+
+# Sanity-check the template (no API calls, no cost)
+packer validate .
+
+# Build! Creates a temporary VM, provisions, snapshots, deletes the VM
+packer build .
+```
+
+Watch for the final lines:
+
+```
+==> Builds finished. The artifacts of successful builds are:
+--> googlecompute.runnerforge_runner: A disk image was created in the 'runnerforge' project:
+    runnerforge-runner-1735847123 (image family: runnerforge-runner)
+```
+
+The image name is auto-timestamped; the family stays the same. The orchestrator pulls from the family pointer, so the latest image automatically becomes the one new VMs use.
+
+## Verify the new image
+
+```bash
+# Most recent image in the runnerforge-runner family
+gcloud compute images list \
+  --filter="family:runnerforge-runner" \
+  --sort-by="~creationTimestamp" \
+  --limit=1 \
+  --project=runnerforge \
+  --format="table(name,creationTimestamp,status)"
+```
+
+Status should be `READY`.
+
+Smoke-test by triggering a real workflow job — it'll get assigned to a runner VM created from the new image. Watch the logs:
+
+```bash
+gcloud logging read 'resource.type="gce_instance" AND jsonPayload.message=~"runner"' \
+  --limit=20 --project=runnerforge \
+  --format="value(timestamp,jsonPayload.message)"
+```
+
+## Updating the runner version
+
+Edit [`scripts/install-runner.sh`](https://github.com/rumankazi/runnerforge/blob/main/infra/packer/scripts/install-runner.sh) and bump:
+
+```bash
+RUNNER_VERSION="2.341.0"   # or whatever the latest is
+```
+
+Then rebuild as above. The new family-tagged image replaces the previous one in the lookup; existing VMs still use whatever they were created with.
+
+## Image cleanup (manual — GCE has no native retention)
+
+Each `packer build` creates a new immutable image at ~$0.50/image/month. Run this periodically (quarterly is plenty at our cadence):
+
+```bash
+# Keep the latest 5, delete older ones in the runnerforge-runner family
+gcloud compute images list \
+  --filter="family:runnerforge-runner" \
+  --sort-by="~creationTimestamp" \
+  --format="value(name)" \
+  --project=runnerforge | tail -n +6 | xargs -r -I {} \
+  gcloud compute images delete {} --project=runnerforge --quiet
+```
+
+<Callout type="info" title="Why not a Cloud Function?">
+  Compute Engine has no native image lifecycle policy (unlike Artifact Registry). We documented the manual procedure rather than build automation — see [Phase 1.8 image retention](/docs/development/phase-1/phase-1.8#cleanup-automation) for the reasoning. When/if Phase 2 adds CI/CD for Packer builds, the cleanup step lands in the same workflow.
+</Callout>
+
+## Common issues
+
+**`Error: googlecompute: Failed to authenticate` or 401 errors**
+→ ADC token expired. Re-run `gcloud auth application-default login`.
+
+**`API [compute.googleapis.com] not enabled`**
+→ Should be enabled already from Phase 1.5 setup, but if not:
+```bash
+gcloud services enable compute.googleapis.com --project=runnerforge
+```
+
+**Build VM stuck for >10 minutes**
+→ The Packer VM is likely stuck on apt install or runner download. Check the temporary VM's serial console output:
+```bash
+gcloud compute instances list --filter="name~packer" --project=runnerforge
+gcloud compute instances get-serial-port-output <vm-name> --zone=europe-west4-a --project=runnerforge
+```
+Kill with Ctrl+C; Packer cleans up the temp VM on exit.
+
+**`Error: image already exists` after a failed previous build**
+→ Rare; the auto-timestamped name should make collisions impossible. If it happens, the leftover image is from a half-finished build:
+```bash
+gcloud compute images delete <image-name> --project=runnerforge --quiet
+```

@@ -15,13 +15,3 @@ resource "google_secret_manager_secret" "github_app_private_key" {
     }
   }
 }
-
-resource "google_secret_manager_secret" "sweep_auth_token" {
-  secret_id = "sweep-auth-token"
-
-  replication {
-    auto {
-
-    }
-  }
-}

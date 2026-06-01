@@ -1,0 +1,265 @@
+---
+title: Phase 1.8
+description: Terraform-managed production deployment — Cloud Run, Secret Manager, Cloud Scheduler with OIDC, Artifact Registry cleanup
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+After phase 1.7, the orchestrator was functionally complete — webhook-driven runner lifecycle plus a safety-net sweep — but it still ran as `fastapi dev` locally with smee.io tunneling. Phase 1.8 is the final step of Phase 1: **the orchestrator becomes a real, deployed service in production GCP, managed end-to-end by Terraform.**
+
+After this phase, Phase 1 is done.
+
+## What this phase achieves
+
+```
+                ┌─────────────────────────────────────────────┐
+                │   GCP project: runnerforge (europe-west4)   │
+                │                                             │
+GitHub Webhook ─┼──► Cloud Run service                        │
+  /webhook (HMAC) │   ┌─────────────────────────┐             │
+                │   │ runnerforge-orchestrator│            │
+                │   │ image: orchestrator:0.1.3│            │
+                │   │ SA: runnerforge-orchestrator           │
+                │   │ env + secrets from SM    │           │
+                │   └─────────────┬───────────┘             │
+                │                 │                          │
+                │                 ▼                          │
+                │   ┌─────────────────────────┐             │
+                │   │  Compute Engine API     │             │
+                │   │  (create/delete runner) │             │
+                │   └─────────────────────────┘             │
+                │                                            │
+Cloud Scheduler ┼──► /sweep  (OIDC JWT, hourly)             │
+  runnerforge-  │                                            │
+  scheduler SA  │                                            │
+                │   ┌─────────────────────────┐             │
+                │   │  Secret Manager:        │             │
+                │   │  • github-webhook-secret │             │
+                │   │  • github-app-private-key│             │
+                │   └─────────────────────────┘             │
+                │                                            │
+                │   ┌─────────────────────────┐             │
+                │   │  Artifact Registry:     │             │
+                │   │  orchestrator (DOCKER)  │             │
+                │   │  + cleanup_policies     │             │
+                │   └─────────────────────────┘             │
+                └────────────────────────────────────────────┘
+```
+
+Concretely, after `terraform apply`:
+
+- The orchestrator runs on **Cloud Run v2** (`https://runnerforge-orchestrator-gsqedgmwha-ez.a.run.app`).
+- Two GitHub secrets live in **Secret Manager**, with their values **never** in Terraform state.
+- **Cloud Scheduler** triggers `/sweep` on a cron, authenticating with **OIDC** (no shared secrets).
+- A dedicated **service account** with least-privilege IAM bindings runs the orchestrator.
+- **Artifact Registry** retains only the 5 most recent tagged images and prunes untagged layers older than 7 days — automatically.
+- Terraform state lives in a **GCS bucket** (`runnerforge-terraform-state`) so any machine can apply.
+
+## Architectural decisions
+
+### Cloud Run v2, not v1
+
+The Google provider exposes both `google_cloud_run_service` (v1, legacy) and `google_cloud_run_v2_service` (current). v2 has a much cleaner schema (proper nested blocks for `template`/`containers`/`scaling`/`volumes`) and exposes everything we need for secret mounts and concurrency tuning. v1 stays in maintenance mode.
+
+### Concurrency = 1 per instance
+
+```hcl
+max_instance_request_concurrency = 1
+```
+
+Per the [ADR](/docs/RunnerForge/design/architecture), each instance serves one request at a time. With `max_instance_count = 10`, the service can handle 10 simultaneous webhooks via horizontal scaling. The tradeoff:
+
+- **Cost**: each request gets its own container; throughput requires more instances.
+- **Isolation**: no in-process state bleed between requests; one slow GCP call can't block others.
+- **Simplicity**: webhook handlers don't need to reason about shared state across requests.
+
+For portfolio-scale traffic (a few webhooks per minute at peak), the cost is negligible. Worth revisiting in Phase 2 if traffic grows.
+
+### Split auth: HMAC for `/webhook`, OIDC for `/sweep`
+
+Two endpoints, two callers, two trust domains:
+
+| Endpoint | Caller | Identity provider | Auth |
+|---|---|---|---|
+| `/webhook` | GitHub.com | External — doesn't speak Google OIDC | **HMAC-SHA256** (shared secret in Secret Manager) |
+| `/sweep` | Cloud Scheduler | Google's IdP (scheduler runs as a GCP SA) | **OIDC** (Google-signed short-lived JWT) |
+
+GitHub can't mint Google OIDC tokens — webhook auth has to be a pre-shared secret. Cloud Scheduler can, so internal-to-internal calls use the stronger mechanism. The orchestrator validates the JWT signature (against Google's JWKS), audience (must match the Cloud Run URL), and email claim (must match the scheduler SA) for every `/sweep` request.
+
+No bearer token. No rotation needed — Google rotates the signing keys automatically. Same endpoint contract as bearer-auth, less operational surface.
+
+### Bundled image + config deploys
+
+Cloud Run revisions are immutable. When code expects new env vars (e.g., `EXPECTED_SCHEDULER_SA_EMAIL`) and Terraform updates both the image AND the env vars in **one apply**, Cloud Run creates a single new revision where image and config match. If you change only one side, the other side breaks at import time.
+
+We learned this the hard way: bumping the image without env var updates → container startup `KeyError` → revision fails health checks → traffic stays on the old revision → silent broken-deploy.
+
+Rule baked into project conventions: **build → push → bump tfvars → apply** as one atomic operation.
+
+### GCS state backend from day one
+
+Local Terraform state on disk is fine for one developer, one machine. We chose GCS from the start because:
+
+- Survives laptop loss
+- Works across multiple machines (the user's stated requirement)
+- Enables state locking (no concurrent-apply corruption)
+
+The chicken-and-egg problem (Terraform can't manage the bucket that holds its own state) is solved by bootstrapping the bucket manually with `gcloud storage buckets create` — documented in [the Terraform walkthrough](/docs/development/phase-1/phase-1.8/terraform-walkthrough).
+
+### Imported the AR repo into Terraform
+
+The Artifact Registry repository was created manually with `gcloud` during item 2 (before any Terraform existed). Two options afterward: leave it manual, or import it. We imported with `terraform import google_artifact_registry_repository.orchestrator ...`.
+
+Rationale: the goal of IaC is "delete this project, run `terraform apply`, get the entire infrastructure back." Leaving even one resource manual breaks that goal. The one-time import cost is small; the long-term clarity is worth it.
+
+## Auth model — who trusts whom
+
+```
+External (untrusted)                 Internal (Google identity)
+──────────────────────              ────────────────────────────
+
+GitHub.com                          Cloud Scheduler (runnerforge-scheduler SA)
+   │                                   │
+   │ POST /webhook                     │ POST /sweep
+   │ X-Hub-Signature-256: sha256=...   │ Authorization: Bearer <Google OIDC JWT>
+   │                                   │   { iss: accounts.google.com,
+   │                                   │     aud: <cloud_run_url>,
+   │                                   │     email: scheduler@... }
+   ▼                                   ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Cloud Run (allUsers ingress + run.invoker for allUsers)        │
+│  Application-layer auth in orchestrator:                        │
+│    /webhook → verify_github_signature(body, sig, WEBHOOK_SECRET) │
+│    /sweep   → verify_oidc_token(authz, EXPECTED_AUDIENCE,        │
+│                                  EXPECTED_SCHEDULER_SA_EMAIL)    │
+└─────────────────────────────────────────────────────────────────┘
+   │                                   │
+   │ runs as orchestrator SA           │ (same)
+   ▼                                   ▼
+GCP APIs (Compute, Secret Manager)
+  via ADC (no static credentials)
+```
+
+The orchestrator SA holds **explicit least-privilege roles**:
+
+- `roles/compute.instanceAdmin.v1` — create/delete VMs
+- `roles/compute.imageUser` + `roles/compute.imageAdmin` — use Packer images, delete old ones
+- `roles/iam.serviceAccountUser` on default compute SA — attach default SA to created VMs (act-as, not impersonate)
+- `roles/secretmanager.secretAccessor` on **each of 2 secrets individually** (not project-wide)
+- `roles/logging.logWriter` — structured log emission
+
+Notably absent: `roles/editor`, `roles/owner`, anything that could escalate privilege.
+
+## Cleanup automation
+
+Two image stores, two different mechanisms:
+
+### Artifact Registry (orchestrator container images)
+
+Native [`cleanup_policies`](https://cloud.google.com/artifact-registry/docs/repositories/cleanup-policy) on `google_artifact_registry_repository`:
+
+```hcl
+cleanup_policies {
+  id     = "keep-recent-tagged"
+  action = "KEEP"
+  most_recent_versions {
+    package_name_prefixes = ["orchestrator"]
+    keep_count            = 5
+  }
+}
+
+cleanup_policies {
+  id     = "delete-untagged-old"
+  action = "DELETE"
+  condition {
+    tag_state  = "UNTAGGED"
+    older_than = "604800s"  # 7 days
+  }
+}
+```
+
+GCP runs these daily. Zero infrastructure, zero code.
+
+### Compute Engine custom images (Packer-built runner VMs)
+
+GCE has no native retention policy for custom images. Documented manual procedure:
+
+```bash
+# Keep latest 5, delete older
+gcloud compute images list \
+  --filter="family:runnerforge-runner" \
+  --sort-by="~creationTimestamp" \
+  --format="value(name)" \
+  --project=runnerforge | tail -n +6 | xargs -r -I {} \
+  gcloud compute images delete {} --project=runnerforge --quiet
+```
+
+At current build cadence (~1 image per week, ~$0.50/image/month), this is a 10-second task to run quarterly. When automation becomes worth it (Phase 2 CI/CD for Packer builds), the cleanup step lands in the same workflow.
+
+## Detailed sub-pages
+
+- [Terraform walkthrough](/docs/development/phase-1/phase-1.8/terraform-walkthrough) — file-by-file, resource-by-resource explanation of `infra/terraform/`. The reference for adding new resources or onboarding future-you.
+- [Deployment runbook](/docs/development/phase-1/phase-1.8/deployment) — the operational commands: Cloud Build, terraform apply, smoke tests, secret rotation, log queries, rollback. Copy-paste ready for "I'm about to release a new version."
+
+## Lessons learned
+
+The deployment phase surfaced more gotchas than any prior sub-phase — most about the mismatch between local dev and Cloud Run reality.
+
+- **Apple Silicon arm64 ≠ Cloud Run amd64.** Default Podman/Docker builds on Apple Silicon produce arm64 images; Cloud Run runs amd64; the container fails with `exec format error` the moment it tries to execute any binary. Local fix: `--platform linux/amd64`. We landed on **Google Cloud Build** as the path going forward — runs natively on amd64 infrastructure, no emulation, also the CI/CD path for Phase 2. Local Podman with QEMU segfaulted reliably during `uv sync` (Rust binaries don't translate well under QEMU).
+
+- **Cloud Run / Knative reserves `/healthz`.** External requests to that exact path return Google's HTML 404 from the platform frontend — they never reach the container. The orchestrator's health endpoint had to be renamed to `/health`. The same likely applies to `/livez` and `/readyz`. Spent half an hour debugging "but FastAPI claims the route exists!" before this clicked.
+
+- **"Container failed to listen on port" is misleading.** This error from Cloud Run is what you see when the container exits at startup for *any* reason — port misconfiguration, import-time exceptions, missing files. The real cause is in Cloud Logging (the Python traceback). Always pull logs:
+
+  ```bash
+  gcloud run services logs read runnerforge-orchestrator \
+    --region=europe-west4 --project=runnerforge --limit=100
+  ```
+
+  Most of our "port" failures were actually `KeyError` on a missing env var or `FileNotFoundError` on a misconfigured secret mount path.
+
+- **Code + config must deploy atomically.** When config schema changes (a required env var added or removed), the image that reads that config must be bumped in the *same* `terraform apply`. Otherwise the new revision pairs old code with new config (or vice versa), crashes at import, and Cloud Run silently keeps serving the old revision. No external symptom, no error from `terraform apply` — just a broken revision sitting in the service.
+
+- **`.env` precedence vs `os.environ.setdefault` in tests.** Running `uv run --env-file .env pytest` loads `.env` BEFORE conftest's `setdefault` calls, which then become no-ops. Tests that hardcode "test-only" values then disagree with what the code actually reads. Solution: run `uv run pytest` (no `--env-file`) for tests — `.env` is for the dev server, conftest is for tests.
+
+- **`unittest.mock.patch` vs `monkeypatch + Mock`.** The project standard is `monkeypatch.setattr(...)` to inject a `MagicMock`/`AsyncMock`. Both expose identical Mock capabilities (`return_value`, `side_effect`, `assert_called_*`, `call_args`); the supposed advantages of `patch` (block-scoped cleanup, decorator-stacking) aren't useful for our flat function-style tests. Consistency beats slight ergonomic variation.
+
+- **Cloud Run image references pin to digest at create time.** Re-pushing the same tag does NOT update a running revision. Bump the tag (`0.1.0` → `0.1.1`) and update `image_tag` in `terraform.tfvars` to force a new revision. This is intentional Cloud Run safety — but if you don't know it, you'll think your re-pushed image isn't deployed.
+
+- **Zombie infrastructure from past projects.** Twice during Phase 1.8 we hit pre-existing GCP resources from an abandoned `runnerforge-api` project (Cloud Run service, AR repo, service account, 4 secrets). All cleaned up as encountered. Pattern: before any greenfield work in an existing project, inventory what's there. The `resync` slash command now does this check for us.
+
+## Test state
+
+| Module | Coverage |
+|---|---|
+| All 11 production modules | **100%** (statements + branches) |
+| Total tests | **89 passing** in ~5s |
+
+OIDC migration added 7 unit tests for `verify_oidc_token` (signature validation, audience/email checks, error logging contracts) and refactored 3 sweep endpoint integration tests to mock OIDC instead of bearer-token comparison.
+
+## Production verification
+
+Real GitHub workflow → real Cloud Run → real VM creation/deletion, end-to-end:
+
+```
+15:14:04  POST /webhook   (action=queued)     ← GitHub fires
+15:14:??  VM creation submitted               ← orchestrator → Compute API
+15:14:??  Startup script registers runner     ← VM → GitHub
+15:15:22  POST /webhook   (action=in_progress)
+15:15:32  POST /webhook   (action=completed)
+15:15:32  VM lookup by job_id → VM deletion submitted
+```
+
+Full lifecycle in ~88 seconds. Zero orphan VMs. Cloud Scheduler /sweep job runs hourly and reports zero deletions (nothing to clean up, as designed).
+
+## What's next — Phase 2
+
+Phase 1 is done. Phase 2 is production hardening:
+
+- **CI/CD** — GitHub Actions workflows for orchestrator + Packer image builds. Replace `gcloud builds submit` with automatic pipeline triggers on commits to main.
+- **OpenTelemetry** — distributed tracing (Layer 2 + Layer 3 per [observability.mdx](/docs/RunnerForge/design/observability)).
+- **Cloud Monitoring dashboards + alerts** — RED-method dashboards from existing structured logs, SLO alerts on p95 webhook latency.
+- **Dedicated runner-vm service account** — replace default compute SA (broad `editor` perms) with a minimal `runnerforge-runner-vm` SA holding only `logging.logWriter`. Requires a code change in [compute_client.py](https://github.com/rumankazi/runnerforge/blob/main/apps/orchestrator/src/runnerforge/compute_client.py) to specify the SA on `create_vm`.
+- **Automated secret rotation** — Cloud Function + Cloud Scheduler + GitHub API integration. Phase 1.8 shipped the slots + a documented manual procedure; Phase 2 automates the lifecycle.
+
+After Phase 2 hardening, the orchestrator is genuinely production-grade. Phase 3+ adds user-facing dashboards and warm pools — see [the Phase 1 roadmap](/docs/RunnerForge/design/architecture#phases) for the full picture.

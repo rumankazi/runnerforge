@@ -51,9 +51,3 @@ resource "google_secret_manager_secret_iam_member" "orchestrator_reads_app_priva
   role = "roles/secretmanager.secretAccessor"
   member = "serviceAccount:${google_service_account.orchestrator.email}"
 }
-
-resource "google_secret_manager_secret_iam_member" "orchestrator_reads_sweep_auth_token" {
-  secret_id = google_secret_manager_secret.sweep_auth_token.id
-  role = "roles/secretmanager.secretAccessor"
-  member = "serviceAccount:${google_service_account.orchestrator.email}"
-}

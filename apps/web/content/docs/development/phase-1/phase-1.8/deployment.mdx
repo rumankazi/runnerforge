@@ -1,0 +1,288 @@
+---
+title: Deployment runbook
+description: Operational commands for the orchestrator — build, deploy, verify, rotate secrets, roll back. Copy-paste ready.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+This is the runbook. Every command needed to release a new orchestrator version, verify it's healthy, rotate secrets, or roll back when something goes wrong.
+
+## Prerequisites
+
+One-time setup per development machine.
+
+```bash
+# Install Terraform (macOS via Homebrew)
+brew install terraform     # 1.6+ required
+
+# Install gcloud CLI (if not already)
+brew install --cask google-cloud-sdk
+
+# Authenticate to GCP — used by both gcloud + Terraform (via ADC)
+gcloud auth login
+gcloud auth application-default login
+gcloud config set project runnerforge
+
+# One-time: enable APIs (idempotent — safe to re-run)
+gcloud services enable \
+  cloudbuild.googleapis.com \
+  cloudscheduler.googleapis.com \
+  --project=runnerforge
+
+# Initialize Terraform (downloads providers, connects to GCS backend)
+cd infra/terraform
+terraform init
+```
+
+Verify:
+
+```bash
+terraform version    # 1.6+
+gcloud auth list     # active account
+terraform plan       # should show "No changes" if state is in sync
+```
+
+## Release a new orchestrator version
+
+The atomic deploy: build → push → bump tfvars → apply, all together. **Never split image changes from config changes across separate applies** — see [the architectural decision](/docs/development/phase-1/phase-1.8#bundled-image--config-deploys) for why.
+
+### 1. Build the new container via Cloud Build
+
+```bash
+# From repo root
+gcloud builds submit \
+  --config=infra/cloudbuild.yaml \
+  --substitutions=_TAG=0.1.X \
+  --project=runnerforge
+```
+
+Replace `0.1.X` with the next semver. Cloud Build:
+- Uploads the build context (repo minus `.gitignore`/`.dockerignore` exclusions)
+- Builds the Dockerfile on amd64 infrastructure (no emulation, unlike local Podman)
+- Pushes the image to Artifact Registry as `europe-west4-docker.pkg.dev/runnerforge/orchestrator/orchestrator:0.1.X`
+
+~2–3 minutes including upload. Watch for `BUILD SUCCESS`.
+
+<Callout type="warn" title="Don't build locally on Apple Silicon">
+  Podman/Docker default to arm64 builds on Apple Silicon. Cloud Run runs amd64 — the resulting container fails with `exec format error`. Use `--platform linux/amd64` or, more reliably, just use Cloud Build (which runs native amd64).
+</Callout>
+
+### 2. Verify the image landed in Artifact Registry
+
+```bash
+gcloud artifacts docker images list \
+  europe-west4-docker.pkg.dev/runnerforge/orchestrator/orchestrator \
+  --include-tags --project=runnerforge \
+  --format="value(tags,createTime)"
+```
+
+Should show the new `0.1.X` tag plus recent ones (older tagged versions get auto-cleaned per [the AR cleanup policy](/docs/development/phase-1/phase-1.8#cleanup-automation)).
+
+### 3. Bump `terraform.tfvars`
+
+```hcl
+image_tag = "0.1.X"
+```
+
+(`terraform.tfvars` is gitignored — it's not part of the repo. Your local copy is the source of truth for variable values.)
+
+### 4. Plan + apply
+
+```bash
+cd infra/terraform
+terraform plan      # confirm: ~ google_cloud_run_v2_service.orchestrator will be updated in-place
+terraform apply     # yes
+```
+
+Cloud Run creates a new revision with the new image. If the new revision passes health checks, traffic shifts; if it fails, traffic stays on the previous revision (no downtime).
+
+### 5. Smoke test
+
+```bash
+URL="https://runnerforge-orchestrator-gsqedgmwha-ez.a.run.app"
+curl -sS "$URL/health"
+# Expected: {"status":"ok"}
+```
+
+### 6. Verify the new revision is serving traffic
+
+```bash
+gcloud run services describe runnerforge-orchestrator \
+  --region=europe-west4 --project=runnerforge \
+  --format="value(spec.template.spec.containers[0].image,status.latestReadyRevisionName)"
+```
+
+The image should match the new tag, and `latestReadyRevisionName` should be the most recent revision.
+
+## Manual /sweep trigger (don't wait for the cron)
+
+Useful for verifying OIDC chain works, debugging sweep issues, or forcing a cleanup:
+
+```bash
+gcloud scheduler jobs run runnerforge-sweep \
+  --location=europe-west4 --project=runnerforge
+
+# Watch for the "Sweep completed" log line (~5s later)
+gcloud logging read 'resource.type="cloud_run_revision" AND jsonPayload.message="Sweep completed"' \
+  --limit=3 --format="value(timestamp,jsonPayload)" --project=runnerforge
+```
+
+A successful sweep returns a payload like `{"checked": 0, "deleted": 0, ...}` — zero is normal when there are no orphan VMs.
+
+## Secret rotation
+
+Both secrets rotate manually. Phase 2 will automate via Cloud Function; for now, runbook:
+
+### Rotate webhook secret
+
+```bash
+# 1. Generate a new value (don't reuse old ones)
+NEW_SECRET=$(openssl rand -hex 32)
+
+# 2. Upload as a new SM version
+echo -n "$NEW_SECRET" | gcloud secrets versions add github-webhook-secret \
+  --data-file=- --project=runnerforge
+
+# 3. Update the GitHub App's webhook secret field (Settings → Developer settings → GitHub Apps → your App → Webhook secret)
+#    Paste $NEW_SECRET into the field, click "Save changes"
+
+# 4. Verify next webhook delivers OK — trigger a workflow run and check Cloud Run logs
+gcloud logging read 'resource.type="cloud_run_revision" AND jsonPayload.message=~"webhook"' \
+  --limit=5 --project=runnerforge
+```
+
+<Callout type="warn" title="Brief mismatch window">
+  Between step 2 (SM version uploaded, orchestrator may pick up new version) and step 3 (GitHub App updated), webhook deliveries may fail HMAC validation. Minimize the gap — do step 2 and step 3 within a minute.
+</Callout>
+
+### Rotate GitHub App private key
+
+GitHub Apps support two active private keys simultaneously — clean rotation window.
+
+```bash
+# 1. Generate a NEW private key in the GitHub App settings
+#    Settings → Developer settings → GitHub Apps → your App → Private keys → "Generate a private key"
+#    Downloads a .pem file. KEEP THE OLD KEY FOR NOW.
+
+# 2. Upload the new key as a new SM version
+gcloud secrets versions add github-app-private-key \
+  --data-file="/path/to/newly-downloaded-key.pem" \
+  --project=runnerforge
+
+# 3. Force orchestrator to pick up the new version (next cold-start or redeploy)
+#    Trigger a Cloud Run revision (easiest: tiny no-op terraform apply, or restart the service)
+gcloud run services update runnerforge-orchestrator \
+  --region=europe-west4 --project=runnerforge \
+  --update-env-vars=ROTATION_TIMESTAMP="$(date +%s)"
+
+# 4. Trigger a workflow → confirm the orchestrator can mint JWTs against the new key
+#    (Watch for successful /webhook handling)
+
+# 5. Delete the OLD private key in GitHub App settings (the one you're rotating away from)
+```
+
+## View orchestrator logs
+
+```bash
+# Recent logs (all severities)
+gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="runnerforge-orchestrator"' \
+  --limit=50 --project=runnerforge \
+  --format="value(timestamp,jsonPayload.message,severity)"
+
+# Warnings + errors only (good for triage)
+gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="runnerforge-orchestrator" AND severity>=WARNING' \
+  --limit=50 --project=runnerforge
+
+# Tail live (waits for new entries)
+gcloud beta run services logs tail runnerforge-orchestrator \
+  --region=europe-west4 --project=runnerforge
+
+# Specific revision (e.g., debugging a failed deploy)
+gcloud logging read 'resource.labels.revision_name="runnerforge-orchestrator-00007-abc"' \
+  --limit=50 --project=runnerforge
+```
+
+## Roll back to a previous image
+
+Cloud Run keeps old revisions indefinitely. Two ways to roll back.
+
+### Option A — point Terraform at the older image (preferred)
+
+```bash
+# 1. Edit terraform.tfvars
+#    image_tag = "0.1.X-1"     ← previous version
+
+# 2. Apply
+cd infra/terraform && terraform apply
+```
+
+This creates a new revision with the old image and shifts traffic. State stays in sync.
+
+### Option B — shift traffic via gcloud (faster, but TF drift)
+
+```bash
+# List recent revisions
+gcloud run revisions list --service=runnerforge-orchestrator \
+  --region=europe-west4 --project=runnerforge
+
+# Shift 100% traffic to a specific previous revision
+gcloud run services update-traffic runnerforge-orchestrator \
+  --region=europe-west4 --project=runnerforge \
+  --to-revisions=runnerforge-orchestrator-00006-xyz=100
+```
+
+Faster (no new revision created), but Terraform now sees drift — next `terraform plan` will want to switch traffic back to `latest`. Only use this for incident response; follow up with Option A to reconcile.
+
+## Common deploy failures
+
+**`Error waiting for Updating Service: container failed to start and listen on the port`**
+→ Generic Cloud Run error masking a Python startup crash. Check Cloud Run logs for the real traceback:
+```bash
+gcloud run services logs read runnerforge-orchestrator \
+  --region=europe-west4 --project=runnerforge --limit=100
+```
+Common causes: missing env var (`KeyError`), wrong secret mount path (`FileNotFoundError`), arm64/amd64 mismatch (`exec format error`).
+
+**`Error: googleapi: Error 403: Permission denied`** during apply
+→ Your `gcloud auth application-default login` token expired or the user lacks a role. Re-auth:
+```bash
+gcloud auth application-default login
+```
+
+**Terraform plan shows changes you didn't make** (drift)
+→ Someone (or you, earlier) modified the resource outside Terraform. Either:
+- Accept the drift: `terraform apply` (Terraform updates the resource back to match the .tf files)
+- Capture the drift: edit .tf to match reality, then `terraform plan` should show clean
+
+**`terraform.tfvars` deleted by mistake**
+→ It's gitignored — no recovery from git. Reconstruct from current state:
+```bash
+gcloud run services describe runnerforge-orchestrator \
+  --region=europe-west4 --project=runnerforge \
+  --format="value(spec.template.spec.containers[0].image)"
+# Pull image_tag from the image URI
+```
+The `cloud_run_url` is shown in `terraform output`; `github_app_id` is in your GitHub App settings.
+
+## Quick reference — every command in one place
+
+```bash
+# Build + push
+gcloud builds submit --config=infra/cloudbuild.yaml --substitutions=_TAG=0.1.X --project=runnerforge
+
+# Deploy (after bumping tfvars image_tag)
+cd infra/terraform && terraform apply
+
+# Smoke test
+curl -sS https://runnerforge-orchestrator-gsqedgmwha-ez.a.run.app/health
+
+# Manual sweep
+gcloud scheduler jobs run runnerforge-sweep --location=europe-west4 --project=runnerforge
+
+# Live logs
+gcloud beta run services logs tail runnerforge-orchestrator --region=europe-west4 --project=runnerforge
+
+# Roll back
+# - Edit terraform.tfvars image_tag to previous version
+# - terraform apply
+```

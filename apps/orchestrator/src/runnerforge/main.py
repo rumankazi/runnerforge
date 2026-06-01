@@ -1,4 +1,3 @@
-import hmac
 import json
 import logging
 import time
@@ -7,14 +6,18 @@ from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
-from runnerforge.config import SWEEP_AUTH_TOKEN, WEBHOOK_SECRET
+from runnerforge.config import (
+    EXPECTED_AUDIENCE,
+    EXPECTED_SCHEDULER_SA_EMAIL,
+    WEBHOOK_SECRET,
+)
 from runnerforge.handlers import handle_completed, handle_in_progress, handle_queued
 from runnerforge.logger import (
     setup_logging,
     update_context,
 )
 from runnerforge.models import WorkflowJobEvent
-from runnerforge.security import verify_github_signature
+from runnerforge.security import verify_github_signature, verify_oidc_token
 from runnerforge.sweep import run_sweep
 from runnerforge.validation import parse_github_response
 
@@ -116,8 +119,11 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
     tags=["sweep"],
 )
 async def sweep(authorization: Annotated[str, Header()]):
-    if not _is_authorized(authorization):
-        logger.warning("Sweep auth failed")
+    if not verify_oidc_token(
+        authorization,
+        expected_audience=EXPECTED_AUDIENCE,
+        expected_email=EXPECTED_SCHEDULER_SA_EMAIL,
+    ):
         raise HTTPException(status_code=401, detail="Invalid auth")
 
     result = await run_sweep()
@@ -131,11 +137,3 @@ async def sweep(authorization: Annotated[str, Header()]):
         },
     )
     return result.model_dump()
-
-
-def _is_authorized(authorization_header: str) -> bool:
-    """Constant-time comparison of bearer token to SWEEP_AUTH_TOKEN."""
-    if not authorization_header.startswith("Bearer "):
-        return False
-    received = authorization_header.removeprefix("Bearer ").encode()
-    return hmac.compare_digest(received, SWEEP_AUTH_TOKEN)

@@ -64,17 +64,14 @@ resource "google_cloud_run_v2_service" "orchestrator" {
           }
         }
       }
-
       env {
-        name = "SWEEP_AUTH_TOKEN"
-        value_source {
-          secret_key_ref {
-            secret = google_secret_manager_secret.sweep_auth_token.secret_id
-            version = "latest"
-          }
-        }
+        name  = "EXPECTED_SCHEDULER_SA_EMAIL"
+        value = google_service_account.scheduler.email
       }
-
+      env {
+        name  = "EXPECTED_AUDIENCE"
+        value = var.cloud_run_url
+      }
     # --- File mount for the PEM private key ---
       volume_mounts {
         name = "github-app-private-key"

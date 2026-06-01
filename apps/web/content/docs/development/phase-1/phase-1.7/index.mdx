@@ -77,11 +77,11 @@ This means:
 - A bad VM never gets accidentally deleted.
 - A bad VM also never gets retried forever — it gets reported once per sweep via the log.
 
-### Bearer-token auth now, OIDC in Phase 1.8
+### Bearer-token auth — replaced by OIDC in Phase 1.8
 
-`/sweep` requires a bearer token from `SWEEP_AUTH_TOKEN` env var. Constant-time comparison via `hmac.compare_digest`. Simple, works locally with curl.
+For Phase 1.7, `/sweep` used a bearer token from `SWEEP_AUTH_TOKEN` env var (constant-time comparison via `hmac.compare_digest`). Simple, worked locally with curl during development.
 
-When deployed on Cloud Run (Phase 1.8), this swaps to **OIDC**: Cloud Scheduler signs a JWT with its service account identity, Cloud Run validates it natively. No shared secret needed. Different auth, same endpoint contract.
+[Phase 1.8](/docs/development/phase-1/phase-1.8) replaced this with **OIDC**: Cloud Scheduler signs each request with a short-lived Google-issued JWT, and the orchestrator validates signature + audience + email claim against the expected scheduler SA. No shared secret to rotate, no static credential, same endpoint contract. See [the Phase 1.8 auth model](/docs/development/phase-1/phase-1.8#auth-model--who-trusts-whom) for the full chain.
 
 ### `delete_vm` is idempotent
 
