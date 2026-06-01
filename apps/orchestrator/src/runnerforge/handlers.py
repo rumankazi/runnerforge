@@ -3,7 +3,7 @@ import logging
 from runnerforge.compute_client import create_vm, delete_vm, find_vms_by_job_id
 from runnerforge.config import STARTUP_SCRIPT
 from runnerforge.github_client import get_installation_token, get_registration_token
-from runnerforge.models import WorkflowJobEvent
+from runnerforge.models import RunnerForgeVmLabels, WorkflowJobEvent
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +47,16 @@ async def handle_queued(event: WorkflowJobEvent):
         "Creating VM",
         extra={"job_id": event.workflow_job.id, "labels": event.workflow_job.labels},
     )
+    labels = RunnerForgeVmLabels(
+        runner="runnerforge",
+        job_id=str(event.workflow_job.id),
+        repo=event.repository.full_name.replace("/", "_"),
+        installation_id=str(event.installation.id),
+    )
     await create_vm(
         instance_name=vm_name,
         machine_type=machine_type_for_labels(event.workflow_job.labels),
-        labels=labels,
+        labels=labels.model_dump(),
         metadata=metadata,
     )
 

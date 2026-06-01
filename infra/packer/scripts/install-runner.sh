@@ -82,6 +82,18 @@ chown --recursive runner:runner /home/runner
 # we bake one specific Docker version per build and don't update in place.
 curl --fail --silent --show-error --location https://get.docker.com | sh
 
+# --- 7. Install Cloud Ops Agent ---
+# Ships VM logs (journalctl + /var/log) and basic system metrics to
+# Cloud Logging and Cloud Monitoring. Without this, our startup script's
+# `logger -t startup-script` output lives only in the serial console
+# and is lost when the VM is deleted.
+# Note that this adds extra delay to the build time by 30-60s, acceptable.
+curl --fail --silent --show-error --location \
+    --remote-name \
+    https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+bash add-google-cloud-ops-agent-repo.sh --also-install
+rm add-google-cloud-ops-agent-repo.sh
+
 # Allow the runner user to run docker without sudo.
 usermod --append --groups docker runner
 

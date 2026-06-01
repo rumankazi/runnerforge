@@ -3,7 +3,9 @@ import logging
 
 from google.cloud import compute_v1
 
+from pydantic import ValidationError
 from runnerforge.config import GCP_PROJECT_ID, GCP_ZONE
+from runnerforge.models import RunnerForgeVmLabels, VmInfo
 
 _BOOT_IMAGE = "projects/runnerforge/global/images/family/runnerforge-runner"
 _BOOT_DISK_SIZE_GB = 10
@@ -116,3 +118,48 @@ async def delete_vm(
         extra={"vm_name": instance_name, "zone": zone, "operation_id": operation.name},
     )
     return operation.name
+
+
+async def list_runnerforge_vms(
+    zone: str = GCP_ZONE, project_id: str = GCP_PROJECT_ID
+) -> list[VmInfo]:
+    """Returns all VMs labeled runner=runnerforge with their creation timestamp + labels."""
+    client = compute_v1.InstancesClient()
+    request = compute_v1.ListInstancesRequest()
+    request.zone = zone
+    request.project = project_id
+
+    # TODO: filtering based on labels. less secure of ensuring the runners are the ones we want to delete, either use some secured handshake, or use uuid while creation (still problematic once you want users to bring their projects)
+    request.filter = "labels.runner=runnerforge"
+
+    instances = await asyncio.to_thread(lambda: list(client.list(request=request)))
+    valid_vms: list[VmInfo] = []
+    skipped_malformed = 0
+    for i in instances:
+        try:
+            labels = RunnerForgeVmLabels.model_validate(dict(i.labels))
+        except ValidationError:
+            logger.warning(
+                "Skipping VM with unexpected label shape",
+                extra={"vm_name": i.name, "raw_labels": dict(i.labels)},
+            )
+            skipped_malformed += 1
+            continue
+        valid_vms.append(
+            VmInfo.model_validate(
+                {
+                    "name": i.name,
+                    "creation_timestamp": i.creation_timestamp,
+                    "labels": labels,
+                }
+            )
+        )
+
+    logger.info(
+        "VM list scan",
+        extra={
+            "runnerforge_vm_count": len(valid_vms),
+            "skipped_malformed_count": skipped_malformed,
+        },
+    )
+    return valid_vms

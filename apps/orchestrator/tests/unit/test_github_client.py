@@ -4,7 +4,11 @@ import httpx
 import pytest
 import respx
 from pydantic import ValidationError
-from runnerforge.github_client import get_installation_token, get_registration_token
+from runnerforge.github_client import (
+    get_installation_token,
+    get_job_status,
+    get_registration_token,
+)
 
 
 @respx.mock
@@ -177,7 +181,7 @@ async def test_get_installation_token_does_not_retry_on_unknown_error():
     assert route.call_count == 1  # NOT retried — unknown exception
 
 
-######## Registration Token #######
+# --- Registration Token ---
 
 
 @respx.mock
@@ -347,3 +351,59 @@ async def test_get_registration_token_does_not_retry_on_unknown_error():
         )
 
     assert route.call_count == 1  # NOT retried — unknown exception
+
+
+# --- get_job_status ---
+@respx.mock
+async def test_get_job_status_returns_job_status(caplog):
+    route = respx.get("https://api.github.com/repos/foo/bar/actions/jobs/12").mock(
+        return_value=httpx.Response(
+            200, json={"status": "completed", "conclusion": "success"}
+        )
+    )
+
+    with caplog.at_level(logging.INFO):
+        response = await get_job_status(
+            installation_token="ghs_test_installation_token",
+            repo_full_name="foo/bar",
+            job_id="12",
+        )
+    assert route.called
+    assert response is not None
+    assert response.status == "completed"
+    assert response.conclusion == "success"
+    assert any("Job status retrieved" in record.message for record in caplog.records)
+    assert all(record.levelno == logging.INFO for record in caplog.records)
+
+
+@respx.mock
+async def test_get_job_status_returns_none_on_404(caplog):
+    route = respx.get("https://api.github.com/repos/foo/bar/actions/jobs/12").mock(
+        return_value=httpx.Response(404, json={"message": "Job not found"})
+    )
+
+    with caplog.at_level(logging.INFO):
+        response = await get_job_status(
+            installation_token="ghs_test_installation_token",
+            repo_full_name="foo/bar",
+            job_id="12",
+        )
+    assert route.called
+    assert response is None
+    assert any("Job not found" in record.message for record in caplog.records)
+    assert all(record.levelno == logging.INFO for record in caplog.records)
+
+
+@respx.mock
+async def test_get_job_status_propagates_5xx(caplog):
+    route = respx.get("https://api.github.com/repos/foo/bar/actions/jobs/12").mock(
+        return_value=httpx.Response(503, json={"message": "Service not available"})
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await get_job_status(
+            installation_token="ghs_test_installation_token",
+            repo_full_name="foo/bar",
+            job_id="12",
+        )
+    assert route.called
