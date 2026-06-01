@@ -1,0 +1,177 @@
+---
+title: Sweep logic
+description: The decision tree, age windows, token caching, and edge cases for run_sweep()
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The sweep handler at [`sweep.py`](https://github.com/rumankazi/runnerforge/blob/main/apps/orchestrator/src/runnerforge/sweep.py) iterates every RunnerForge-labeled VM in the project and decides per-VM whether to delete it. This page is the algorithm in detail.
+
+## The decision tree
+
+```
+For each VM returned by list_runnerforge_vms():
+
+  age = now - vm.creation_timestamp
+
+  ┌─────────────────────────────────────────────────┐
+  │ age < MAX_LIFETIME_HOURS (1h)                   │
+  │   → SKIP   (reason=too_young)                   │
+  │                                                  │
+  │ Rationale: webhook will handle it. We don't     │
+  │ touch fresh VMs.                                 │
+  └─────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────┐
+  │ age > HARD_LIMIT_HOURS (6h)                     │
+  │   → DELETE (reason=hard_limit)                  │
+  │                                                  │
+  │ Rationale: stuck job or zombie. Kill regardless │
+  │ of GitHub-reported status. Skip the API call    │
+  │ entirely — at this age the VM should not exist. │
+  └─────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────┐
+  │ MAX_LIFETIME < age < HARD_LIMIT                 │
+  │   → Query GitHub for job status                 │
+  │     - status="completed" OR 404:                │
+  │         DELETE (reason=job_completed)           │
+  │     - any other status:                         │
+  │         SKIP   (reason=job_running)             │
+  │                                                  │
+  │ Rationale: the canonical check window.           │
+  │ Most actual cleanup happens here.                │
+  └─────────────────────────────────────────────────┘
+```
+
+## Why these two thresholds (1h and 6h)
+
+**`MAX_LIFETIME_HOURS = 1`** — VMs younger than this are almost certainly still running their job. Even a long CI run typically completes in 5–20 minutes; 1 hour is well past normal completion. Setting it lower would risk killing legitimately long jobs; higher would let orphans linger needlessly.
+
+**`HARD_LIMIT_HOURS = 6`** — VMs older than this are pathological. A 6-hour CI job is unusual; one running for that long without a completion webhook means something is genuinely broken. Better to kill it (GitHub will re-queue if needed) than let a zombie run for days.
+
+The middle window (1h–6h) is where most sweep activity happens — VMs whose webhook was dropped or whose orchestrator crashed mid-handler get caught here.
+
+## Per-VM error isolation
+
+Every VM is processed inside its own `try/except Exception`:
+
+```python
+for vm in vms:
+    try:
+        # age check, status check, delete
+        ...
+    except Exception as e:
+        errors.append(f"{vm.name}: {e}")
+        logger.error("Sweep failed for VM", extra={...})
+        continue
+```
+
+Single-VM failures (transient GitHub 500, dropped GCE call, etc.) don't abort the rest of the sweep. They're recorded in `SweepResult.errors` for alerting and the loop continues. **Acceptable use of broad `except`** because:
+
+- This IS the outer loop boundary.
+- Per-VM failures shouldn't take down the whole cleanup pass.
+- We want the error in the result, not propagated out as an unhandled exception.
+
+## Installation token caching within a sweep run
+
+Naively, every VM iteration would mint a fresh JWT + exchange for an installation token. Two issues:
+
+- **Latency** — each GitHub API call is 100–300ms; the JWT mint is local but the token fetch is a round-trip.
+- **Rate limits** — GitHub's App auth APIs are rate-limited per installation.
+
+The cache lives in **function scope**, fresh per sweep:
+
+```python
+installation_token_cache: dict[int, str] = {}
+
+for vm in vms:
+    if labels.installation_id not in installation_token_cache:
+        installation_token_cache[labels.installation_id] = \
+            await get_installation_token(int(labels.installation_id))
+    token = installation_token_cache[labels.installation_id]
+```
+
+Auto-evicted when `run_sweep` returns. No cross-request state, no Redis, no concerns about stale tokens lingering — matches the "stateless serverless" design from [ADR-001](/docs/RunnerForge/design/decisions).
+
+## Race: webhook + sweep both deleting
+
+Both paths can attempt to delete the same VM if a `completed` webhook arrives while sweep is mid-iteration:
+
+```
+T=0   Sweep: list_runnerforge_vms() → VM X is in result
+T=1   Webhook: handle_completed → delete_vm(X)  (succeeds)
+T=2   Sweep: gets to VM X, decides delete, calls delete_vm(X)
+```
+
+What happens at T=2 depends on GCE's state:
+
+| GCE state | Result |
+|---|---|
+| VM still in `STOPPING` (T=1 deletion ongoing) | Idempotent — same operation returned |
+| VM fully deleted | `compute_v1.NotFound` raised |
+
+The `NotFound` case is caught by `delete_vm` itself:
+
+```python
+async def delete_vm(...) -> str | None:
+    try:
+        operation = await asyncio.to_thread(client.delete, ...)
+    except NotFound:
+        logger.info("VM already deleted (idempotent no-op)", extra={...})
+        return None
+    ...
+```
+
+So **the race is invisible to the sweep result**. The sweep records it as a successful deletion, no error appended. `SweepResult.errors > 0` then reliably means "something is actually wrong" — making it a clean alerting signal.
+
+## Defensive label validation (before sweep ever sees the VM)
+
+By the time `run_sweep` iterates `vms`, every entry is a guaranteed-valid `VmInfo` with typed `RunnerForgeVmLabels`. Malformed VMs (missing `installation_id`, wrong shape) were filtered out earlier by `list_runnerforge_vms`:
+
+```python
+# in list_runnerforge_vms (compute_client.py):
+for i in instances:
+    try:
+        labels = RunnerForgeVmLabels.model_validate(dict(i.labels))
+    except ValidationError:
+        logger.warning("Skipping VM with unexpected label shape", extra={...})
+        continue   # NEVER appears in the returned list
+```
+
+The benefit: sweep cannot accidentally delete a VM with malformed labels (defense in depth — what if someone added a `runner=runnerforge` label to an unrelated VM?). Malformed VMs show up in logs once per sweep and never reach destructive code paths.
+
+## SweepResult shape
+
+```python
+class SweepResult(BaseModel):
+    checked: int           # total VMs from list_runnerforge_vms
+    deleted: int           # successfully deleted
+    skipped: int           # too young, job still running, or malformed labels
+    errors: list[str]      # per-VM exceptions encountered
+```
+
+Returned from `/sweep` as JSON. Cloud Scheduler sees the response; future Cloud Monitoring can alert on `len(errors) > 0` or `deleted > expected_threshold`.
+
+## What the sweep doesn't do (intentionally)
+
+- **No retries on individual VM failures.** Failed VM will be re-evaluated on the next sweep run (10 minutes later). Retrying within a single sweep would just delay other VMs.
+- **No multi-zone iteration.** Currently single-zone (`europe-west4-a`). If we ever add zones, sweep needs to iterate them. Out of scope until then.
+- **No GitHub job-status filtering for VMs >HARD_LIMIT.** Hard limit means "kill regardless" — checking GitHub at that age is wasted work.
+- **No state persistence across runs.** Sweep is pure (input: GCE state, GitHub state. Output: SweepResult). Re-running is safe and idempotent.
+
+## Testing the decision tree
+
+The 7 tests in [`test_run_sweep.py`](https://github.com/rumankazi/runnerforge/blob/main/apps/orchestrator/tests/unit/test_run_sweep.py) cover every branch:
+
+| Scenario | Branch verified |
+|---|---|
+| All VMs young | `age < MAX_LIFETIME` → skip |
+| Old VM, job completed | middle window → delete |
+| Old VM, job running | middle window → skip |
+| Old VM, job 404 (gone from GitHub) | middle window → delete (None case) |
+| VM past hard limit | hard limit → delete (skips GitHub round-trip) |
+| Token caching | 2 VMs same installation → 1 token fetch |
+| Delete raises mid-loop | per-VM error caught, next VM still processed |
+
+100% branch coverage on `sweep.py`. The integration of these branches with real GitHub + real GCE is verified by the e2e manual test (item 6 of the phase plan).

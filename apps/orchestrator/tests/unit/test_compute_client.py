@@ -269,3 +269,17 @@ def test_list_runnerforge_vms_with_malformed_labels(monkeypatch, caplog):
     assert summary_log is not None
     assert summary_log.runnerforge_vm_count == 1
     assert summary_log.skipped_malformed_count == 1
+
+
+def test_delete_vm_returns_none_when_vm_already_gone(monkeypatch, caplog):
+    from google.api_core.exceptions import NotFound
+
+    mock_client = MagicMock()
+    mock_client.delete.side_effect = NotFound("not found")
+    monkeypatch.setattr(
+        "runnerforge.compute_client.compute_v1.InstancesClient", lambda: mock_client
+    )
+    with caplog.at_level(logging.INFO):
+        result = asyncio.run(delete_vm(instance_name="ghost-vm"))
+    assert result is None
+    assert any("VM already deleted" in r.message for r in caplog.records)

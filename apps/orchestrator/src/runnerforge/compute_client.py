@@ -6,6 +6,7 @@ from google.cloud import compute_v1
 from pydantic import ValidationError
 from runnerforge.config import GCP_PROJECT_ID, GCP_ZONE
 from runnerforge.models import RunnerForgeVmLabels, VmInfo
+from google.api_core.exceptions import NotFound
 
 _BOOT_IMAGE = "projects/runnerforge/global/images/family/runnerforge-runner"
 _BOOT_DISK_SIZE_GB = 10
@@ -106,13 +107,19 @@ async def find_vms_by_job_id(
 
 async def delete_vm(
     instance_name: str, zone: str = GCP_ZONE, project_id: str = GCP_PROJECT_ID
-) -> str:
+) -> str | None:
     """Submits VM deletion. Returns operation ID. Does not wait for completion."""
     client = compute_v1.InstancesClient()
-
-    operation = await asyncio.to_thread(
-        client.delete, project=project_id, zone=zone, instance=instance_name
-    )
+    try:
+        operation = await asyncio.to_thread(
+            client.delete, project=project_id, zone=zone, instance=instance_name
+        )
+    except NotFound:
+        logger.info(
+            "VM already deleted (idempotent no-op)",
+            extra={"vm_name": instance_name, "zone": zone},
+        )
+        return None
     logger.info(
         "Submitted VM deletion",
         extra={"vm_name": instance_name, "zone": zone, "operation_id": operation.name},

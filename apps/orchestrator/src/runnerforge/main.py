@@ -1,3 +1,4 @@
+import hmac
 import json
 import logging
 import time
@@ -6,7 +7,7 @@ from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
-from runnerforge.config import WEBHOOK_SECRET
+from runnerforge.config import SWEEP_AUTH_TOKEN, WEBHOOK_SECRET
 from runnerforge.handlers import handle_completed, handle_in_progress, handle_queued
 from runnerforge.logger import (
     setup_logging,
@@ -14,6 +15,7 @@ from runnerforge.logger import (
 )
 from runnerforge.models import WorkflowJobEvent
 from runnerforge.security import verify_github_signature
+from runnerforge.sweep import run_sweep
 from runnerforge.validation import parse_github_response
 
 setup_logging()
@@ -104,3 +106,36 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         case _:
             logger.warning("Ignoring unknown action", extra={"action": event.action})
     return {"ok": True}
+
+
+@app.post(
+    "/sweep",
+    status_code=200,
+    summary="Orphan VM cleanup sweep",
+    description="Iterates RunnerForge VMs, deletes orphans by checking job status against GitHub. Auth via bearer token.",
+    tags=["sweep"],
+)
+async def sweep(authorization: Annotated[str, Header()]):
+    if not _is_authorized(authorization):
+        logger.warning("Sweep auth failed")
+        raise HTTPException(status_code=401, detail="Invalid auth")
+
+    result = await run_sweep()
+    logger.info(
+        "Sweep completed",
+        extra={
+            "checked": result.checked,
+            "deleted": result.deleted,
+            "skipped": result.skipped,
+            "error_count": len(result.errors),
+        },
+    )
+    return result.model_dump()
+
+
+def _is_authorized(authorization_header: str) -> bool:
+    """Constant-time comparison of bearer token to SWEEP_AUTH_TOKEN."""
+    if not authorization_header.startswith("Bearer "):
+        return False
+    received = authorization_header.removeprefix("Bearer ").encode()
+    return hmac.compare_digest(received, SWEEP_AUTH_TOKEN)

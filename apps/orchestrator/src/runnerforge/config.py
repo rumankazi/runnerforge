@@ -18,3 +18,6 @@ STARTUP_SCRIPT_PATH = Path(
     or _REPO_ROOT / "scripts" / "startup-script.sh"
 )
 STARTUP_SCRIPT = STARTUP_SCRIPT_PATH.read_text()
+
+# for /sweep endpoint
+SWEEP_AUTH_TOKEN = os.environ["SWEEP_AUTH_TOKEN"].encode()

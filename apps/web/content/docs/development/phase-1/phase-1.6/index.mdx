@@ -72,6 +72,7 @@ These are deferred, not solved by this phase:
 - **Image retention.** Each `packer build` creates a new image (`runnerforge-runner-{timestamp}`). Old ones accumulate at roughly $0.50/image/month. No automated cleanup yet — manual or revisit during phase 1.8 (Terraform).
 - **Runner version upgrades.** Manual edit + rebuild. Could be CI-driven later (Dependabot on the version pin).
 - **Runner registration cleanup.** With `--ephemeral` the runner deregisters itself with GitHub. With timing edge cases (crashed runners), zombie entries can accumulate in GitHub's runner list — Phase 1.7 sweep can address this.
+- **~~VM-internal logs not in Cloud Logging~~** — **CLOSED in [Phase 1.7](/docs/development/phase-1/phase-1.7)** by installing Cloud Ops Agent in the Packer image.
 
 ## Phase 1.6 status — DONE
 
