@@ -11,7 +11,8 @@ defaults:
     working-directory: apps/web
 
 jobs:
-  qualify-web:
+  web:
+    name: Web
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

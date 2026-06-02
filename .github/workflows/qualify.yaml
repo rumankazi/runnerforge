@@ -58,7 +58,7 @@ jobs:
     uses: ./.github/workflows/_qualify-infra.yaml
 
   gate:
-    name: ✅ Gate
+    name: Gate
     needs: [orchestrator, web, infra]
     if: always()
     runs-on: ubuntu-latest

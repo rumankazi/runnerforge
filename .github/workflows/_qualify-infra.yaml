@@ -11,7 +11,8 @@ defaults:
     working-directory: 'infra/terraform'
 
 jobs:
-  qualify-infra:
+  infra:
+    name: Infra
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
