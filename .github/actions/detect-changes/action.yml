@@ -1,0 +1,108 @@
+name: Detect changed components
+description: |
+  Compares HEAD against the appropriate base ref and reports which named
+  components changed. Components and their match patterns are passed in as
+  the `filters` input — adding a new component is a caller-side change only.
+
+  Patterns are shell globs (same style as .gitignore / dorny/paths-filter):
+    apps/orchestrator/**     matches anything under apps/orchestrator/
+    .github/workflows/*.yml  matches any .yml directly under .github/workflows/
+    exact/path/file.txt      exact match
+
+  Assumes the repo has been checked out with `fetch-depth: 0` in a prior step.
+
+inputs:
+  filters:
+    description: YAML map of component name → list of glob patterns.
+    required: true
+
+  force-all-on:
+    description: |
+      YAML list of glob patterns. If any matches a changed file, ALL components
+      in `filters` are reported as true. Use for CI-infra files whose changes
+      should exercise the whole pipeline.
+    required: false
+    default: '[]'
+
+outputs:
+  changes:
+    description: JSON object mapping each filter name to a boolean. Use `fromJSON(...)` in caller `if:`.
+    value: ${{ steps.diff.outputs.changes }}
+
+runs:
+  using: composite
+  steps:
+    - id: diff
+      shell: bash
+      env:
+        INPUT_FILTERS: ${{ inputs.filters }}
+        INPUT_FORCE_ALL_ON: ${{ inputs.force-all-on }}
+      run: |
+        set -euo pipefail
+        shopt -s globstar extglob nullglob
+
+        # 1. Compute base ref.
+        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          BASE="${{ github.event.pull_request.base.sha }}"
+        else
+          BASE="${{ github.event.before }}"
+          # First push to a branch: `before` is the zero-sha. Fall back to merge-base with main.
+          if [[ "$BASE" == "0000000000000000000000000000000000000000" ]]; then
+            BASE=$(git merge-base HEAD origin/main)
+          fi
+        fi
+
+        mapfile -t CHANGED < <(git diff --name-only "$BASE" HEAD)
+        echo "Base ref: $BASE"
+        echo "Changed files:"
+        printf '  %s\n' "${CHANGED[@]}"
+
+        # match_any: returns 0 if any changed file matches any of the given globs.
+        match_any() {
+          local pattern file
+          for pattern in "$@"; do
+            [[ -z "$pattern" ]] && continue
+            for file in "${CHANGED[@]}"; do
+              [[ -z "$file" ]] && continue
+              # shellcheck disable=SC2053  # pattern is intentionally unquoted for glob expansion
+              if [[ "$file" == $pattern ]]; then
+                return 0
+              fi
+            done
+          done
+          return 1
+        }
+
+        # 2. Check force-all-on patterns.
+        FORCE=false
+        mapfile -t FORCE_PATTERNS < <(echo "$INPUT_FORCE_ALL_ON" | yq '.[]' -r)
+        for pattern in "${FORCE_PATTERNS[@]}"; do
+          if match_any "$pattern"; then
+            echo "force-all-on matched by: $pattern"
+            FORCE=true
+            break
+          fi
+        done
+
+        # 3. Per-component filter → JSON.
+        mapfile -t COMPONENTS < <(echo "$INPUT_FILTERS" | yq 'keys | .[]' -r)
+
+        JSON='{'
+        SEP=''
+        for comp in "${COMPONENTS[@]}"; do
+          if [[ "$FORCE" == "true" ]]; then
+            JSON="${JSON}${SEP}\"$comp\":true"
+          else
+            mapfile -t PATTERNS < <(echo "$INPUT_FILTERS" | yq ".\"$comp\" | .[]" -r)
+            if match_any "${PATTERNS[@]}"; then
+              JSON="${JSON}${SEP}\"$comp\":true"
+            else
+              JSON="${JSON}${SEP}\"$comp\":false"
+            fi
+          fi
+          SEP=','
+        done
+        JSON="${JSON}}"
+
+        echo "Result: $JSON"
+        echo "changes=$JSON" >> "$GITHUB_OUTPUT"

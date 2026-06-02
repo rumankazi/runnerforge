@@ -17,38 +17,44 @@ jobs:
     name: Preflight
     runs-on: ubuntu-latest
     outputs:
-      orchestrator: ${{ steps.filter.outputs.orchestrator }}
-      web:          ${{ steps.filter.outputs.web }}
-      infra:        ${{ steps.filter.outputs.infra }}
+      changes: ${{ steps.detect.outputs.changes }}
     steps:
       - uses: actions/checkout@v6
-      - uses: dorny/paths-filter@v3
-        id: filter
+        with:
+          fetch-depth: 0
+      - id: detect
+        uses: ./.github/actions/detect-changes
         with:
           filters: |
             orchestrator:
-              - 'apps/orchestrator/**'
+              - apps/orchestrator/**
+              - .github/workflows/_qualify-orchestrator.yaml
             web:
-              - 'apps/web/**'
+              - apps/web/**
+              - .github/workflows/_qualify-web.yaml
             infra:
-              - 'infra/terraform/**'
+              - infra/terraform/**
+              - .github/workflows/_qualify-infra.yaml
+          force-all-on: |
+            - .github/workflows/qualify.yaml
+            - .github/actions/detect-changes/**
 
   orchestrator:
     name: Orchestrator
     needs: preflight
-    if: needs.preflight.outputs.orchestrator == 'true'
+    if: ${{ fromJSON(needs.preflight.outputs.changes).orchestrator }}
     uses: ./.github/workflows/_qualify-orchestrator.yaml
 
   web:
     name: Web
     needs: preflight
-    if: needs.preflight.outputs.web == 'true'
+    if: ${{ fromJSON(needs.preflight.outputs.changes).web }}
     uses: ./.github/workflows/_qualify-web.yaml
 
   infra:
     name: Infra
     needs: preflight
-    if: needs.preflight.outputs.infra == 'true'
+    if: ${{ fromJSON(needs.preflight.outputs.changes).infra }}
     uses: ./.github/workflows/_qualify-infra.yaml
 
   gate:
