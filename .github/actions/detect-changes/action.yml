@@ -11,6 +11,20 @@ description: |
 
   Assumes the repo has been checked out with `fetch-depth: 0` in a prior step.
 
+  --- Safety ---
+  Pattern matching uses bash `[[ $file == $pattern ]]`, which is pattern
+  comparison, NOT command execution. Special chars in patterns (`$(...)`,
+  backticks, `;`, etc.) are treated as literal pattern characters; bash
+  does NOT eval them as shell in `[[ ]]` context (see bash manual,
+  "Conditional Expressions"). So no input sanitization is needed for the
+  match itself.
+
+  The real defense against malicious filter changes is CODEOWNERS gating
+  `.github/`, not character stripping. Future contributors: do NOT try to
+  "harden" this action by filtering chars from patterns — legitimate globs
+  need `*`, `?`, `[`, `]`, and stripping them would break the action while
+  adding no security.
+
 inputs:
   filters:
     description: YAML map of component name → list of glob patterns.
@@ -40,6 +54,21 @@ runs:
       run: |
         set -euo pipefail
         shopt -s globstar extglob nullglob
+
+        # ---- Validate inputs ----
+        # filters must be a non-empty YAML map
+        if ! echo "$INPUT_FILTERS" | yq 'type == "!!map" and (keys | length > 0)' -r | grep -q '^true$'; then
+          echo "::error::filters input must be a non-empty YAML map (component name → list of patterns)"
+          exit 1
+        fi
+
+        # each filter value must be a YAML list
+        while IFS= read -r _comp; do
+          if ! echo "$INPUT_FILTERS" | yq ".\"$_comp\" | type == \"!!seq\"" -r | grep -q '^true$'; then
+            echo "::error::filter '$_comp' must be a YAML list of glob patterns"
+            exit 1
+          fi
+        done < <(echo "$INPUT_FILTERS" | yq 'keys | .[]' -r)
 
         # 1. Compute base ref.
         if [[ "${{ github.event_name }}" == "pull_request" ]]; then
