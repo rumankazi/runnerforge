@@ -1,0 +1,29 @@
+name: Actionlint
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.3
+
+      - uses: reviewdog/action-actionlint@e0207a28405ecad11953ba625a95d92f7889572a # v1.72.0
+        with:
+          reporter: github-pr-check
+          fail-level: error
