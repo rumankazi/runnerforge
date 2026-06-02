@@ -93,6 +93,18 @@ resource "google_cloud_run_v2_service" "orchestrator" {
   }
   # Don't depend on this resource being created before the IAM grants for secrets
   # - Terraform infers that from the secrets references above
+
+  # Both `traffic` and the container image are owned by gcloud in CD:
+  # - CD builds + pushes `orchestrator:<release-tag>` and deploys via `gcloud run services update --image=...`.
+  # - CD splits + ramps traffic via `gcloud run services update-traffic`.
+  # Without ignoring these, `terraform apply` would revert each post-CD deploy
+  # back to `var.image_tag` (which is now a bootstrap value, not the live truth).
+  lifecycle {
+    ignore_changes = [
+      traffic,
+      template[0].containers[0].image,
+    ]
+  }
 }
 
 # Make the service publicly invocable. Github needs to POST /webhook from random IPs.
