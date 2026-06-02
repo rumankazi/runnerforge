@@ -26,4 +26,4 @@ jobs:
       - uses: reviewdog/action-actionlint@e0207a28405ecad11953ba625a95d92f7889572a # v1.72.0
         with:
           reporter: github-pr-check
-          fail-level: error
+          fail_level: error
