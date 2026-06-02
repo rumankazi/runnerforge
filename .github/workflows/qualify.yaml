@@ -1,0 +1,70 @@
+name: Qualify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qualify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    outputs:
+      orchestrator: ${{ steps.filter.outputs.orchestrator }}
+      web:          ${{ steps.filter.outputs.web }}
+      infra:        ${{ steps.filter.outputs.infra }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            orchestrator:
+              - 'apps/orchestrator/**'
+            web:
+              - 'apps/web/**'
+            infra:
+              - 'infra/terraform/**'
+
+  orchestrator:
+    name: Orchestrator
+    needs: preflight
+    if: needs.preflight.outputs.orchestrator == 'true'
+    uses: ./.github/workflows/_qualify-orchestrator.yaml
+
+  web:
+    name: Web
+    needs: preflight
+    if: needs.preflight.outputs.web == 'true'
+    uses: ./.github/workflows/_qualify-web.yaml
+
+  infra:
+    name: Infra
+    needs: preflight
+    if: needs.preflight.outputs.infra == 'true'
+    uses: ./.github/workflows/_qualify-infra.yaml
+
+  gate:
+    name: ✅ Gate
+    needs: [orchestrator, web, infra]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
+            echo "::error::A qualify job failed"
+            exit 1
+          fi
+          if [[ "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "::error::A qualify job was cancelled"
+            exit 1
+          fi
+          echo "All qualify jobs passed or skipped cleanly"

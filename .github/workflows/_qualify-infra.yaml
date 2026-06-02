@@ -1,16 +1,7 @@
 name: Qualify Infra
 
 on:
-  pull_request:
-    paths:
-      - 'infra/terraform/**'
-      - '.github/workflows/qualify-infra.yaml'
-
-  push:
-    branches: [main]
-    paths:
-      - 'infra/terraform/**'
-      - '.github/workflows/qualify-infra.yaml'
+  workflow_call:
 
 permissions:
   contents: read
@@ -18,10 +9,6 @@ permissions:
 defaults:
   run:
     working-directory: 'infra/terraform'
-
-concurrency:
-  group: qualify-infra-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   qualify-infra:

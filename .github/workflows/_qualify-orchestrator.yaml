@@ -1,16 +1,7 @@
 name: Qualify Orchestrator
 
 on:
-  pull_request:
-    paths:
-      - 'apps/orchestrator/**'
-      - '.github/workflows/qualify-orchestrator.yaml'
-
-  push:
-    branches: [main]
-    paths:
-      - 'apps/orchestrator/**'
-      - '.github/workflows/qualify-orchestrator.yaml'
+  workflow_call:
 
 permissions:
   contents: read
@@ -19,10 +10,6 @@ defaults:
   run:
     working-directory: apps/orchestrator
 
-concurrency:
-  group: qualify-orchestrator-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   qualify-orchestrator:
     runs-on: ubuntu-latest
@@ -30,19 +17,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Mise activation
+      - name: Mise
         uses: jdx/mise-action@v4
         with:
           working_directory: apps/orchestrator
 
-      - name: Sync packages
+      - name: Sync
         run: uv sync --frozen
 
-      - name: Ruff lint
+      - name: Lint
         run: |
           uv run ruff check
 
-      - name: Ruff format check
+      - name: Format
         run: |
           uv run ruff format --check
 
