@@ -33,6 +33,12 @@ jobs:
         run: |
           uv run ruff format --check
 
+      - name: Bandit
+        run: uv run bandit -r src/ -ll -ii
+
+      - name: pip-audit
+        run: uv run pip-audit --skip-editable
+
       - name: 🧪
         run: uv run pytest
 
@@ -68,7 +74,7 @@ jobs:
 
       - name: Wait for /health
         run: |
-          for i in {1..15}; do
+          for _ in {1..15}; do
             if curl -sf http://localhost:8000/health; then
               echo
               echo "Health check passed"
