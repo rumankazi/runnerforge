@@ -1,0 +1,43 @@
+name: Qualify Infra
+
+on:
+  pull_request:
+    paths:
+      - 'apps/infra/terraform/**'
+      - '.github/workflows/qualify-infra.yaml'
+
+  push:
+    branches: [main]
+    paths:
+      - 'apps/infra/terraform/**'
+      - '.github/workflows/qualify-infra.yaml'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: apps/infra/terraform
+
+concurrency:
+  group: qualify-infra-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify-infra:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Format check
+        run: tarraform fmt -check -recursive
+
+      - name: Initialize providers
+        run: terraform init -backend=false # without loading GCS backend
+
+      - name: Validate
+        run: terraform validate
