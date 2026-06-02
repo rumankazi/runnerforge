@@ -165,3 +165,36 @@ Structured logging only for Phases 1–3. Add Firestore in Phase 4 when building
 - Cloud Monitoring can create dashboards from log-based metrics without any database.
 - No database write in the critical webhook path — keeps the handler fast and simple.
 - Firestore is added later as a convenience layer for user-facing queries, not as the source of truth.
+
+---
+
+<Record type="adr" id="007" status="accepted" />
+
+## Workload Identity Federation over service account keys for CI auth
+
+### Context
+
+- CI workflows (qualify, build, deploy, terraform apply) need to authenticate to GCP - push images to AR (Artifact Registry), deploy Cloud Run, modify IAM/Secret Manager, manage state bucket.
+- Need a credential mechanism that lets GH Actions act on GCP resources without storing portable secrets
+
+### Options considered
+
+- **Long-lived SA JSON keys in GH Secrets** - store a downloaded SA key as a GH Actions secret, `gcloud auth activate-service-account --key-file`. Simple to set up; familiar pattern.
+- **Workload Identity Federation** (chosen) — GCP trusts GitHub's OIDC issuer; workflows exchange a short-lived OIDC token for a federated identity that impersonates a target SA
+- **Cloud Build with GitHub trigger** — Cloud Build watches the repo; auth is implicit because builds run on GCP-side infra. Means qualify and build/deploy live in different systems.
+
+### Decision
+
+- WIF with two SAs from day one: ci-build (eventual: AR write + Cloud Run deploy) and ci-terraform (broader: state bucket + IAM + Secret Manager + scheduler).
+- Pool `github-actions`, provider `github`, attribute condition pinned to `repository == rumankazi/runnerforge && ref == refs/heads/main`.
+- For 2.1, both SAs hold only `roles/viewer`. Permissions widen per phase as workflows are added.
+- No `google_service_account_key` resource exists anywhere in TF.
+
+### Consequences
+
+- **Pro**: no portable secret exists. Even a logged credential config file is useless without a fresh, validly-signed GitHub OIDC token. Tokens are ~1hr; OIDC tokens that originate them are ~10min.
+- **Pro**: every token exchange logged in Cloud Audit Logs (sts.googleapis.com); full traceability of which workflow run impersonated which SA.
+- **Pro**: rotation eliminated. There's nothing to rotate.
+- **Trade-off**: GCP-side setup is more involved (pool, provider, condition, bindings) than dropping a JSON key in GH Secrets. One-time cost.
+- **Trade-off**: locked into GitHub Actions as the OIDC issuer. Moving CI providers means re-doing the WIF pool/provider/conditions for the new issuer.
+- **Trade-off**: WIF auth assumes a green path through several layers (token issuance, attribute condition match, IAM binding, target API enabled). When it fails, the error often points at one layer while the cause is in another (we hit this with cloudresourcemanager.googleapis.com being disabled).
