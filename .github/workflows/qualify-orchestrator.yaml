@@ -1,0 +1,44 @@
+name: Qualify Orchestrator
+
+on:
+  pull_request:
+    paths:
+      - 'apps/orchestrator/**'
+      - '.github/workflows/qualify-orchestrator.yaml'
+
+  push:
+    branches: [main]
+    paths:
+      - 'apps/orchestrator/**'
+      - '.github/workflows/qualify-orchestrator.yaml'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: apps/orchestrator
+
+jobs:
+  qualify-orchestrator:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Mise activation
+        uses: jdx/mise-action@v2
+
+      - name: Sync packages
+        run: uv sync --frozen
+
+      - name: Ruff checks
+        run: |
+          uv run ruff check
+          echo "::info: Ruff check successful!"
+
+          uv run ruff format --check
+          echo "::info: Ruff format check successful"
+
+      - name: Pytests
+        run: uv run pytest
