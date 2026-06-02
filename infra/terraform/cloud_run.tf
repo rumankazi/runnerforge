@@ -1,5 +1,5 @@
 resource "google_cloud_run_v2_service" "orchestrator" {
-  name = "runnerforge-orchestrator"
+  name     = "runnerforge-orchestrator"
   location = "europe-west4"
 
   # Ingress: who can reach the service at the network layer.
@@ -11,7 +11,7 @@ resource "google_cloud_run_v2_service" "orchestrator" {
     service_account = google_service_account.orchestrator.email
 
     scaling {
-      min_instance_count = 0 # scale to zero when idle (cost: $0).
+      min_instance_count = 0  # scale to zero when idle (cost: $0).
       max_instance_count = 10 # Generous burst headroom for webhook spikes
     }
 
@@ -27,31 +27,31 @@ resource "google_cloud_run_v2_service" "orchestrator" {
 
       resources {
         limits = {
-          cpu = "1"   # 1 vCPU is plenty for our request rate
-          memory = "512Mi"  # FastAPI + httpx + GCP SDKs fit comfortably
+          cpu    = "1"     # 1 vCPU is plenty for our request rate
+          memory = "512Mi" # FastAPI + httpx + GCP SDKs fit comfortably
         }
-        cpu_idle = true   # allow CPU to be throttled when idle
-        startup_cpu_boost = true  # 2x CPU during startup -> faster cold starts
+        cpu_idle          = true # allow CPU to be throttled when idle
+        startup_cpu_boost = true # 2x CPU during startup -> faster cold starts
       }
 
       # --- Plain env vars ---
       env {
-        name = "GITHUB_APP_ID"
+        name  = "GITHUB_APP_ID"
         value = var.github_app_id
       }
 
-      env{
-        name = "GCP_PROJECT_ID"
+      env {
+        name  = "GCP_PROJECT_ID"
         value = "runnerforge"
       }
 
-      env{
-        name = "GCP_ZONE"
+      env {
+        name  = "GCP_ZONE"
         value = "europe-west4-a"
       }
 
       env {
-        name = "GITHUB_APP_PRIVATE_KEY_PATH"
+        name  = "GITHUB_APP_PRIVATE_KEY_PATH"
         value = "/secrets/github-app-private-key"
       }
 
@@ -72,9 +72,9 @@ resource "google_cloud_run_v2_service" "orchestrator" {
         name  = "EXPECTED_AUDIENCE"
         value = var.cloud_run_url
       }
-    # --- File mount for the PEM private key ---
+      # --- File mount for the PEM private key ---
       volume_mounts {
-        name = "github-app-private-key"
+        name       = "github-app-private-key"
         mount_path = "/secrets" # File available at /secrets/github-app-private-key
       }
     }
@@ -86,7 +86,7 @@ resource "google_cloud_run_v2_service" "orchestrator" {
         secret = google_secret_manager_secret.github_app_private_key.secret_id
         items {
           version = "latest"
-          path = "github-app-private-key" # file name inside the mount dir
+          path    = "github-app-private-key" # file name inside the mount dir
         }
       }
     }
@@ -98,15 +98,15 @@ resource "google_cloud_run_v2_service" "orchestrator" {
 # Make the service publicly invocable. Github needs to POST /webhook from random IPs.
 # The orchestrator's HMAC verification gates which payloads are accepted.
 resource "google_cloud_run_v2_service_iam_member" "orchestrator_public" {
-  project = "runnerforge"
+  project  = "runnerforge"
   location = google_cloud_run_v2_service.orchestrator.location
-  name = google_cloud_run_v2_service.orchestrator.name
-  role = "roles/run.invoker"
-  member = "allUsers"
+  name     = google_cloud_run_v2_service.orchestrator.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
 }
 
 # Expose the deployed URL so we can use it externally.
 output "orchestrator_url" {
-  value = google_cloud_run_v2_service.orchestrator.uri
+  value       = google_cloud_run_v2_service.orchestrator.uri
   description = "Public HTTPS URL of the orchestrator Cloud Run service"
 }
