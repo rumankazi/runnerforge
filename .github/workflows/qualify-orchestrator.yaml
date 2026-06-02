@@ -19,6 +19,10 @@ defaults:
   run:
     working-directory: apps/orchestrator
 
+concurrency:
+  group: qualify-orchestrator-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   qualify-orchestrator:
     runs-on: ubuntu-latest
@@ -32,13 +36,13 @@ jobs:
       - name: Sync packages
         run: uv sync --frozen
 
-      - name: Ruff checks
+      - name: Ruff lint
         run: |
           uv run ruff check
-          echo "::info: Ruff check successful!"
 
+      - name: Ruff format check
+        run: |
           uv run ruff format --check
-          echo "::info: Ruff format check successful"
 
       - name: Pytests
         run: uv run pytest
