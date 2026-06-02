@@ -6,9 +6,7 @@ from runnerforge.models import JobStatusResponse, RunnerForgeVmLabels, VmInfo
 from runnerforge.sweep import run_sweep
 
 
-def _vm(
-    age_hours: int, installation_id: str = "100", name_suffix: str = ""
-) -> VmInfo:
+def _vm(age_hours: int, installation_id: str = "100", name_suffix: str = "") -> VmInfo:
     """Helper to construct a VmInfo with a specific age + optional name suffix to disambiguate."""
     name = f"runnerforge-vm-{age_hours}h" + (f"-{name_suffix}" if name_suffix else "")
     return VmInfo(

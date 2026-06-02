@@ -1,0 +1,48 @@
+name: Qualify Web
+
+on:
+  pull_request:
+    paths:
+      - 'apps/web/**'
+      - '.github/workflows/qualify-web.yaml'
+
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web/**'
+      - '.github/workflows/qualify-web.yaml'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: apps/web
+
+concurrency:
+  group: qualify-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify-web:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Mise activation
+        uses: jdx/mise-action@v4
+        with:
+          working_directory: apps/web
+
+      - name: Sync packages
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
+
+      - name: TypeScript check
+        run: bun run types:check
+
+      - name: Build
+        run: bun run build
