@@ -16,5 +16,6 @@
       "source.fixAll.ruff": "explicit",
       "source.organizeImports.ruff": "explicit"
     }
-  }
+  },
+  "files.associations": { "CODEOWNERS": "plaintext" }
 }
