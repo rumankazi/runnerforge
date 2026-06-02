@@ -7,30 +7,30 @@ terraform {
 
 provider "google" {
   project = "runnerforge"
-  region = "europe-west4"
-  zone = "europe-west4-a"
+  region  = "europe-west4"
+  zone    = "europe-west4-a"
 }
 
 resource "google_artifact_registry_repository" "orchestrator" {
-  location = "europe-west4"
+  location      = "europe-west4"
   repository_id = "orchestrator"
-  format = "DOCKER"
-  description = "RunnerForge orchestrator container images"
+  format        = "DOCKER"
+  description   = "RunnerForge orchestrator container images"
 
   cleanup_policies {
-    id = "keep-recent-tagged"
+    id     = "keep-recent-tagged"
     action = "KEEP"
     most_recent_versions {
       package_name_prefixes = ["orchestrator"]
-      keep_count = 5
+      keep_count            = 5
     }
   }
 
   cleanup_policies {
-    id = "delete-untagged-old"
+    id     = "delete-untagged-old"
     action = "DELETE"
     condition {
-      tag_state = "UNTAGGED"
+      tag_state  = "UNTAGGED"
       older_than = "604800s" # 7 days
     }
   }
