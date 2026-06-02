@@ -1,27 +1,19 @@
-# Code owners for RunnerForge. See:
-
+# Code owners for RunnerForge.
 # https://docs.github.com/en/repositories/managing-your-repositories-settings-and-security/customizing-your-repository/about-code-owners
-
 #
-
-# Order matters: LAST matching pattern wins. Put catch-alls first, specific overrides below.
+# Order matters: LAST matching pattern wins. Catch-all first, specific overrides below.
 
 # Default: owner reviews any change not covered by a more specific rule.
+*                                       @rumankazi
 
--                                       @rumankazi
+# Infrastructure — Terraform, Packer (provisions GCP, IAM, secrets).
+/infra/                                 @rumankazi
 
-# Infrastructure — Terraform, Packer (provisions GCP, IAM, secrets)
+# CI/CD configuration — workflows, composite actions, this file itself.
+/.github/                               @rumankazi
 
-/infra/ @rumankazi
+# Production orchestrator code (FastAPI app).
+/apps/orchestrator/src/                 @rumankazi
 
-# Runtime VM script (executed as root on every runner boot)
-
-/scripts/ @rumankazi
-
-# CI/CD configuration — workflows, actions, this file itself
-
-/.github/ @rumankazi
-
-# Production orchestrator code
-
-/apps/orchestrator/src/ @rumankazi
+# Architecture decisions of record (security model, ADRs, design docs).
+/apps/web/content/docs/design/          @rumankazi

@@ -38,7 +38,7 @@ coverage/
 
 # Secrets / local env
 *.pem
-!apps/orchestrator/tests/fixtures/*
+**/*.pem
 .env.local
 
 # Editor / OS
