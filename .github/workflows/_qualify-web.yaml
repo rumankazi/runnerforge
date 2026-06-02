@@ -26,6 +26,9 @@ jobs:
       - name: Sync packages
         run: bun install --frozen-lockfile
 
+      - name: Audit
+        run: bun audit
+
       - name: Lint
         run: bun run lint
 
