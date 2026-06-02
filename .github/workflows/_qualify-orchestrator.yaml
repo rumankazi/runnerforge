@@ -44,17 +44,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Build test stage
-        run: docker build -f apps/orchestrator/Dockerfile --target test .
-
-  container-probe:
-    name: 🩺
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Build runtime image
-        run: docker build -f app/orchestrator/Dockerfile --target runtime -t orchestrator:probe .
+        run: docker build -f apps/orchestrator/Dockerfile --target test -t orchestrator:test .
 
       - name: Generate throwaway RSA key
         run: openssl genrsa -out /tmp/probe-key.pem 2048
@@ -62,7 +52,7 @@ jobs:
       - name: Start container
         run: |
           docker run -d \
-            --name probe \
+            --name test \
             -p 8000:8000 \
             -v /tmp/probe-key.pem:/secrets/private-key.pem:ro \
             -e GITHUB_WEBHOOK_SECRET=ci-probe-not-a-secret \
@@ -71,7 +61,7 @@ jobs:
             -e GCP_PROJECT_ID=ci-probe-project \
             -e EXPECTED_SCHEDULER_SA_EMAIL=ci-probe@example.iam.gserviceaccount.com \
             -e EXPECTED_AUDIENCE=https://ci-probe.example \
-            orchestrator:probe
+            orchestrator:test
 
       - name: Wait for /health
         run: |
