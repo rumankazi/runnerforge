@@ -1,0 +1,179 @@
+name: Deploy Orchestrator
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      action:
+        type: choice
+        description: 'deploy = full pipeline (build → canary → approval → ramp). rollback = update-traffic to an existing revision (instant, approval-gated).'
+        options: [deploy, rollback]
+        default: deploy
+      target:
+        description: 'For deploy: version (e.g. 0.2.0). For rollback: revision name (e.g. runnerforge-orchestrator-00026-xyz).'
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-orchestrator
+  cancel-in-progress: false
+
+env:
+  AR_HOST: europe-west4-docker.pkg.dev
+  AR_REPO: runnerforge/orchestrator/orchestrator
+  REGION: europe-west4
+  SERVICE: runnerforge-orchestrator
+  WIF_PROVIDER: projects/8547588670/locations/global/workloadIdentityPools/github/providers/github
+  CI_BUILD_SA: ci-build@runnerforge.iam.gserviceaccount.com
+
+jobs:
+  setup:
+    name: Resolve target
+    runs-on: ubuntu-latest
+    outputs:
+      action: ${{ steps.parse.outputs.action }}
+      target: ${{ steps.parse.outputs.target }}
+    steps:
+      - id: parse
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            TAG="${{ github.event.release.tag_name }}"
+            if [[ ! "$TAG" =~ ^orchestrator-v ]]; then
+              echo "Tag '$TAG' is not an orchestrator-v* release — skipping."
+              echo "action=skip"   >> "$GITHUB_OUTPUT"
+              echo "target="       >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            VERSION="${TAG#orchestrator-v}"
+            echo "Release deploy: $VERSION"
+            echo "action=deploy"   >> "$GITHUB_OUTPUT"
+            echo "target=$VERSION" >> "$GITHUB_OUTPUT"
+          else
+            ACTION="${{ github.event.inputs.action }}"
+            TARGET="${{ github.event.inputs.target }}"
+            echo "Dispatch $ACTION: $TARGET"
+            echo "action=$ACTION"  >> "$GITHUB_OUTPUT"
+            echo "target=$TARGET"  >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build + Push + Sign
+    needs: setup
+    if: needs.setup.outputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.3
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.CI_BUILD_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Configure Docker auth for AR
+        run: gcloud auth configure-docker "${AR_HOST}" --quiet
+
+      - name: Build runtime image
+        run: |
+          docker build \
+            -f apps/orchestrator/Dockerfile \
+            --target runtime \
+            -t "${AR_HOST}/${AR_REPO}:${{ needs.setup.outputs.target }}" \
+            .
+
+      - name: Push to Artifact Registry
+        run: docker push "${AR_HOST}/${AR_REPO}:${{ needs.setup.outputs.target }}"
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Cosign keyless sign (Sigstore + Rekor)
+        run: |
+          cosign sign --yes \
+            "${AR_HOST}/${AR_REPO}:${{ needs.setup.outputs.target }}"
+
+  canary:
+    name: Canary 5%
+    needs: [setup, build]
+    if: needs.setup.outputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    outputs:
+      revision_name: ${{ steps.deploy.outputs.revision_name }}
+    steps:
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.CI_BUILD_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Deploy new revision at 0% traffic
+        id: deploy
+        run: |
+          set -euo pipefail
+          REV=$(gcloud run services update "${SERVICE}" \
+            --region "${REGION}" \
+            --image "${AR_HOST}/${AR_REPO}:${{ needs.setup.outputs.target }}" \
+            --no-traffic \
+            --format='value(status.latestCreatedRevisionName)' \
+            --quiet)
+          echo "New revision: $REV"
+          echo "revision_name=$REV" >> "$GITHUB_OUTPUT"
+
+      - name: Send 5% traffic to new revision
+        run: |
+          gcloud run services update-traffic "${SERVICE}" \
+            --region "${REGION}" \
+            --to-revisions="${{ steps.deploy.outputs.revision_name }}=5" \
+            --quiet
+
+  ramp:
+    name: Ramp 100% (approval gated)
+    needs: [setup, canary]
+    if: needs.setup.outputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    environment:
+      name: prod
+      url: https://runnerforge-orchestrator-gsqedgmwha-ez.a.run.app
+    steps:
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.CI_BUILD_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Ramp to 100%
+        run: |
+          gcloud run services update-traffic "${SERVICE}" \
+            --region "${REGION}" \
+            --to-revisions="${{ needs.canary.outputs.revision_name }}=100" \
+            --quiet
+
+  rollback:
+    name: Rollback to existing revision
+    needs: setup
+    if: needs.setup.outputs.action == 'rollback'
+    runs-on: ubuntu-latest
+    environment:
+      name: prod
+      url: https://runnerforge-orchestrator-gsqedgmwha-ez.a.run.app
+    steps:
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.CI_BUILD_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Update traffic 100% to ${{ needs.setup.outputs.target }}
+        run: |
+          gcloud run services update-traffic "${SERVICE}" \
+            --region "${REGION}" \
+            --to-revisions="${{ needs.setup.outputs.target }}=100" \
+            --quiet
