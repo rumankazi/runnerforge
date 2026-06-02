@@ -6,14 +6,13 @@ on:
 permissions:
   contents: read
 
-defaults:
-  run:
-    working-directory: apps/orchestrator
-
 jobs:
   qualify-orchestrator:
     name: 🔱
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/orchestrator
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -36,3 +35,13 @@ jobs:
 
       - name: 🧪
         run: uv run pytest
+
+  container-test:
+    name: 🐳
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build test stage
+        run: docker build -f apps/orchestrator/Dockerfile --target test .

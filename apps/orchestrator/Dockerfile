@@ -19,7 +19,6 @@ RUN uv sync --frozen --no-install-project
 COPY apps/orchestrator/src/ ./src/
 COPY apps/orchestrator/tests/ ./tests/
 
-RUN ls -la
 # Install the project itself
 RUN uv sync --frozen
 

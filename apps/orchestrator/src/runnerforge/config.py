@@ -13,7 +13,6 @@ GCP_ZONE = os.environ.get("GCP_ZONE", "europe-west4-a")
 
 # Startup script path — defaults to the script in the repo's /scripts/ dir.
 # Override via env var when the layout differs (e.g., Docker image).
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 STARTUP_SCRIPT = (
     importlib.resources.files("runnerforge")
     .joinpath("scripts/startup_script.sh")
