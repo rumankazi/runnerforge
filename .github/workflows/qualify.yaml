@@ -1,0 +1,76 @@
+name: Qualify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qualify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    outputs:
+      changes: ${{ steps.detect.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: detect
+        uses: ./.github/actions/detect-changes
+        with:
+          filters: |
+            orchestrator:
+              - apps/orchestrator/**
+              - .github/workflows/_qualify-orchestrator.yaml
+            web:
+              - apps/web/**
+              - .github/workflows/_qualify-web.yaml
+            infra:
+              - infra/terraform/**
+              - .github/workflows/_qualify-infra.yaml
+          force-all-on: |
+            - .github/workflows/qualify.yaml
+            - .github/actions/detect-changes/**
+
+  orchestrator:
+    name: Orchestrator
+    needs: preflight
+    if: ${{ fromJSON(needs.preflight.outputs.changes).orchestrator }}
+    uses: ./.github/workflows/_qualify-orchestrator.yaml
+
+  web:
+    name: Web
+    needs: preflight
+    if: ${{ fromJSON(needs.preflight.outputs.changes).web }}
+    uses: ./.github/workflows/_qualify-web.yaml
+
+  infra:
+    name: Infra
+    needs: preflight
+    if: ${{ fromJSON(needs.preflight.outputs.changes).infra }}
+    uses: ./.github/workflows/_qualify-infra.yaml
+
+  gate:
+    name: Gate
+    needs: [orchestrator, web, infra]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
+            echo "::error::A qualify job failed"
+            exit 1
+          fi
+          if [[ "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "::error::A qualify job was cancelled"
+            exit 1
+          fi
+          echo "All qualify jobs passed or skipped cleanly"

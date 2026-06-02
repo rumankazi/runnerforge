@@ -1,16 +1,7 @@
 name: Qualify Web
 
 on:
-  pull_request:
-    paths:
-      - 'apps/web/**'
-      - '.github/workflows/qualify-web.yaml'
-
-  push:
-    branches: [main]
-    paths:
-      - 'apps/web/**'
-      - '.github/workflows/qualify-web.yaml'
+  workflow_call:
 
 permissions:
   contents: read
@@ -19,12 +10,9 @@ defaults:
   run:
     working-directory: apps/web
 
-concurrency:
-  group: qualify-web-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   qualify-web:
+    name: 🕸️
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -41,7 +29,7 @@ jobs:
       - name: Lint
         run: bun run lint
 
-      - name: TypeScript check
+      - name: Types
         run: bun run types:check
 
       - name: Build
