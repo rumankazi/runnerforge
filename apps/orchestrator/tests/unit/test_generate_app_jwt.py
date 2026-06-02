@@ -1,17 +1,7 @@
 import time
 
 import jwt
-import pytest
 from runnerforge.github_client import generate_app_jwt
-
-
-@pytest.fixture(scope="session")
-def rsa_keys(fixtures_dir):
-    """Returns (private_key, public_key) as PEM strings."""
-    return (
-        (fixtures_dir / "private_key.pem").read_text(),
-        (fixtures_dir / "public_key.pem").read_text(),
-    )
 
 
 def test_jwt_has_correct_claims_and_is_signed(rsa_keys):
