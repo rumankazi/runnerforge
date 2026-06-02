@@ -34,7 +34,7 @@ jobs:
         uses: hashicorp/setup-terraform@v4
 
       - name: Format check
-        run: tarraform fmt -check -recursive
+        run: terraform fmt -check -recursive
 
       - name: Initialize providers
         run: terraform init -backend=false # without loading GCS backend
