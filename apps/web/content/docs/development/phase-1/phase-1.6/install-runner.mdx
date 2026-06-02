@@ -1,0 +1,224 @@
+---
+title: install-runner.sh breakdown
+description: Line-by-line explanation of the Packer provisioning script
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The provisioning script [`infra/packer/scripts/install-runner.sh`](https://github.com/rumankazi/runnerforge/blob/main/infra/packer/scripts/install-runner.sh) runs **once during `packer build`** on the temporary build VM. Its output is baked into the resulting image.
+
+This page walks through it section by section. Understanding *why* each step is here matters as much as *what* it does — the order is deliberate.
+
+## Why this script exists
+
+Two design questions answered together:
+
+1. **Why pre-install the runner instead of installing it at boot?** Boot-to-ready latency. With a pre-baked image, a VM boots and starts the runner in ~35 seconds. Installing at boot would be 4-5 minutes (apt updates, downloads, Docker install) — unacceptable for a per-job VM model. See [Packer template](/docs/development/phase-1/phase-1.6/packer#why-pre-bake-an-image).
+2. **Why a separate runner user?** Principle of least privilege. The runner process runs untrusted workflow code. Running it as root would let any workflow read SSH keys, modify system files, or persist privileged binaries. A dedicated unprivileged user contains the blast radius.
+
+## The script flow
+
+```
+Run as root (via sudo bash):
+  1. Create runner user
+  2. Install system dependencies
+  3. Download + extract runner binary
+  4. Run runner's own dependency installer (.NET deps via apt)
+  5. Hand off ownership of /home/runner to runner user
+  6. Install Docker, add runner user to docker group
+```
+
+Steps 1-4 need root. Step 5 transfers ownership. Step 6 finalizes the runtime environment.
+
+## Section 1 — Create runner user
+
+```bash
+useradd \
+  --create-home \
+  --shell /bin/bash \
+  runner
+
+usermod \
+  --append \
+  --groups sudo \
+  runner
+```
+
+### Flag meanings
+
+| Flag | Short form | Meaning |
+|---|---|---|
+| `--create-home` | `-m` | Create `/home/runner/` with the default skeleton (`.bashrc`, etc.). Without this, the user exists but has no home directory and most things break. |
+| `--shell /bin/bash` | `-s /bin/bash` | The default login shell. Without this, the runner gets `/bin/sh` (POSIX shell), which lacks features the runner's scripts assume. |
+| `--append` | `-a` | When adding to groups, *append* rather than *replace* the existing group list. |
+| `--groups sudo` | `-G sudo` | Add to the `sudo` group. |
+
+<Callout type="warn" title="--append matters">
+  Without `--append`, `usermod --groups sudo` would REPLACE the runner user's group list with only `sudo` — wiping out any other group memberships. Always pair `--groups` with `--append` when adding (not redefining) groups.
+</Callout>
+
+### Why `sudo` group?
+
+Some workflows run `sudo apt install ...` to install extra tools at job time. Granting `sudo` makes those workflows work. **Tradeoff: any workflow can `sudo rm -rf /` on the VM.** Since the VM is per-job and ephemeral (deleted right after), that's "fine" in practice — but worth revisiting if you ever share VMs across jobs (you shouldn't, but).
+
+The script has a `TODO` to revisit this — only some workflows actually need it. Tightening to a passwordless-sudo for *specific commands* via `/etc/sudoers.d/` would be more surgical.
+
+## Section 2 — System dependencies
+
+```bash
+apt-get update
+apt-get install --yes \
+  curl ca-certificates \
+  git \
+  libicu-dev
+```
+
+- **`curl ca-certificates`** — needed to download the runner tarball over HTTPS (next section).
+- **`git`** — required by `actions/checkout` (the most common workflow step). Without it, every workflow fails on step 1.
+- **`libicu-dev`** — the runner is built on .NET, which requires the ICU (International Components for Unicode) library. The runner's own dep-installer (next section) will also install this, but apt is faster if we get there first.
+
+`--yes` (long form of `-y`) auto-confirms prompts so apt doesn't hang waiting for keyboard input during the build.
+
+## Section 3 — Download + extract the runner
+
+```bash
+RUNNER_VERSION="2.334.0"
+RUNNER_ARCH="x64"
+
+RUNNER_DIR="/home/runner/actions-runner"
+mkdir --parents "$RUNNER_DIR"
+cd "$RUNNER_DIR"
+
+RUNNER_URL="https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
+curl --fail --silent --show-error --location \
+  --output runner.tar.gz \
+  "$RUNNER_URL"
+
+tar --extract --gzip --file runner.tar.gz
+rm runner.tar.gz
+```
+
+### Why version pinning matters
+
+`RUNNER_VERSION="2.334.0"` is explicit, not `latest`. Same template produces the same image (modulo system package updates). When you want to upgrade, edit this line, rebuild, the family pointer auto-updates.
+
+If we used `latest`, two `packer build` runs months apart could produce dramatically different images — making bug reports impossible to reproduce.
+
+### `curl` flag breakdown
+
+| Flag | Short form | Meaning |
+|---|---|---|
+| `--fail` | `-f` | Exit non-zero on HTTP errors (404, 500, etc.). Default behavior is to write the HTML error page to stdout and return success. Without `--fail`, a 404 would result in a "tarball" containing HTML — and `tar` would then fail with a cryptic error. |
+| `--silent` | `-s` | No progress bar — keeps build output clean. |
+| `--show-error` | `-S` | But still show *error* messages (used with `--silent`). Without this, silent failures are invisible. |
+| `--location` | `-L` | Follow HTTP redirects. GitHub releases redirect to CDN — without `--location` you'd get the redirect page, not the file. |
+| `--output runner.tar.gz` | `-o runner.tar.gz` | Write to a file instead of stdout. |
+
+### `tar` flag breakdown
+
+| Flag | Short form | Meaning |
+|---|---|---|
+| `--extract` | `-x` | Extract mode (vs `--create` for making tarballs). |
+| `--gzip` | `-z` | Auto-decompress gzip. Needed because the file is `.tar.gz`. |
+| `--file runner.tar.gz` | `-f runner.tar.gz` | Input file. |
+
+After extraction, `/home/runner/actions-runner/` contains `config.sh`, `run.sh`, `bin/`, and other runner files.
+
+## Section 4 — Runner's own dependency installer
+
+```bash
+./bin/installdependencies.sh
+```
+
+The runner ships with its own script that installs .NET system dependencies via `apt` (libssl, libkrb5, etc.). It must run as **root** because it modifies system packages. We're already root in this script, so just invoke it.
+
+This is the "hidden second `apt install`" that the runner needs. Without running this, the runner binary will fail at startup with .NET runtime errors.
+
+## Section 5 — Hand off ownership
+
+```bash
+chown --recursive runner:runner /home/runner
+```
+
+### What this does
+
+Every command above ran as root. Every file and directory in `/home/runner` is therefore owned by root:
+
+```
+$ ls -ld /home/runner/actions-runner
+drwxr-xr-x 7 root root 4096 May 31 12:34 /home/runner/actions-runner
+```
+
+But the **runner user** is the one that will actually run the binary (at runtime, not build time). If files are owned by root, the runner user can't read or write them — every operation fails with "Permission denied."
+
+### `chown` syntax breakdown
+
+- `chown` = "change owner."
+- `--recursive` (short: `-R`) = apply to the directory itself **and** everything inside it (files, subdirectories, recursively).
+- `runner:runner` = `OWNER:GROUP`. The two values are the runner user and the runner group (which `useradd` created automatically — by default every new user gets a same-named primary group).
+- `/home/runner` = target path.
+
+So this means: "make the runner user the owner and the runner group the group, for everything under `/home/runner`."
+
+### The build-time vs runtime split
+
+```
+Build time (script runs)          Runtime (VM boots in production)
+─────────────────────             ─────────────────────────────────
+Root creates runner user           VM boots
+Root installs runner binary        Startup script (item 4) reads metadata
+Root runs installdependencies      Startup script invokes runner config:
+chown HANDS OFF ownership            cd /home/runner/actions-runner
+                                     ./config.sh --url X --token Y --labels Z
+                                     ./run.sh   ← runs as RUNNER user
+```
+
+`chown` is the bridge between "setup needs root" and "execution needs unprivileged user."
+
+## Section 6 — Install Docker
+
+```bash
+curl --fail --silent --show-error --location https://get.docker.com | sh
+usermod --append --groups docker runner
+```
+
+### Docker convenience script
+
+`get.docker.com` is Docker's official one-shot install script. It detects the OS, adds Docker's apt repository, and installs the latest stable Docker engine.
+
+For interactive use, piping `curl | sh` is risky (you're running unverified shell code). For an **immutable image build**, it's acceptable: the script runs once, on a build VM that will be destroyed, producing a snapshot. If the script becomes malicious in the future, our existing images are unaffected.
+
+Production-grade alternative: pin a specific Docker version with `apt install docker-ce=5:24.0.7-1~debian.12~bookworm`. More work for marginal reproducibility — defer.
+
+### `--groups docker`
+
+After Docker is installed, only root can use it by default (because the Docker socket is owned by root:docker). Adding the runner user to the `docker` group lets workflows do `docker build` etc. without `sudo`.
+
+Same `--append` pattern as the sudo group — never replace, always append.
+
+## Verifying the script worked
+
+After `packer build`, smoke-test by booting a one-off VM and SSHing in:
+
+```bash
+gcloud compute instances create test-runner-image \
+  --image-family=runnerforge-runner \
+  --image-project=runnerforge \
+  --machine-type=e2-micro \
+  --zone=europe-west4-a
+
+gcloud compute ssh test-runner-image --zone=europe-west4-a
+
+# On the VM, verify each step worked:
+id runner                                    # confirms user exists, lists groups
+ls -la /home/runner/actions-runner/         # runner binary files present
+stat /home/runner/actions-runner/config.sh   # owner should be runner:runner
+docker --version                             # Docker installed
+sudo -u runner docker ps                     # runner user can use Docker without sudo prompt
+
+exit
+
+gcloud compute instances delete test-runner-image --zone=europe-west4-a --quiet
+```
+
+If any of those fail, the corresponding section above is the suspect.

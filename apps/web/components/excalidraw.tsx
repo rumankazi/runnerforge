@@ -34,14 +34,14 @@ export function Excalidraw({ data, height = 500 }: ExcalidrawProps) {
       ...data,
       appState: { ...(data.appState ?? {}), viewBackgroundColor: 'transparent' },
     }),
-    [data],
+    [data]
   );
 
   const fitToContent = useCallback(() => {
     apiRef.current?.scrollToContent(undefined, {
       fitToViewport: true,
-      viewportZoomFactor: 0.9,
-      animate: false,
+      viewportZoomFactor: 1,
+      animate: true,
     });
   }, []);
 
@@ -50,7 +50,7 @@ export function Excalidraw({ data, height = 500 }: ExcalidrawProps) {
       apiRef.current = api;
       requestAnimationFrame(fitToContent);
     },
-    [fitToContent],
+    [fitToContent]
   );
 
   // Re-fit on any container size change — initial layout, fullscreen toggle,

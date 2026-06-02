@@ -1,0 +1,140 @@
+---
+title: Startup script
+description: The script that runs on every VM boot — mounts the data disk, fetches metadata, registers and starts the runner
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The startup script at [`/scripts/startup-script.sh`](https://github.com/rumankazi/runnerforge/blob/main/scripts/startup-script.sh) runs on **every VM boot** in production. It's the runtime bridge between a freshly-booted VM and a registered, job-executing GitHub Actions runner.
+
+This is a different concern from [install-runner.sh](/docs/development/phase-1/phase-1.6/install-runner), which runs once at *image build* time. See the [main index](/docs/development/phase-1/phase-1.6) for the lifecycle distinction.
+
+## How it gets onto the VM
+
+It's not baked into the image. It's passed via **instance metadata**, set by `handle_queued` at VM creation:
+
+```
+handle_queued (Python)
+  └─► create_vm(metadata={
+          "registration-token": "...",      # per-job, secret
+          "repo-url": "...",                # per-job
+          "runner-labels": "...",           # per-job
+          "startup-script": <file contents>, # THIS — auto-executed by GCE
+      })
+        └─► GCE API stores metadata on the VM
+
+VM boots
+  └─► GCE startup-script daemon (google-startup-scripts.service)
+        ├─► reads `startup-script` metadata key
+        ├─► writes contents to /var/lib/google/startup-script
+        ├─► makes it executable
+        └─► runs as root
+```
+
+`startup-script` is a **special, GCE-recognized key** — that exact spelling, hyphenated. The other metadata keys are just data; they're served on demand via the metadata server but never auto-executed.
+
+## The metadata server
+
+GCE provides a magic local URL only reachable from inside the VM:
+
+```
+http://metadata.google.internal/computeMetadata/v1/instance/attributes/{KEY}
+```
+
+The script `curl`s this to fetch the other three metadata values:
+
+```bash
+fetch_meta() {
+    curl --fail --silent --show-error \
+        --header "Metadata-Flavor: Google" \
+        "$METADATA_URL/$1"
+}
+
+REGISTRATION_TOKEN=$(fetch_meta registration-token)
+REPO_URL=$(fetch_meta repo-url)
+RUNNER_LABELS=$(fetch_meta runner-labels)
+```
+
+<Callout type="warn" title="Metadata-Flavor: Google header is mandatory">
+  The metadata server requires the `Metadata-Flavor: Google` header. This is a defense against SSRF (Server-Side Request Forgery) attacks — even if some other process on the VM gets tricked into fetching `metadata.google.internal`, the request will be rejected without this header, preventing unintended metadata exposure.
+</Callout>
+
+## Script responsibilities, in order
+
+```
+1. Wait for the data disk to appear (block device attachment can take ~1s after boot)
+2. Format the data disk if blank (idempotent — uses blkid as probe)
+3. Mount it at /home/runner/actions-runner/_work (runner's default work dir)
+4. chown to the runner user
+5. Fetch per-VM metadata via the GCE metadata server
+6. Configure the runner: ./config.sh --url X --token Y --labels Z --ephemeral --unattended
+7. Start the runner: ./run.sh
+```
+
+The script runs as root (GCE's choice — startup scripts always do). Steps 1-4 need root. Steps 6-7 must NOT run as root (the runner refuses to start as root, as a safety check) — `sudo --user=runner` drops privileges.
+
+## Mount point choice: why `/home/runner/actions-runner/_work`
+
+The GitHub Actions runner uses `_work` *relative to its installation directory* as the work dir by default. Our runner is installed at `/home/runner/actions-runner/`, so the default work dir is `/home/runner/actions-runner/_work`.
+
+We mount the data disk **at that exact path** so the runner uses the data disk transparently without needing the `--work` flag.
+
+`GITHUB_WORKSPACE` (the env var workflows use) ends up at:
+```
+/home/runner/actions-runner/_work/<repo>/<repo>
+```
+which is on the data disk — so build artifacts, checkouts, and Docker images all use the 50 GB data disk, not the 10 GB boot disk.
+
+## Idempotency on the format step
+
+```bash
+if ! blkid "$DATA_DISK_DEVICE" >/dev/null 2>&1; then
+    mkfs.ext4 -F "$DATA_DISK_DEVICE"
+else
+    log "Data disk already formatted, skipping mkfs"
+fi
+```
+
+`blkid` returns non-zero if the device has no filesystem. We use that as a probe — format only if blank. This makes the script safe to re-run on VM restart (which our VMs don't currently do, but a defensive habit).
+
+## Where to find the script's logs
+
+The script uses `logger -t startup-script` to write to syslog. Three places to look:
+
+### 1. Serial console (most accessible, while VM exists)
+
+```bash
+gcloud compute instances get-serial-port-output {vm-name} \
+    --zone=europe-west4-a | grep startup
+```
+
+Or in GCP Console: VM details → Serial console tab. **Lost on VM deletion.**
+
+### 2. syslog on the VM (while VM exists)
+
+SSH in and:
+```bash
+sudo journalctl -t startup-script
+```
+
+### 3. Cloud Logging — NOT currently captured
+
+VMs don't ship logs to Cloud Logging by default — would require [Cloud Ops Agent](https://cloud.google.com/logging/docs/agent/ops-agent) installed via the Packer image. Not done yet. **Flagged for Phase 1.7+** so VM internals become persistently observable alongside orchestrator logs.
+
+## Failure modes to know
+
+| Symptom | Likely cause | Where to look |
+|---|---|---|
+| Runner never registers in GitHub | Script crashed before `./run.sh` | Serial console output for error |
+| `mount: special device ... does not exist` | Data disk path wrong or disk not attached | Verify `gcloud compute instances describe {vm}` shows 2 disks |
+| `mkfs.ext4: Device already mounted` | Format step running on already-mounted disk | Idempotency check failed — investigate `blkid` |
+| Runner registers but workflows hit "No space left" | Mount path != runner's work dir | Verify mount point matches `/home/runner/actions-runner/_work` |
+| Workflows fail with "permission denied" on /home/runner/_work | `chown` didn't run or wrong path | Check the chown target in script |
+
+## What changes in Phase 1.6+
+
+- **Phase 1.7** — sweep endpoint adds orphan cleanup safety net. Ops Agent installation would also fit here (one more line in install-runner.sh, persistent VM logs in Cloud Logging).
+- **Phase 1.8** — Terraform-managed infrastructure. Could codify the metadata schema as a Terraform module.
+- **Phase 5+** — warm pool changes how the script is reused (one image, many pre-booted VMs waiting for jobs).
+
+The script itself shouldn't need to change much across phases — its contract (read these 3 metadata keys, mount this device, start the runner) is stable.

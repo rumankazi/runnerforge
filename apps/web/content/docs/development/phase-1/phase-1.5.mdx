@@ -1,0 +1,172 @@
+---
+title: Phase 1.5
+description: GCE VM creation, deletion, and label-based lookup
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+After phase 1.3, we could mint a registration token. After phase 1.5, we actually use it — by creating a real GCE VM with the token baked into instance metadata, and deleting that VM when the job completes.
+
+The orchestrator is now functionally complete for the happy path. What the runner does once booted is phase 1.6.
+
+## What this phase achieves
+
+End-to-end, the webhook lifecycle now looks like:
+
+```
+GitHub queued event
+  → /webhook → HMAC verify → parse payload
+  → handle_queued
+    → JWT → installation token → registration token   (phase 1.3)
+    → create_vm(name, labels, metadata={registration-token, repo-url, ...})   (new)
+
+GitHub completed event
+  → /webhook → HMAC verify → parse payload
+  → handle_completed
+    → find_vms_by_job_id(job_id)   (new)
+    → delete_vm(name) for each   (new)
+```
+
+The VM is created with the registration token in its instance metadata. The phase 1.6 startup script will read it. For now, the VM boots stock Debian and does nothing — which is exactly enough to verify the orchestration works.
+
+## compute_client.py
+
+Three functions, all async, all wrap `google.cloud.compute_v1.InstancesClient`. Sync client + `asyncio.to_thread` bridge — see [the discussion below](#sync-client-in-async-code) for why.
+
+### `create_vm`
+
+Builds a `compute_v1.Instance` protobuf with boot disk, network interface, labels, and metadata. Submits via `client.insert`. **Does not wait** for the operation to complete — the VM boots independently while the webhook handler returns 200 to GitHub.
+
+Defaults from `config.py`: `GCP_PROJECT_ID`, `GCP_ZONE`. Image is hardcoded to `projects/debian-cloud/global/images/family/debian-12` for now; the phase 1.6 Packer-built image will replace it.
+
+### `find_vms_by_job_id`
+
+Lists VMs in the project/zone with `labels.job_id={id}` filter. Returns instance names. This is the linkage that lets `handle_completed` find the VM created by `handle_queued`.
+
+Per [ADR-004](/docs/RunnerForge/design/decisions), labels on the VM are the source of truth for VM-to-job mapping. No database.
+
+### `delete_vm`
+
+Submits deletion by name. Like `create_vm`, does not wait for completion.
+
+## Handler wiring
+
+`handle_queued` now does the auth chain *and* creates the VM:
+
+```python
+vm_name = f"runnerforge-{event.workflow_job.id}"
+labels = {
+    "runner": "runnerforge",
+    "job_id": str(event.workflow_job.id),
+    "repo": event.repository.full_name.replace("/", "_"),
+    "installation_id": str(event.installation.id),
+}
+metadata = {
+    "registration-token": registration_token,
+    "repo-url": f"https://github.com/{event.repository.full_name}",
+    "runner-labels": ",".join(event.workflow_job.labels),
+}
+await create_vm(instance_name=vm_name, machine_type=..., labels=labels, metadata=metadata)
+```
+
+`handle_completed` finds and deletes:
+
+```python
+vms = await find_vms_by_job_id(str(event.workflow_job.id))
+if not vms:
+    logger.warning("No VM found for completed job (already cleaned up or never created)", ...)
+    return
+for vm_name in vms:
+    await delete_vm(vm_name)
+```
+
+The empty-list path is intentional: the orphan cleanup sweep (phase 1.7+) or a duplicate webhook may have already removed the VM. Log it and return 200 — never raise.
+
+## Lessons learned (the bugs we hit)
+
+The smoothest part of this phase was the design; the friction was in the GCP SDK and config plumbing. Worth recording so phase 1.6 (and you, future-reader) avoid them.
+
+### proto-plus `filter` kwarg silently drops other fields
+
+`ListInstancesRequest(project=p, zone=z, filter=f)` passes the kwargs to the proto constructor. Because `filter` is a Python builtin, the proto-plus generated code mishandles it — the resulting request has `project=""` and `zone=""`, and the API rejects with a confusing "Required fields not initialized" error.
+
+**Fix:** use attribute-setting consistently. Matches how `create_vm` already does it for `InsertInstanceRequest`.
+
+```python
+request = compute_v1.ListInstancesRequest()
+request.project = project_id
+request.zone = zone
+request.filter = f"labels.job_id={job_id}"
+```
+
+### GCP label values must be lowercase
+
+Labels accept `[a-z0-9_-]{0,63}`. `"runnerForge"` (capital F) fails validation. The check is on the API side, so you see the error only when `create_vm` runs — not at code review time.
+
+### `bare fastapi dev` doesn't load `.env`
+
+The dev server must be started with:
+
+```bash
+uv run --env-file .env fastapi dev src/runnerforge/main.py
+```
+
+Running `fastapi dev` directly leaves env vars unset. `config.py` reads them at import — without `.env`, `os.environ["GCP_PROJECT_ID"]` either raises KeyError (good, fails loud) or returns an empty string (bad, fails late and obscurely).
+
+### `config.py` now uses required env access
+
+```python
+GCP_PROJECT_ID = os.environ["GCP_PROJECT_ID"]    # required — KeyError if missing
+GCP_ZONE = os.environ.get("GCP_ZONE", "europe-west4-a")  # optional with default
+```
+
+Required fields fail fast at app startup. The alternative (`.get(..., None)` everywhere) defers the failure to the first VM operation — much harder to debug.
+
+### Sync client in async code
+
+`google-cloud-compute` exposes a sync `InstancesClient`. Calling it directly from `async def` would block the event loop. The bridge is `asyncio.to_thread`:
+
+```python
+operation = await asyncio.to_thread(client.insert, request=request)
+```
+
+Each call uses a thread from the default executor. Fine for our scale (1-2 GCE calls per webhook) — the orchestrator isn't compute-bound. If we ever needed real async throughput, the async variant `InstancesAsyncClient` is available but has uneven API coverage.
+
+<Callout type="warn" title="Don't wait for VM boot in the webhook handler">
+  Webhook handlers must return fast (200 to GitHub) so the delivery is marked successful. VM boot takes 30+ seconds — well past GitHub's webhook timeout. Don't `operation.result()` in the handler. The orchestrator's job is to *submit* the request; the VM lifecycle is independent after that.
+</Callout>
+
+## Testing approach
+
+Mock `google.cloud.compute_v1.InstancesClient` at the call site. Inspect the request protobuf to assert it was built correctly.
+
+```python
+def test_create_vm_builds_correct_instance(monkeypatch):
+    mock_client = MagicMock()
+    mock_client.insert.return_value.name = "op-abc-123"
+    monkeypatch.setattr(
+        "runnerforge.compute_client.compute_v1.InstancesClient",
+        lambda: mock_client,
+    )
+    op_id = asyncio.run(create_vm(...))
+
+    request = mock_client.insert.call_args.kwargs["request"]
+    assert request.project == "test-project"
+    assert request.instance_resource.labels == {...}
+```
+
+For integration tests at the webhook level, mock the compute_client functions directly (not the SDK):
+
+```python
+create_vm_mock = AsyncMock(return_value="op-test-12345")
+monkeypatch.setattr("runnerforge.handlers.create_vm", create_vm_mock)
+```
+
+**Patch where the name is imported (`runnerforge.handlers.create_vm`), not where it's defined.** The local binding in `handlers.py` is what your code reads.
+
+## Closing the loop
+
+After phase 1.5, the orchestrator handles the full happy-path lifecycle end-to-end with 100% test coverage. A real GitHub workflow push during development triggered the chain successfully: VM created (`runnerforge-78683284357` in europe-west4-a), webhook timeout fired completed event, VM deletion submitted.
+
+What's missing: the runner binary on the VM. Phase 1.6 bakes it in via Packer and wires up the startup script to use the registration token. After that, jobs actually execute.

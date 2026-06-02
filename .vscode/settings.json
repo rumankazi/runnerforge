@@ -1,0 +1,20 @@
+{
+  "cSpell.words": ["excinfo", "rumankazi", "runnerforge"],
+  "python.testing.cwd": "${workspaceFolder}/apps/orchestrator",
+  "python.defaultInterpreterPath": "${workspaceFolder}/apps/orchestrator/.venv/bin/python",
+  "python-envs.defaultPackageManager": "ms-python.python:uv",
+
+  "ruff.path": ["${workspaceFolder}/apps/orchestrator/.venv/bin/ruff"],
+  "ruff.nativeServer": "on",
+
+  "python.terminal.activateEnvironment": false,
+  "python.terminal.useEnvFile": true,
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
+  }
+}

@@ -1,0 +1,69 @@
+---
+title: Phase 1.2
+description: Payload modeling and event routing
+---
+
+Focus on event routing and payload modeling
+
+### Pydantic model
+
+The fields (for now) that we need from the payload:
+(we will expand the required fields as we need in future)
+
+For `queued` action:
+
+- action
+- workflow_job.id
+- workflow_job.labels
+- repository.full_name
+- installation.id
+
+For `completed` action:
+
+- action
+- workflow_job.id
+- workflow_job.conclusion
+
+---
+
+The pydantic model would look like:
+
+```python title="models.py"
+from pydantic import BaseModel
+
+class WorkflowJob(BaseModel):
+    id: int
+    labels: list[str]
+    conclusion: str | None = None
+
+class Repository(BaseModel):
+    full_name: str
+
+class Installation(BaseModel):
+    id: int
+
+class WorkflowJobEvent(BaseModel):
+    action: str # queued | in_progress | completed
+    workflow_job: WorkflowJob
+    repository: Repository
+    installation: Installation
+```
+
+We could have also complicated this using Discriminated Union, but we will defer this for later and only if we need it.
+
+<include>../refs/models.py</include>
+
+### Event routing
+
+Added some dummy event handlers for now:
+
+```python title="handlers.py"
+def handle_queued(event):
+    print(f"would create VM for job {event.workflow_job.id}, labels={event.workflow_job.labels}")
+
+def handle_in_progress(event):
+    print(f"job {event.workflow_job.id} picked up by a runner")
+
+def handle_completed(event):
+    print(f"would delete VM for job {event.workflow_job.id}, conclusion={event.workflow_job.conclusion}")
+```

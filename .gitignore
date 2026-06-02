@@ -30,6 +30,7 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+*,cover
 
 # Coverage / test
 coverage/
@@ -37,13 +38,21 @@ coverage/
 
 # Secrets / local env
 *.pem
+!apps/orchestrator/tests/fixtures/*
 .env.local
 
 # Editor / OS
 .DS_Store
 Thumbs.db
-.vscode/
 .idea/
 
 # Vercel
 .vercel
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/*.tfvars
+infra/terraform/*.tfplan
+infra/terraform/crash.log

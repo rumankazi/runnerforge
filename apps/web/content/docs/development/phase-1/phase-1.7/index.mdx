@@ -1,0 +1,138 @@
+---
+title: Phase 1.7
+description: Sweep endpoint for orphan cleanup + Cloud Ops Agent for persistent VM logs
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+After phase 1.6, the orchestrator creates and destroys runners on demand via webhooks — the **happy path**. Phase 1.7 adds the **safety net**: a sweep endpoint that periodically catches VMs whose cleanup webhook never arrived (dropped delivery, orchestrator crash, runner failure). Plus a small but important infrastructure change: VM-internal logs now ship to Cloud Logging persistently, surviving VM deletion.
+
+After this phase the orchestrator is **production-ready in terms of reliability + observability**. Phase 1.8 takes it the rest of the way — Terraform + Cloud Run deployment + Secret Manager.
+
+## What this phase achieves
+
+```
+                                                ┌──────────────────────┐
+GitHub webhook (queued/completed)               │  Cloud Scheduler     │  ← Phase 1.8
+  ────────────────► /webhook  (existing)        │  (every 10 min)      │
+                                                └──────────┬───────────┘
+                                                           │
+                                                           ▼
+                                                   /sweep  (NEW)
+                                                     │
+                                                     ▼
+                                          ┌──────────────────────┐
+                                          │ list_runnerforge_vms │
+                                          │ (validate labels)    │
+                                          └──────────┬───────────┘
+                                                     │
+                                                     ▼
+                                          ┌──────────────────────┐
+                                          │ For each VM:         │
+                                          │  - age check         │
+                                          │  - job status via    │
+                                          │    GitHub API        │
+                                          │  - delete if orphan  │
+                                          └──────────────────────┘
+```
+
+The webhook is the happy path: 99% of the time, a `completed` webhook arrives and triggers cleanup within seconds. The sweep catches the remaining 1%:
+
+- Dropped webhook delivery (network blip)
+- Orchestrator crashed mid-handler before deletion
+- Runner failed to register (job stuck queued forever — eventually GitHub gives up but no completion webhook fires)
+- Manually-created or mis-labeled VMs (defense in depth)
+
+## Architectural decisions
+
+### Sweep is an HTTP endpoint, not a background loop
+
+Cloud Run containers don't run long-lived event loops — they're request-scoped. The "cron" lives outside the service. Cloud Scheduler (Phase 1.8) fires `POST /sweep` periodically; the orchestrator just exposes the endpoint.
+
+Benefits:
+- Same Cloud Run service handles webhooks AND sweep (no separate worker).
+- Same scaling-to-zero behavior.
+- All sweep activity lands in the same Cloud Logging stream as webhook activity.
+
+### Job status, not runner status, as the cleanup signal
+
+Per [webhook-flow.mdx](/docs/RunnerForge/design/webhook-flow), the sweep checks **job status** via the GitHub API, not runner registration status. A runner can be "offline" but its job still queued; a runner can be "online" but its job already completed (race window). Job status directly answers "should this VM still exist?"
+
+See [Sweep logic](/docs/development/phase-1/phase-1.7/sweep-logic) for the decision tree details.
+
+### Two-threshold cleanup: `MAX_LIFETIME_HOURS` and `HARD_LIMIT_HOURS`
+
+```python
+MAX_LIFETIME_HOURS = 1   # don't sweep VMs younger than this
+HARD_LIMIT_HOURS   = 6   # delete VMs older than this regardless of job status
+```
+
+The middle window (1h – 6h) is where we check job status against GitHub. The hard limit catches genuinely stuck jobs where the runner crashed and never reported back — better to delete and let GitHub re-queue than let a zombie VM run for days.
+
+### Defensive label validation pushed to the boundary
+
+`list_runnerforge_vms` validates labels with `RunnerForgeVmLabels` model before returning. Malformed VMs (missing `installation_id`, wrong shape) get **skipped with a warning log**, never reach sweep. Sweep operates on guaranteed-valid `VmInfo` only.
+
+This means:
+- A bad VM never gets accidentally deleted.
+- A bad VM also never gets retried forever — it gets reported once per sweep via the log.
+
+### Bearer-token auth — replaced by OIDC in Phase 1.8
+
+For Phase 1.7, `/sweep` used a bearer token from `SWEEP_AUTH_TOKEN` env var (constant-time comparison via `hmac.compare_digest`). Simple, worked locally with curl during development.
+
+[Phase 1.8](/docs/development/phase-1/phase-1.8) replaced this with **OIDC**: Cloud Scheduler signs each request with a short-lived Google-issued JWT, and the orchestrator validates signature + audience + email claim against the expected scheduler SA. No shared secret to rotate, no static credential, same endpoint contract. See [the Phase 1.8 auth model](/docs/development/phase-1/phase-1.8#auth-model--who-trusts-whom) for the full chain.
+
+### `delete_vm` is idempotent
+
+If two callers (webhook + sweep) race to delete the same VM, the second call no longer fails — `compute_v1.NotFound` is caught and treated as success. The sweep's `errors` list then accurately reflects **real failures only**, not cosmetic races. This matters for production alerting — "sweep errors > 0" should mean "something is wrong," not "two cleanup paths raced."
+
+## Cloud Ops Agent for VM logs
+
+Phase 1.6 left a gap: `startup-script` logs lived only in the VM's serial console, lost on deletion. Phase 1.7 closes it.
+
+Added to [install-runner.sh](https://github.com/rumankazi/runnerforge/blob/main/infra/packer/scripts/install-runner.sh):
+
+```bash
+curl --fail --silent --show-error --location --remote-name \
+    https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+bash add-google-cloud-ops-agent-repo.sh --also-install
+```
+
+After rebuilding the Packer image, every VM ships syslog + journalctl entries to Cloud Logging under `log_name="projects/runnerforge/logs/syslog"`. The startup script's `logger -t startup-script` calls land there persistently, queryable across all historical VMs.
+
+<Callout type="info" title="Short-lived VMs may miss the flush window">
+  Ops Agent buffers logs and ships in batches. VMs that live \<2 minutes total (very short jobs) may not flush before deletion. Longer-running jobs reliably get their logs persisted. This is a buffering tradeoff inherent to the agent, not a code bug.
+</Callout>
+
+## Detailed sub-pages
+
+- [Sweep logic](/docs/development/phase-1/phase-1.7/sweep-logic) — the decision tree, age windows, token caching strategy, race-condition handling.
+
+## Lessons learned
+
+- **`AsyncMock()` default `return_value` is a `MagicMock`, not `None`.** For "returns None" test scenarios, explicitly `mock.return_value = None`. Cost us a confusing test failure.
+- **Real failures look like simulated ones, in the right way.** During e2e testing, a fake VM with a non-existent `installation_id` produced exactly the error path covered by the `test_run_sweep_continues_when_delete_raises` unit test — verifying production resilience matches the test contract. Good signal.
+- **Defensive validation belongs at the boundary, not throughout.** Pushing `RunnerForgeVmLabels.model_validate` into `list_runnerforge_vms` (instead of repeating it in sweep) made the sweep simpler and ensured no malformed VM could ever reach destructive code paths.
+- **`caplog.at_level(WARNING)` drops INFO logs.** `at_level` sets the *minimum* level captured. Use `INFO` to capture both INFO and WARNING+.
+- **Pydantic models from raw external data → use `model_validate({...})`, not constructor**. Avoids Pyright `str → datetime` type-mismatch warnings while preserving runtime behavior.
+
+## Test state
+
+| Module | Coverage |
+|---|---|
+| All 11 production modules | **100%** (statements + branches) |
+| Total tests | **82 passing** in ~4s |
+
+The sweep code (~45 lines) added 7 dedicated tests covering all decision branches plus token caching and per-VM error isolation. Combined with the existing webhook + GitHub client + compute client tests, the test suite remains comprehensive without becoming slow.
+
+## What's next — Phase 1.8
+
+Production deployment. Specifically:
+
+- **Terraform** for all GCP resources (Cloud Run service, Cloud Scheduler job, IAM roles, Secret Manager for the GitHub App private key + sweep auth token).
+- **Cloud Run deployment** of the orchestrator (Dockerfile already exists from Phase 1.6).
+- **OIDC auth** between Cloud Scheduler and `/sweep` (replacing bearer-token).
+- **Image retention policy** for old Packer-built images (deferred since Phase 1.6).
+
+After 1.8 the orchestrator is genuinely deployed in production GCP — Phase 1 is done.

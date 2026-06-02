@@ -1,0 +1,448 @@
+---
+title: Terraform walkthrough
+description: File-by-file, resource-by-resource explanation of infra/terraform/. The reference for future-you adding resources or onboarding.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+This is the reading-style guide to `infra/terraform/`. If you ever need to add a new resource, change an env var, or understand why the apply graph runs in a particular order, start here.
+
+## File layout
+
+```
+infra/terraform/
+├── versions.tf        # Terraform CLI + provider version constraints
+├── main.tf            # Backend config, providers, AR repo (with cleanup policies)
+├── variables.tf       # Variable declarations
+├── terraform.tfvars   # Variable values (gitignored — environment-specific)
+├── secrets.tf         # google_secret_manager_secret resources
+├── iam.tf             # Orchestrator SA + project + secret + act-as IAM bindings
+├── cloud_run.tf       # The Cloud Run service + public invoker grant + URL output
+├── scheduler.tf       # Cloud Scheduler SA + the /sweep cron job
+├── .terraform.lock.hcl # Provider pinning — COMMIT THIS (like package-lock.json)
+└── .terraform/        # Provider plugins downloaded by init — gitignored
+```
+
+**Why files are split by domain:** all `.tf` files in the same directory are merged into one module — Terraform doesn't care how you organize them. The split is purely for readability. Reading `iam.tf` to understand all IAM grants is faster than grepping a 600-line `main.tf`.
+
+## State backend — GCS bucket
+
+[`main.tf`](https://github.com/rumankazi/runnerforge/blob/main/infra/terraform/main.tf) configures GCS as the state backend:
+
+```hcl
+terraform {
+  backend "gcs" {
+    bucket = "runnerforge-terraform-state"
+    prefix = "orchestrator"
+  }
+}
+```
+
+State lives at `gs://runnerforge-terraform-state/orchestrator/default.tfstate`. The `prefix` namespace leaves room for future services (`web/`, `monitoring/`) in the same bucket without state collisions.
+
+### Chicken-and-egg bootstrap
+
+Terraform can't manage the bucket that holds its own state. The bucket was created manually once:
+
+```bash
+gcloud storage buckets create gs://runnerforge-terraform-state \
+  --project=runnerforge \
+  --location=europe-west4 \
+  --uniform-bucket-level-access
+
+gcloud storage buckets update gs://runnerforge-terraform-state --versioning
+```
+
+Versioning is **required** — it's the recovery story if a corrupted state file gets pushed. Each push creates a new generation; recovery is `gcloud storage cp gs://.../tfstate#<gen>`.
+
+This is a one-time setup, documented here so it survives if everything else gets wiped.
+
+## Variables and `terraform.tfvars`
+
+Two variable types:
+
+**Hardcoded** (literal values directly in the .tf files): project ID, region, zone. Single-tenant, single-region — these don't change.
+
+**Variable** (declared in `variables.tf`, valued in `terraform.tfvars`):
+
+```hcl
+variable "image_tag" { ... }
+variable "github_app_id" { ... }
+variable "cloud_run_url" { ... }
+```
+
+| Variable | Why variable |
+|---|---|
+| `image_tag` | Changes every deploy (`0.1.0` → `0.1.1` → ...). Bumped manually after each Cloud Build. |
+| `github_app_id` | Environment-specific (different App IDs across personal/work GCP projects). Not secret but not architectural. |
+| `cloud_run_url` | OIDC audience for `/sweep` — both Cloud Scheduler and the orchestrator app must use the same value. Variable enforces single source of truth. |
+
+`terraform.tfvars` is **gitignored** (it can contain non-secret-but-deploy-specific values, and we treat the convention strictly). Each operator maintains their own.
+
+## Resource-by-resource
+
+Walking through the actual `.tf` files in dependency order — what gets created first, what depends on what.
+
+### `google_artifact_registry_repository.orchestrator`
+
+The Docker registry for orchestrator container images, with native lifecycle:
+
+```hcl
+resource "google_artifact_registry_repository" "orchestrator" {
+  location      = "europe-west4"
+  repository_id = "orchestrator"
+  format        = "DOCKER"
+  description   = "RunnerForge orchestrator container images"
+
+  cleanup_policies {
+    id     = "keep-recent-tagged"
+    action = "KEEP"
+    most_recent_versions {
+      package_name_prefixes = ["orchestrator"]
+      keep_count            = 5
+    }
+  }
+
+  cleanup_policies {
+    id     = "delete-untagged-old"
+    action = "DELETE"
+    condition {
+      tag_state  = "UNTAGGED"
+      older_than = "604800s"
+    }
+  }
+}
+```
+
+The two `cleanup_policies` blocks run daily on GCP's side. **KEEP policies always win over DELETE** in conflicts — even if an old tagged version is also untagged-old, the KEEP rule protects it.
+
+This resource was **imported** rather than recreated. The original repo was made with `gcloud artifacts repositories create` during item 2 of the deployment, before any Terraform existed. After writing the resource block, we ran:
+
+```bash
+terraform import google_artifact_registry_repository.orchestrator \
+  projects/runnerforge/locations/europe-west4/repositories/orchestrator
+```
+
+Then `terraform plan` showed `No changes` — confirmation that the block matched reality.
+
+### `google_secret_manager_secret.{github_webhook_secret,github_app_private_key}`
+
+Empty container slots only — values are uploaded with `gcloud` manually:
+
+```hcl
+resource "google_secret_manager_secret" "github_webhook_secret" {
+  secret_id = "github-webhook-secret"
+  replication {
+    auto {}
+  }
+}
+```
+
+Same shape for `github_app_private_key`. The principle: **Terraform owns the slot, humans own the value**. Two reasons:
+
+1. **State leakage**: Terraform state is JSON; anything in `resource` args can end up there. Even with private GCS backend, that expands the secret's exposure surface.
+2. **Code leakage**: secret values committed to code persist in git history forever, even if later removed.
+
+Values were uploaded once:
+
+```bash
+echo -n "your-webhook-secret" | gcloud secrets versions add github-webhook-secret \
+  --data-file=- --project=runnerforge
+
+gcloud secrets versions add github-app-private-key \
+  --data-file="/path/to/private-key.pem" --project=runnerforge
+```
+
+The `echo -n` is critical — without it, a trailing newline becomes part of the secret value and HMAC validation fails mysteriously.
+
+<Callout type="warn" title="Rotation procedure">
+  When rotating the **webhook secret**: generate a new value → upload as a new SM version → update the secret field in the GitHub App settings → verify the next webhook delivers OK. Brief mismatch window during rotation; minimize it.
+
+  When rotating the **GitHub App private key**: generate a new key in the GitHub App settings (it supports two active keys simultaneously) → upload the new key as a new SM version → confirm orchestrator is using `latest` → delete the old key from the App settings.
+
+  Both procedures are manual in Phase 1.8. Phase 2 will add a Cloud Function for automation.
+</Callout>
+
+### `google_service_account.orchestrator` + IAM bindings
+
+The orchestrator's identity on Cloud Run, with **explicit least-privilege grants** (no `editor` or `owner`):
+
+```hcl
+resource "google_service_account" "orchestrator" {
+  account_id   = "runnerforge-orchestrator"
+  display_name = "RunnerForge orchestrator (Cloud Run)"
+}
+```
+
+Becomes `runnerforge-orchestrator@runnerforge.iam.gserviceaccount.com`.
+
+Bindings (in [`iam.tf`](https://github.com/rumankazi/runnerforge/blob/main/infra/terraform/iam.tf)):
+
+| Role | Scope | Reason |
+|---|---|---|
+| `roles/compute.instanceAdmin.v1` | Project | Create/list/delete VMs |
+| `roles/compute.imageUser` | Project | Use Packer-built images for VM creation |
+| `roles/compute.imageAdmin` | Project | Delete old Packer images (cleanup) |
+| `roles/iam.serviceAccountUser` | Default compute SA | Attach default SA to VMs at creation (act-as, not impersonate) |
+| `roles/secretmanager.secretAccessor` | Each secret individually | Read the 2 secrets only (NOT project-wide) |
+| `roles/logging.logWriter` | Project | Emit structured logs |
+
+**On the act-as binding**: `roles/iam.serviceAccountUser` lets the orchestrator *attach* the default compute SA to new VMs (so VMs run as that SA). It does NOT let the orchestrator impersonate the default SA in API calls. That would require `roles/iam.serviceAccountTokenCreator`, which we deliberately don't grant.
+
+**On the secret bindings**: scoped to specific secrets via `google_secret_manager_secret_iam_member`, not project-wide. If the orchestrator token ever leaks, the blast radius is "can read these 2 specific secrets" — not "can read every secret in the project."
+
+### `google_cloud_run_v2_service.orchestrator`
+
+The deployed service. The big resource — let's walk it section by section.
+
+```hcl
+resource "google_cloud_run_v2_service" "orchestrator" {
+  name     = "runnerforge-orchestrator"
+  location = "europe-west4"
+  ingress  = "INGRESS_TRAFFIC_ALL"  # public — GitHub webhooks need this
+```
+
+`INGRESS_TRAFFIC_ALL` exposes the service to the public internet, which is required because GitHub's webhook delivery comes from rotating IPs (no useful firewall set). The orchestrator's HMAC validation on `/webhook` is what authenticates the caller.
+
+```hcl
+  template {
+    service_account = google_service_account.orchestrator.email
+
+    scaling {
+      min_instance_count = 0   # scale to zero when idle (cost: $0/min)
+      max_instance_count = 10  # burst headroom for parallel webhooks
+    }
+
+    max_instance_request_concurrency = 1  # one webhook per instance
+```
+
+`min_instance_count = 0` means no instances run when there's no traffic. Cold starts add ~1-3s latency to the first request after idle; for webhook-driven workloads (irregular traffic), it's the right cost-vs-latency trade.
+
+```hcl
+    containers {
+      image = "europe-west4-docker.pkg.dev/runnerforge/orchestrator/orchestrator:${var.image_tag}"
+      ports {
+        container_port = 8000  # match the orchestrator's uvicorn port
+      }
+
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "512Mi"
+        }
+        cpu_idle          = true
+        startup_cpu_boost = true  # 2× CPU during cold start
+      }
+```
+
+`startup_cpu_boost` cuts cold-start latency materially — the orchestrator's first request includes initializing GCP SDKs (slow imports), and the boost doubles available CPU for ~10s.
+
+```hcl
+      # Plain env vars
+      env { name = "GITHUB_APP_ID";                 value = var.github_app_id }
+      env { name = "GCP_PROJECT_ID";                value = "runnerforge" }
+      env { name = "GCP_ZONE";                      value = "europe-west4-a" }
+      env { name = "GITHUB_APP_PRIVATE_KEY_PATH";   value = "/secrets/github-app-private-key" }
+      env { name = "EXPECTED_SCHEDULER_SA_EMAIL";   value = google_service_account.scheduler.email }
+      env { name = "EXPECTED_AUDIENCE";             value = var.cloud_run_url }
+
+      # Secret env var (mounted from Secret Manager)
+      env {
+        name = "GITHUB_WEBHOOK_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.github_webhook_secret.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      # File mount for the multi-line PEM private key
+      volume_mounts {
+        name       = "github-app-private-key"
+        mount_path = "/secrets"
+      }
+    }
+
+    volumes {
+      name = "github-app-private-key"
+      secret {
+        secret = google_secret_manager_secret.github_app_private_key.secret_id
+        items {
+          version = "latest"
+          path    = "github-app-private-key"
+        }
+      }
+    }
+  }
+}
+```
+
+**Two ways to expose secrets**: env var for short strings (`GITHUB_WEBHOOK_SECRET`), file mount for multi-line content (PEM keys). The mount produces a file at `/secrets/github-app-private-key`; `GITHUB_APP_PRIVATE_KEY_PATH` env var points the application at it. No app code change between local dev and Cloud Run — `config.py` reads from the path regardless.
+
+### `google_cloud_run_v2_service_iam_member.orchestrator_public`
+
+```hcl
+resource "google_cloud_run_v2_service_iam_member" "orchestrator_public" {
+  project  = "runnerforge"
+  location = google_cloud_run_v2_service.orchestrator.location
+  name     = google_cloud_run_v2_service.orchestrator.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+```
+
+Makes the service publicly invokable. Required because:
+
+- GitHub.com hits `/webhook` from rotating IPs and doesn't authenticate as a Google identity.
+- Cloud Scheduler hits `/sweep` with OIDC, but Cloud Run still needs *some* invoker to allow the request through to where our app validates the JWT.
+
+The orchestrator's application-layer auth (HMAC for `/webhook`, OIDC for `/sweep`) is what actually gates which requests succeed.
+
+### `google_service_account.scheduler` + `google_cloud_scheduler_job.sweep`
+
+```hcl
+resource "google_service_account" "scheduler" {
+  account_id   = "runnerforge-scheduler"
+  display_name = "RunnerForge Cloud Scheduler"
+}
+
+resource "google_cloud_scheduler_job" "sweep" {
+  name             = "runnerforge-sweep"
+  region           = "europe-west4"
+  schedule         = "12 */1 * * *"  # hourly, at minute 12
+  time_zone        = "Etc/UTC"
+  attempt_deadline = "60s"
+
+  retry_config {
+    retry_count = 1
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${var.cloud_run_url}/sweep"
+
+    oidc_token {
+      service_account_email = google_service_account.scheduler.email
+      audience              = var.cloud_run_url
+    }
+  }
+}
+```
+
+The `oidc_token` block tells Cloud Scheduler to sign each request with a short-lived JWT issued as the scheduler SA. The orchestrator validates:
+
+1. **Signature** (against Google's JWKS) — was this token actually issued by Google?
+2. **Audience** (`aud` claim must match `var.cloud_run_url`) — was this token minted for us specifically?
+3. **Email** (`email` claim must match the scheduler SA) — was this token from the expected caller?
+4. **Expiration** (`exp` claim) — is the token still valid?
+
+All four checks happen on every `/sweep` call. JWT verification is sub-millisecond once Google's JWKS is cached. No round-trips per request.
+
+**`schedule = "12 */1 * * *"`** is standard cron: minute 12 of every hour. We picked an off-by-minute schedule so this job doesn't synchronize with everything else that runs on `0 * * * *`. For portfolio scale, hourly is generous — the webhook is the happy path; sweep is the safety net.
+
+## Deploy flow
+
+When you run `terraform apply`, Terraform builds a dependency graph and executes in parallel where it can:
+
+```
+1.  Refresh state from GCS backend.
+2.  Read data sources (e.g., default compute SA).
+3.  Create/update resources in dependency order:
+    
+    google_service_account.orchestrator ─┐
+    google_service_account.scheduler ─────┼─► google_cloud_run_v2_service
+    google_secret_manager_secret.* ──────┘  google_*_iam_member (project + secret + act-as)
+                                            google_cloud_scheduler_job.sweep
+                                            google_cloud_run_v2_service_iam_member
+    
+    google_artifact_registry_repository (no deps; runs anytime)
+
+4.  Update state in GCS backend.
+```
+
+Cloud Run service updates are **in-place by default** — Terraform sends the new spec, Cloud Run creates a new revision, traffic shifts once the new revision passes health checks. If health checks fail, traffic stays on the old revision (no downtime).
+
+## Adding a new env var — concrete walkthrough
+
+Most common future change. Say you want to add `MAX_VM_LIFETIME_HOURS=6` for tuning.
+
+1. **Add to `cloud_run.tf`** inside the `containers` block:
+
+   ```hcl
+   env {
+     name  = "MAX_VM_LIFETIME_HOURS"
+     value = "6"
+   }
+   ```
+
+   (Or if it's a per-deploy tunable: add to `variables.tf` + `terraform.tfvars`, reference as `var.max_vm_lifetime_hours`.)
+
+2. **Add to [`apps/orchestrator/.env`](https://github.com/rumankazi/runnerforge/blob/main/apps/orchestrator/.env)** for local dev:
+
+   ```
+   MAX_VM_LIFETIME_HOURS=6
+   ```
+
+3. **Add to `tests/conftest.py`**:
+
+   ```python
+   os.environ.setdefault("MAX_VM_LIFETIME_HOURS", "6")
+   ```
+
+4. **Use in [`config.py`](https://github.com/rumankazi/runnerforge/blob/main/apps/orchestrator/src/runnerforge/config.py)**:
+
+   ```python
+   MAX_VM_LIFETIME_HOURS = int(os.environ["MAX_VM_LIFETIME_HOURS"])
+   ```
+
+5. **If the code change reads the var**, this is also a code change → bundle:
+
+   ```bash
+   # Build new image
+   gcloud builds submit --config=infra/cloudbuild.yaml --substitutions=_TAG=0.1.X --project=runnerforge
+   # Bump tfvars image_tag
+   # Single apply
+   cd infra/terraform && terraform apply
+   ```
+
+   If the env var is only consumed by *new* code (added in the same PR), the image bump is required. If the env var is consumed by *existing* code with a sensible default, no bump needed — just `terraform apply` for the env var.
+
+The atomic deploy rule: **never split code changes from config changes across separate applies.**
+
+## Adding a new resource
+
+Same pattern as the existing files: create or extend the appropriate `.tf` file (or a new one — Terraform merges them), `terraform plan` to verify what'll happen, `terraform apply`. Some quick conventions:
+
+- **IAM grants** go in `iam.tf`, scoped narrowly (resource-level when possible).
+- **New service accounts** go near their domain (orchestrator SA in `iam.tf`, scheduler SA in `scheduler.tf`).
+- **New secrets** go in `secrets.tf` with **only** the resource block — never `google_secret_manager_secret_version` with the actual value.
+- **Always use `google_*_iam_member`** — never `google_*_iam_binding` (replaces all members for a role) or `google_*_iam_policy` (replaces the entire policy). Footguns.
+
+## State recovery — if something goes sideways
+
+GCS versioning means state file recovery is possible:
+
+```bash
+# List all generations of the state file
+gcloud storage objects list gs://runnerforge-terraform-state/orchestrator/default.tfstate \
+  --versions
+
+# Restore a specific generation
+gcloud storage cp \
+  gs://runnerforge-terraform-state/orchestrator/default.tfstate#<generation> \
+  gs://runnerforge-terraform-state/orchestrator/default.tfstate
+```
+
+If state is irrecoverable: each resource can be re-imported individually with `terraform import` (the AR repo procedure is the template). Slow but works.
+
+## Conventions baked into the project
+
+- **No `latest` tags**: every image in AR is explicitly versioned. Cloud Run revisions pin to digests anyway, but explicit tags keep manual ops auditable.
+- **Apple Silicon builds via Cloud Build**: local Podman fails reliably under QEMU emulation. Cloud Build runs native amd64.
+- **Bundled atomic deploys**: image + tfvars + apply in one operation, never split.
+- **`monkeypatch + Mock` for tests** (not `unittest.mock.patch`).
+- **`.env` for dev server only** — tests use `uv run pytest` without `--env-file`, conftest provides defaults.
+- **Cloud Run reserves `/healthz`** — use `/health` for the app's health endpoint.
+
+These are also written into the project's [conventions doc](https://github.com/rumankazi/runnerforge/blob/main/.claude/projects/-Users-rumankazi-Projects-runnerforge/memory/project_orchestrator_conventions.md) for future-you and future-AI assistants.

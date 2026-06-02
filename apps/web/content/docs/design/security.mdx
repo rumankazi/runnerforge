@@ -6,6 +6,10 @@ description: Webhook validation, GitHub App authentication, IAM configuration, a
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 
+<Callout type="info" title="Companion document">
+  This page covers the **implementation** of our security boundaries — validators, IAM roles, network configuration. For the **user-facing** view — what we ask for, what limits the damage if we're compromised, and how you can verify our claims — see [Trust & threat model](/docs/RunnerForge/design/trust).
+</Callout>
+
 ## Webhook signature validation
 
 Every webhook POST from GitHub includes an `X-Hub-Signature-256` header containing an HMAC-SHA256 signature of the request body, computed with the webhook secret configured on the GitHub App.
@@ -131,6 +135,10 @@ RunnerForge is designed to access the minimum data required for runner orchestra
 - Other GitHub events (push, pull_request, issues, etc.).
 
 The GitHub App is configured with permissions scoped exclusively to `workflow_job` events. Users can verify this in the app's permission settings before installation.
+
+<Callout type="info" title="Why we request Administration: Read & write">
+  GitHub bundles self-hosted-runner management inside the `Administration` permission. We use only one endpoint from it — the runner-registration-token endpoint. The user-facing discussion of this tradeoff, including what limits the damage and how users can verify our scope, lives in [Trust & threat model](/docs/RunnerForge/design/trust).
+</Callout>
 
 ## Network security
 

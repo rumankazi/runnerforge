@@ -1,0 +1,110 @@
+---
+title: Trust & threat model
+description: What RunnerForge can do on your repos, what limits the damage if we're compromised, and how you can verify our claims.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+RunnerForge runs jobs on infrastructure we control, using credentials your GitHub App install grants us. That is a meaningful amount of trust. This page describes exactly what we ask for, what we use it for, what we cannot do, and what limits the damage if our system is compromised.
+
+If anything here ever drifts from what the code actually does, the code is the source of truth and this page is the bug. File an issue.
+
+## What we ask for, and the exact endpoint each permission gates
+
+The GitHub App requests two permissions. We use each one for a specific, narrow purpose.
+
+| Permission | Scope | Why we need it | Endpoint we call |
+|---|---|---|---|
+| **Actions: Read** | Repository | Receive `workflow_job` webhook events so we know when to provision and tear down runners | None — webhook subscription only |
+| **Administration: Read and write** | Repository | Mint a single-use runner registration token so a VM can register itself as a self-hosted runner | `POST /repos/{owner}/{repo}/actions/runners/registration-token` |
+
+<Callout type="warn" title="Administration is broader than we use">
+  GitHub currently bundles self-hosted runner management inside the `Administration` permission, alongside the ability to delete repositories, transfer ownership, manage collaborators, and change security settings. **We do not use any of those capabilities.** The single endpoint we call is the registration-token endpoint listed above. When GitHub ships a granular "self-hosted runners" permission (on their public roadmap), we will switch to it immediately.
+</Callout>
+
+## What we cannot do
+
+These boundaries are enforced by the GitHub App's permission scope — they are not promises, they are technical constraints.
+
+- ❌ Read your source code, pull requests, issues, or any repository contents.
+- ❌ Read or modify workflow files (`.github/workflows/*.yml`).
+- ❌ Access any repositories you did not explicitly install the App on.
+- ❌ Access any other GitHub events (push, pull_request, issues, comments, etc.) — only `workflow_job`.
+- ❌ Read your personal user data, emails, or organization membership.
+- ❌ Persist any installation tokens. We fetch them on demand and they expire in one hour.
+
+## What limits the damage if we are compromised
+
+A realistic threat model has to assume the worst case: our private key is exfiltrated, or an attacker takes over the orchestrator. Three things bound the blast radius:
+
+### 1. Per-repository scoping
+
+You choose, at install time, exactly which repositories the App can act on. If you installed RunnerForge on one repository, an attacker with full control of our system can only affect that one repository — not your other repos, not your organization, not your account.
+
+Recommended: install on a single test repository first. Confirm in your audit log that we only call the endpoints listed above. Graduate to production repositories once you have evidence.
+
+### 2. Tokens are short-lived
+
+We do not hold long-lived credentials that point at your account. Concretely:
+
+- Installation access tokens expire after **1 hour**. We fetch them on demand and discard them.
+- Runner registration tokens expire after **1 hour** and are **single-use**.
+- The only durable credential is the GitHub App's private key, which lives in GCP Secret Manager. It is the keys to the kingdom — see [the compromise recovery section](#if-our-private-key-leaks) for what to do if it ever leaks.
+
+An attacker who breaches our system mid-flight gets, at most, an hour of access per affected installation. An attacker who is not also in possession of our private key cannot mint new tokens at all.
+
+### 3. Every action we take is in your audit log
+
+GitHub records every API call our App makes against your repository in your audit log. You can see exactly what we did, when, and from which installation. We have no way to hide our activity from you.
+
+If you ever see an entry that is not "fetched a registration token," that is the canary — revoke the installation immediately and file an issue.
+
+## How you can verify
+
+Trust is earned through verifiable claims, not assertions on a marketing page. Four ways to verify ours:
+
+1. **Audit log.** Your repository's audit log (Settings → Security log) shows every API call we make. Filter by integration to isolate RunnerForge.
+2. **Source code.** The orchestrator is open source. Every GitHub API call we make is in [`github_client.py`](https://github.com/rumankazi/runnerforge/blob/main/apps/orchestrator/src/runnerforge/github_client.py). Grep for `api.github.com` to see the complete list.
+3. **Webhook delivery history.** Your GitHub App's "Recent Deliveries" page shows every payload we received and the response we sent back.
+4. **Install on a test repo first.** The most reliable verification is empirical. Spend a day with the App installed on a throwaway repository before you grant access to anything that matters.
+
+## How we secure our side
+
+Boundaries on the GitHub side only matter if the credentials they protect are themselves secured. On our infrastructure:
+
+- **Private key in Secret Manager.** Never an environment variable, never in source control, never in Terraform state. See [security.mdx](/docs/RunnerForge/design/security) for details.
+- **Least-privilege service account.** The orchestrator's GCP service account has the minimum IAM roles required — VM management and secret access, nothing else.
+- **Webhook signature validation.** Every incoming request is HMAC-SHA256 verified against the webhook secret before any processing. Unauthenticated callers cannot trigger VM creation.
+- **No data persistence.** The orchestrator is stateless. We do not store your job IDs, repository names, or any other data beyond Cloud Logging (which retains for the GCP project's standard log retention — typically 30 days).
+
+## Comparison to alternatives
+
+The GitHub App pattern is the *least bad* available primitive for this job. The alternatives are worse, not better:
+
+| Approach | Scope | Lifetime | Revocability |
+|---|---|---|---|
+| Personal Access Token | All your repos (or all you tick) | Until manually rotated | Manual |
+| OAuth App | Whatever scopes you grant | Until manually revoked | Per-token |
+| **GitHub App (RunnerForge)** | Only repos you explicitly install on | Installation tokens auto-expire hourly | Per-installation, immediate |
+
+If you are uncomfortable with a GitHub App, you are not going to be more comfortable with a PAT.
+
+## If our private key leaks
+
+The recovery procedure is one step, and it invalidates every token ever issued under that key:
+
+1. Go to your GitHub App settings → **Private keys** → **Generate a private key**. Optionally **Revoke** the old key in the same panel.
+
+That's it. All in-flight installation tokens minted under the old key become invalid immediately. New tokens minted under the new key are unaffected. **You, as a user, do nothing.** The change is transparent on your end.
+
+We publish post-mortems for any incident that touches user credentials.
+
+## Open issues and known limitations
+
+In the spirit of not pretending things are better than they are:
+
+- **Administration permission is coarser than we want.** Tracking GitHub's roadmap; will switch the moment a granular self-hosted-runners permission is available.
+- **No formal SOC 2 / security certification.** This is a portfolio platform engineering project, not a commercial service. Security claims here are auditable via the open-source codebase; they are not third-party attested.
+- **No bug bounty program yet.** Security issues should be filed as private GitHub Security Advisories on the repository.
+
+Last reviewed: 2026-05-27.

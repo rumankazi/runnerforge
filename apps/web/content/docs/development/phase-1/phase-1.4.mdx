@@ -1,0 +1,284 @@
+---
+title: Phase 1.4
+description: Logging and testing framework
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+Since we would be monitoring our app through google cloud logging, it is essential that we log data in consistent and accessible format to make our job easy to create dashboards as we need. This also helps us in writing tests for our code.
+
+## Logging
+
+Key things we had to focus for this:
+
+- Ensure we have json formatted logs
+  <Callout title="Why json format?">
+    In Cloud Monitoring you can define a metric like "count of log entries where
+    `jsonPayload.event=registration_token_issued`" or "distribution of `jsonPayload.duration_ms`
+    grouped by endpoint"
+  </Callout>
+- Override uvicorn's log emitter to match our expected log format
+
+### JSON Formatted Logs
+
+Cloud Run captures everything you write to stdout/stderr and ships it to Cloud Logging automatically. The difference between plain text and JSON is what happens on the receiving end:
+
+Plain text → becomes a `textPayload` log entry. One opaque string. Searchable but not queryable.
+JSON on stdout → Cloud Logging parses it into a `jsonPayload`, and certain field names get special treatment:
+
+| Field you emit                  | What cloud logging does with it                                     |
+| ------------------------------- | ------------------------------------------------------------------- |
+| `severity`                      | Maps to log levels (INFO/WARNING/ERROR) — drives filtering & alerts |
+| `message`                       | Becomes the main display string                                     |
+| `logging.googleapis.com/trace`  | Links the log to a distributed trace                                |
+| `logging.googleapis.com/spanId` | Links to a specific span within the trace                           |
+| `httpRequest` (structured)      | Cloud Logging renders status/latency/method as first-class fields   |
+
+How it would appear for our hand-rolled formatter:
+
+```python title="logger.py"
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        extras = _extract_extras(record)
+        formatted_record = {
+            "severity": record.levelname,
+            "message": record.getMessage(),
+            "timestamp": datetime.fromtimestamp(
+                record.created, tz=timezone.utc
+            ).isoformat(),
+            "logger": record.name,
+            # Additional google api logging, helpful for tracing in log explorer
+            "logging.googleapis.com/sourceLocation": {
+                "file": record.pathname,
+                "line": str(record.lineno),  # Cloud Logging spec requires a string
+                "function": record.funcName,
+            },
+        }
+        formatted_record.update(extras)
+        # Exception handling
+        if record.exc_info:
+            formatted_record["exception"] = self.formatException(record.exc_info)
+        return json.dumps(formatted_record, default=str)
+```
+
+### Performance-monitoring framework
+
+The standard framing for a request-driven service like runnerforge is the **RED Method**:
+
+- Rate (req/se)
+- Errors (% failed)
+- Duration (latency, usually p50/p95/p99)
+
+If these are healthy, then our service can be considered as healthy.
+
+Different layers of framework:
+
+#### Layer 1 - Cloud Run built-ins (free, on by default) [achieved]
+
+Cloud Run already exports request_count, request_latencies, instance_count, cpu/memory utilization under `run.googleapis.com/`. You get a coarse-grained RED view immediately. Good for "is the service alive and roughly fast."
+
+<Callout type="warn">Bad for per-endpoint breakdown — it's per-revision, not per-route.</Callout>
+
+#### Layer 2 - OpenTelemetry FastAPI instrumentation
+
+`opentelemetry-instrumentation-fastapi` auto-records latency histograms per route, per status code, with two lines of setup. Ship to Cloud Monitoring via the GCP exporter. _Now_ you can see "p95 of POST /webhook went from 80s to 240ms after the registration-token PR" and slice by route. This is what catches regressions.
+
+After our first deployment, how we would be adding opentelemetry
+
+<Steps>
+  <Step>
+    New dependencies in `pyproject.toml`
+
+    ```toml title="pyproject.toml"
+    opentelemetry-api
+    opentelemetry-sdk
+    opentelemetry-instrumentation-fastapi
+    opentelemetry-exporter-gcp-trace #exports traces to Cloud Trace
+    ```
+
+  </Step>
+
+  <Step>
+    Startup wiring (in `main.py`, near `setup_logging()`)
+
+    ```python
+    from opentelemetry import trace
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
+
+    trace.set_tracer_provider(TracerProvider())
+    trace.get_tracer_provider().add_span_processor(
+        BatchSpanProcessor(CloudTraceSpanExporter())
+    )
+
+    setup_logging()
+    app = FastAPI()
+    FastAPIInstrumentor.instrument_app(app)  # auto-creates spans per request
+    ```
+    That's the entire instrumentation. FastAPIInstrumentor wraps every route in a span automatically — you don't manually start/end spans for routes.
+
+  </Step>
+
+  <Step>
+    ContextFilter update (in `logger.py`)
+
+    ```python title="logger.py"
+    import os
+    from opentelemetry import trace as otel_trace
+
+    class ContextFilter(logging.Filter):
+        def filter(self, record):
+            # Existing LogContext fields
+            for name, value in asdict(_context_var.get()).items():
+                if value is not None:
+                    setattr(record, name, value)
+
+            # New: OTel trace context — read from runtime, not LogContext
+            span = otel_trace.get_current_span()
+            span_ctx = span.get_span_context()
+            if span_ctx.is_valid:
+                project = os.environ.get("GOOGLE_CLOUD_PROJECT", "local")
+                trace_hex = f"{span_ctx.trace_id:032x}"
+                span_hex = f"{span_ctx.span_id:016x}"
+                record.__dict__["logging.googleapis.com/trace"] = (
+                    f"projects/{project}/traces/{trace_hex}"
+                )
+                record.__dict__["logging.googleapis.com/spanId"] = span_hex
+            return True
+
+    ```
+
+  </Step>
+</Steps>
+
+**Local-dev consideration**
+
+Without `GOOGLE_CLOUD_PROJECT` set and no exporter configured for local, OTel still creates spans (in-process), and the filter will still emit the trace field — but the project will be `"local"` and there's no Cloud Trace to link to. Two options for local:
+
+Skip the OTel block when `K_SERVICE` is absent — your existing env switch in `setup_logging()`. Filter stays clean locally. Add a flag to ContextFilter (`emit_trace: bool`), set True in the JSON-formatter branch, False in the ColorFormatter branch.
+
+#### Layer 3 - Tracing (Cloud Trace, also via OTel)
+
+Same setup adds distributed traces: a single request becomes a tree of spans (HMAC check → Github installation token call → registration token call → response). When p95 latency jumps, traces tell you which span got slow. Indispensable once you have multiple collaborators (Github API, GCP APIs, future runner pool).
+
+<Callout title="Layer 3 is mostly enabled by Layer 2's wiring">
+  OTel uses a single pipeline. The `TracerProvider` + `BatchSpanProcessor` +
+  `CloudTraceSpanExporter` from Layer 2 already produces traces and ships them to Cloud Trace. The
+  `ContextFilter` update from Layer 2 already correlates logs to those traces via
+  `logging.googleapis.com/trace`. What's left for Layer 3 is making the trace tree _useful_:
+  instrumenting outbound calls so they appear as child spans, and verifying the correlation works
+  end-to-end.
+</Callout>
+
+After Layer 2 is in place:
+
+<Steps>
+  <Step>
+    Auto-instrument httpx so outbound calls appear as child spans
+
+    Without this, traces show only the FastAPI request envelope — every outbound GitHub API
+    call is invisible, defeating the point of tracing.
+
+    Add to deps:
+
+    ```toml title="pyproject.toml"
+    opentelemetry-instrumentation-httpx
+    ```
+
+    Wire alongside the FastAPI instrumentor:
+
+    ```python title="main.py"
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+    HTTPXClientInstrumentor().instrument()
+    ```
+
+    Every `httpx.AsyncClient()` call now becomes a child span automatically — including the
+    installation token and registration token calls in `github_client.py`.
+
+  </Step>
+
+  <Step>
+    Verify log ↔ trace correlation in Cloud Logging
+
+    The trace field is already emitted by the Layer 2 `ContextFilter` change. To confirm
+    the round-trip works after deploy:
+
+    1. Trigger a webhook from a test repo.
+    2. In Cloud Logging, find a log entry for that request (filter by `jsonPayload.request_id`).
+    3. Click the trace icon on the log entry — Cloud Trace should open the full span tree:
+       FastAPI request → HMAC verify → GitHub installation token call → registration token call.
+
+    If the trace icon is missing, the `GOOGLE_CLOUD_PROJECT` env var likely isn't set on the
+    Cloud Run service (it usually is by default — verify in service config).
+
+  </Step>
+
+  <Step>
+    (Optional) Add custom spans for non-HTTP work
+
+    Auto-instrumentation covers the request envelope and outbound HTTP calls but doesn't see
+    internal logic. For boundaries worth measuring on their own (e.g., VM creation, queue
+    operations):
+
+    ```python
+    from opentelemetry import trace
+    tracer = trace.get_tracer(__name__)
+
+    async def handle_queued(event):
+        with tracer.start_as_current_span("create_vm") as span:
+            span.set_attribute("job_id", event.workflow_job.id)
+            # ... VM creation work ...
+    ```
+
+    Only wrap boundaries that are worth seeing as a separate row in the trace UI. Don't wrap
+    every function — span overhead adds up and the trace becomes noise.
+
+  </Step>
+</Steps>
+
+#### Layer 4 - Business/custom metrics
+
+OTel meters for things Cloud Run doesn't know about: registrations issued per minute, active runners, queue depth. Defined in your code with `meter.create_counter(...)`.
+
+**The correlation trick**: if you put the trace ID into your JSON log under logging.googleapis.com/trace, then in Cloud Logging you click a log line and Cloud Trace shows you the whole request flow. This is the killer feature of doing all three (logs + metrics + traces) and the reason people standardize on OTel.
+
+### Catching regressions specifically
+
+Three complementary benchmarks
+
+#### CI benchmarks
+
+Pytest-benchmark or a plain assertion assert duration < 200ms. Catches gross regressions before deploy. Noisy on CI hardware; treat as a smoke test, not a precise SLO.
+
+#### Production SLOs + alerts
+
+Define a target ("p95 webhook latency under 250ms"), let Cloud Monitoring alert when burn rate exceeds it. Catches anything CI misses, including environment-driven slowdowns.
+
+#### Canary deploys via Cloud Run traffic split
+
+Cloud Run lets you send N% of traffic to a new revision. Watch metrics for 15min, promote or roll back. This is how you avoid a regression hitting 100% of users.
+
+## Deployment revision markers
+
+We need to inject the revision/version information during container build time with:
+
+```docker
+ARG APP_VERSION
+ARG GIT_SHA
+ENV APP_VERSION=$APP_VERSION
+ENV GIT_SHA=$GIT_SHA
+```
+
+Currently wired up in `logger.py`, added to ContextFilters.
+
+## Testing
+
+Unit and integration tests have been added. Coverage achieved to 100%!!
+
+Using pytest for framework, respx for mocking httpx requests and caplog for checking LogRecords.
+
+Testsuite is self-explanatory and would keep evolving and updating.
