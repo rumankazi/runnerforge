@@ -92,3 +92,20 @@ jobs:
       - name: Stop container
         if: always()
         run: docker rm -f probe
+
+      - name: Trivy scan
+        if: always()
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: orchestrator:probe
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: false
+          format: table
+
+      - name: Generate SBOM
+        if: always()
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: orchestrator:probe
+          format: cyclonedx-json
