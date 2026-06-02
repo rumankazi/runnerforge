@@ -3,5 +3,42 @@
   "extends": [
     "config:recommended",
     "helpers:pinGitHubActionDigestsToSemver"
+  ],
+  "rebaseWhen": "behind-base-branch",
+  "platformAutomerge": true,
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions",
+      "matchUpdateTypes": ["digest", "patch", "minor"],
+      "automerge": true
+    },
+    {
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
+    },
+    {
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    },
+    {
+      "matchCategories": ["security"],
+      "groupName": "security advisories",
+      "automerge": true,
+      "prPriority": 10
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["^infra/packer/scripts/install-runner\\.sh$"],
+      "matchStrings": [
+        "RUNNER_VERSION=\"(?<currentValue>[0-9.]+)\""
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "actions/runner",
+      "extractVersionTemplate": "^v?(?<version>.+)$"
+    }
   ]
 }
