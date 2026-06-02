@@ -81,6 +81,53 @@ The GitHub App private key must be stored securely. Options for GCP:
 
 For the initial build, Secret Manager is the target. The Terraform configuration should create the secret and grant the Cloud Run service account read access.
 
+## CI authentication (Workload Identity Federation)
+
+GitHub Actions workflows authenticate to GCP via short-lived federated tokens, never long-lived service account keys. See [ADR-007](/docs/RunnerForge/design/decisions#workload-identity-federation-over-service-account-keys-for-ci-auth) for the decision and trade-offs.
+
+### Trust chain
+
+<Steps>
+  <Step>
+    **GitHub issues an OIDC token.** When a job runs with `permissions: id-token: write`, GitHub Actions signs a short-lived JWT (~10 minutes) asserting the run's identity: `repository`, `ref`, `workflow`, `actor`, `sub`. Signed by GitHub's OIDC issuer (`token.actions.githubusercontent.com`), verifiable via its public JWKS.
+  </Step>
+  <Step>
+    **GCP exchanges the OIDC token via STS.** A Workload Identity Pool + Provider trusts the GitHub issuer. The provider's `attribute_condition` is evaluated against the token's claims; only matches receive a federated identity.
+
+    Condition (Phase 2.1):
+
+    ```
+    assertion.repository_owner == 'rumankazi'
+      && assertion.repository == 'rumankazi/runnerforge'
+      && assertion.ref == 'refs/heads/main'
+    ```
+
+    Workflows on forks or feature branches fail the exchange at this layer.
+  </Step>
+  <Step>
+    **The federated identity impersonates a target SA.** Each CI service account has a `roles/iam.workloadIdentityUser` binding for the pool's principalSet. The workflow ends up holding a Google access token scoped to that SA, valid ~1 hour.
+  </Step>
+</Steps>
+
+### Service account split
+
+Two dedicated CI service accounts, each impersonatable by workflows that match the `attribute_condition`:
+
+| SA | Purpose | IAM roles (target state) |
+|---|---|---|
+| `ci-build` | Build container images, deploy Cloud Run | `roles/artifactregistry.writer`, `roles/run.developer`, `roles/iam.serviceAccountUser` on the orchestrator runtime SA |
+| `ci-terraform` | Run `terraform apply` | State bucket object access, IAM admin (project), Secret Manager admin, Cloud Scheduler admin |
+
+Phase 2.1 ships both with `roles/viewer` only; permissions widen per subsequent sub-phase as workflows that need them are added.
+
+<Callout type="success" title="No portable secret">
+  Nothing exfiltratable exists. The OIDC token is bound cryptographically to a specific repo + ref + run, and STS rejects exchanges that don't match `attribute_condition`. The downstream access token is ~1 hour. No signing key material lives outside Google's STS and GitHub's OIDC issuer; `gcloud iam service-accounts keys list` shows only Google-managed system keys.
+</Callout>
+
+### Audit trail
+
+Every WIF exchange is logged in Cloud Audit Logs under the `sts.googleapis.com` service. The log entry includes the GitHub repository, workflow file, run ID, and the target SA that was impersonated — full traceability of which workflow run performed which action.
+
 ## IAM and least privilege
 
 The Cloud Run service runs with a dedicated service account (not the default compute service account). This service account is granted only the permissions it needs.
