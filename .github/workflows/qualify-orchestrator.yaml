@@ -33,7 +33,7 @@ jobs:
       - name: Mise activation
         uses: jdx/mise-action@v2
         with:
-          working-directory: apps/orchestrator
+          working_directory: apps/orchestrator
 
       - name: Sync packages
         run: uv sync --frozen
