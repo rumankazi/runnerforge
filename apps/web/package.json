@@ -14,7 +14,7 @@
     "@excalidraw/excalidraw": "^0.18.1",
     "@radix-ui/react-tabs": "^1.1.13",
     "class-variance-authority": "^0.7.1",
-    "fumadocs-core": "16.8.11",
+    "fumadocs-core": "16.9.3",
     "fumadocs-mdx": "15.0.6",
     "fumadocs-ui": "16.8.11",
     "lucide-react": "^1.16.0",
