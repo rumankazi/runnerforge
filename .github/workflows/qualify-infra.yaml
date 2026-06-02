@@ -3,13 +3,13 @@ name: Qualify Infra
 on:
   pull_request:
     paths:
-      - 'apps/infra/terraform/**'
+      - 'infra/terraform/**'
       - '.github/workflows/qualify-infra.yaml'
 
   push:
     branches: [main]
     paths:
-      - 'apps/infra/terraform/**'
+      - 'infra/terraform/**'
       - '.github/workflows/qualify-infra.yaml'
 
 permissions:
@@ -17,7 +17,7 @@ permissions:
 
 defaults:
   run:
-    working-directory: apps/infra/terraform
+    working-directory: 'infra/terraform'
 
 concurrency:
   group: qualify-infra-${{ github.ref }}
