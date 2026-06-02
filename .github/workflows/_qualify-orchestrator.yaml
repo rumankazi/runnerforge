@@ -6,14 +6,13 @@ on:
 permissions:
   contents: read
 
-defaults:
-  run:
-    working-directory: apps/orchestrator
-
 jobs:
   qualify-orchestrator:
-    name: 🔱
+    name: 🐍
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/orchestrator
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -36,3 +35,54 @@ jobs:
 
       - name: 🧪
         run: uv run pytest
+
+  container-test:
+    name: 🐳
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build test stage
+        run: docker build -f apps/orchestrator/Dockerfile --target test .
+
+      - name: Build runtime stage
+        run: docker build -f apps/orchestrator/Dockerfile --target runtime -t orchestrator:probe .
+
+      - name: Generate throwaway RSA key
+        run: openssl genrsa -out /tmp/probe-key.pem 2048
+
+      - name: Start container
+        run: |
+          docker run -d \
+            --name probe \
+            -p 8000:8000 \
+            -v /tmp/probe-key.pem:/secrets/private-key.pem:ro \
+            -e GITHUB_WEBHOOK_SECRET=ci-probe-not-a-secret \
+            -e GITHUB_APP_ID=12345 \
+            -e GITHUB_APP_PRIVATE_KEY_PATH=/secrets/private-key.pem \
+            -e GCP_PROJECT_ID=ci-probe-project \
+            -e EXPECTED_SCHEDULER_SA_EMAIL=ci-probe@example.iam.gserviceaccount.com \
+            -e EXPECTED_AUDIENCE=https://ci-probe.example \
+            orchestrator:probe
+
+      - name: Wait for /health
+        run: |
+          for i in {1..15}; do
+            if curl -sf http://localhost:8000/health; then
+              echo
+              echo "Health check passed"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Container did not respond to /health within 15s"
+          exit 1
+
+      - name: Container logs
+        if: always()
+        run: docker logs probe
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f probe
