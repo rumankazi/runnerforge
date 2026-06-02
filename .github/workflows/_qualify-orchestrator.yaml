@@ -81,8 +81,8 @@ jobs:
 
       - name: Container logs
         if: always()
-        run: docker logs prob
+        run: docker logs probe
 
       - name: Stop container
         if: always()
-        run: docker rm -f prob
+        run: docker rm -f probe
