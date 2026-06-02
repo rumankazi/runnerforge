@@ -1,5 +1,6 @@
 # ------- Stage 1: base — prod deps only, no project code -------
-FROM python:3.14-slim AS base
+FROM public.ecr.aws/docker/library/python:3.14-slim AS base
+
 WORKDIR /app
 
 # Copy uv binary from official image (no pip install needed)
