@@ -39,26 +39,28 @@ jobs:
       target: ${{ steps.parse.outputs.target }}
     steps:
       - id: parse
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          DISPATCH_ACTION: ${{ github.event.inputs.action }}
+          DISPATCH_TARGET: ${{ github.event.inputs.target }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            TAG="${{ github.event.release.tag_name }}"
-            if [[ ! "$TAG" =~ ^orchestrator-v ]]; then
-              echo "Tag '$TAG' is not an orchestrator-v* release — skipping."
-              echo "action=skip"   >> "$GITHUB_OUTPUT"
-              echo "target="       >> "$GITHUB_OUTPUT"
+          if [[ "$EVENT_NAME" == "release" ]]; then
+            if [[ ! "$TAG_NAME" =~ ^orchestrator-v ]]; then
+              echo "Tag '$TAG_NAME' is not an orchestrator-v* release — skipping."
+              echo "action=skip" >> "$GITHUB_OUTPUT"
+              echo "target="     >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            VERSION="${TAG#orchestrator-v}"
+            VERSION="${TAG_NAME#orchestrator-v}"
             echo "Release deploy: $VERSION"
             echo "action=deploy"   >> "$GITHUB_OUTPUT"
             echo "target=$VERSION" >> "$GITHUB_OUTPUT"
           else
-            ACTION="${{ github.event.inputs.action }}"
-            TARGET="${{ github.event.inputs.target }}"
-            echo "Dispatch $ACTION: $TARGET"
-            echo "action=$ACTION"  >> "$GITHUB_OUTPUT"
-            echo "target=$TARGET"  >> "$GITHUB_OUTPUT"
+            echo "Dispatch $DISPATCH_ACTION: $DISPATCH_TARGET"
+            echo "action=$DISPATCH_ACTION" >> "$GITHUB_OUTPUT"
+            echo "target=$DISPATCH_TARGET" >> "$GITHUB_OUTPUT"
           fi
 
   build:
@@ -66,8 +68,12 @@ jobs:
     needs: setup
     if: needs.setup.outputs.action == 'deploy'
     runs-on: ubuntu-latest
+    env:
+      TARGET: ${{ needs.setup.outputs.target }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.3
+        with:
+          persist-credentials: false
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
@@ -84,24 +90,25 @@ jobs:
           docker build \
             -f apps/orchestrator/Dockerfile \
             --target runtime \
-            -t "${AR_HOST}/${AR_REPO}:${{ needs.setup.outputs.target }}" \
+            -t "${AR_HOST}/${AR_REPO}:${TARGET}" \
             .
 
       - name: Push to Artifact Registry
-        run: docker push "${AR_HOST}/${AR_REPO}:${{ needs.setup.outputs.target }}"
+        run: docker push "${AR_HOST}/${AR_REPO}:${TARGET}"
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Cosign keyless sign (Sigstore + Rekor)
         run: |
-          cosign sign --yes \
-            "${AR_HOST}/${AR_REPO}:${{ needs.setup.outputs.target }}"
+          cosign sign --yes "${AR_HOST}/${AR_REPO}:${TARGET}"
 
   canary:
     name: Canary 5%
     needs: [setup, build]
     if: needs.setup.outputs.action == 'deploy'
     runs-on: ubuntu-latest
+    env:
+      TARGET: ${{ needs.setup.outputs.target }}
     outputs:
       revision_name: ${{ steps.deploy.outputs.revision_name }}
     steps:
@@ -118,7 +125,7 @@ jobs:
           set -euo pipefail
           REV=$(gcloud run services update "${SERVICE}" \
             --region "${REGION}" \
-            --image "${AR_HOST}/${AR_REPO}:${{ needs.setup.outputs.target }}" \
+            --image "${AR_HOST}/${AR_REPO}:${TARGET}" \
             --no-traffic \
             --format='value(status.latestCreatedRevisionName)' \
             --quiet)
@@ -126,10 +133,12 @@ jobs:
           echo "revision_name=$REV" >> "$GITHUB_OUTPUT"
 
       - name: Send 5% traffic to new revision
+        env:
+          REVISION: ${{ steps.deploy.outputs.revision_name }}
         run: |
           gcloud run services update-traffic "${SERVICE}" \
             --region "${REGION}" \
-            --to-revisions="${{ steps.deploy.outputs.revision_name }}=5" \
+            --to-revisions="${REVISION}=5" \
             --quiet
 
   ramp:
@@ -140,6 +149,8 @@ jobs:
     environment:
       name: prod
       url: https://runnerforge-orchestrator-gsqedgmwha-ez.a.run.app
+    env:
+      REVISION: ${{ needs.canary.outputs.revision_name }}
     steps:
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
@@ -152,7 +163,7 @@ jobs:
         run: |
           gcloud run services update-traffic "${SERVICE}" \
             --region "${REGION}" \
-            --to-revisions="${{ needs.canary.outputs.revision_name }}=100" \
+            --to-revisions="${REVISION}=100" \
             --quiet
 
   rollback:
@@ -163,6 +174,8 @@ jobs:
     environment:
       name: prod
       url: https://runnerforge-orchestrator-gsqedgmwha-ez.a.run.app
+    env:
+      REVISION: ${{ needs.setup.outputs.target }}
     steps:
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
@@ -175,5 +188,5 @@ jobs:
         run: |
           gcloud run services update-traffic "${SERVICE}" \
             --region "${REGION}" \
-            --to-revisions="${{ needs.setup.outputs.target }}=100" \
+            --to-revisions="${REVISION}=100" \
             --quiet
