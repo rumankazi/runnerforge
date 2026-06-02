@@ -1,4 +1,4 @@
-name: Deploy Orchestrator
+clientname: Deploy Orchestrator
 
 on:
   release:
