@@ -36,6 +36,9 @@ jobs:
       - name: Bandit
         run: uv run bandit -r src/ -ll -ii
 
+      - name: pip-audit
+        run: uv run pip-audit --skip-editable
+
       - name: 🧪
         run: uv run pytest
 
