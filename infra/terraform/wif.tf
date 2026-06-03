@@ -46,19 +46,31 @@ resource "google_service_account_iam_member" "ci_terraform_wif" {
   member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github_pool.workload_identity_pool_id}/attribute.repository/rumankazi/runnerforge"
 }
 
-# --- Project-level perms for the 2.1 smoke ---
-# Both SAs only need read access for `gcloud projects describe`. Widened in 2.2 / 2.4.
+# --- ci-build CD perms ---
+# Minimum perms to: push orchestrator images to AR, deploy Cloud Run revisions,
+# and run those revisions as the orchestrator runtime SA. No secret/scheduler
+# admin — those stay with ci-terraform.
 
-resource "google_project_iam_member" "ci_build_viewer" {
-  project = data.google_project.current.project_id
-  role    = "roles/viewer"
-  member  = "serviceAccount:${google_service_account.ci_build.email}"
+resource "google_artifact_registry_repository_iam_member" "ci_build_ar_writer" {
+  project    = data.google_project.current.project_id
+  location   = google_artifact_registry_repository.orchestrator.location
+  repository = google_artifact_registry_repository.orchestrator.repository_id
+  role       = "roles/artifactregistry.writer"
+  member     = "serviceAccount:${google_service_account.ci_build.email}"
 }
 
-resource "google_project_iam_member" "ci_terraform_viewer" {
-  project = data.google_project.current.project_id
-  role    = "roles/viewer"
-  member  = "serviceAccount:${google_service_account.ci_terraform.email}"
+resource "google_cloud_run_v2_service_iam_member" "ci_build_run_developer" {
+  project  = data.google_project.current.project_id
+  location = google_cloud_run_v2_service.orchestrator.location
+  name     = google_cloud_run_v2_service.orchestrator.name
+  role     = "roles/run.developer"
+  member   = "serviceAccount:${google_service_account.ci_build.email}"
+}
+
+resource "google_service_account_iam_member" "ci_build_act_as_orchestrator" {
+  service_account_id = google_service_account.orchestrator.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.ci_build.email}"
 }
 
 # --- Outputs the workflow file needs ---
