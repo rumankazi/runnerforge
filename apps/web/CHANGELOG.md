@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/rumankazi/runnerforge/compare/web-v1.0.1...web-v1.0.2) (2026-06-04)
+
+
+### Bug Fixes
+
+* **deps:** update dependency fumadocs-mdx to v15.0.10 ([#3](https://github.com/rumankazi/runnerforge/issues/3)) ([c08796f](https://github.com/rumankazi/runnerforge/commit/c08796fe6dd895d7ab4a87ebedab3201d8b140e4))
+
 ## [1.0.1](https://github.com/rumankazi/runnerforge/compare/web-v1.0.0...web-v1.0.1) (2026-06-03)
 
 
