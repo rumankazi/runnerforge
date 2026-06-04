@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.2.0...orchestrator-v0.2.1) (2026-06-04)
+
+
+### Bug Fixes
+
+* skip fast for non-runnerforge labels ([#41](https://github.com/rumankazi/runnerforge/issues/41)) ([df6f962](https://github.com/rumankazi/runnerforge/commit/df6f96287ab9a7f072cdc7849975edb1b1351e23))
+
 ## [0.2.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.1.3...orchestrator-v0.2.0) (2026-06-02)
 
 
