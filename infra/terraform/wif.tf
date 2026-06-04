@@ -12,7 +12,12 @@ resource "google_iam_workload_identity_pool_provider" "github_pool_provider" {
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
   }
-  attribute_condition = "assertion.repository_owner == 'rumankazi' && assertion.repository == 'rumankazi/runnerforge' && assertion.ref == 'refs/heads/main'"
+  attribute_condition = join(" && ", [
+    "assertion.repository_owner == 'rumankazi'",
+    "assertion.repository == 'rumankazi/runnerforge'",
+    "assertion.job_workflow_ref == 'rumankazi/runnerforge/.github/workflows/deploy-orchestrator.yaml@refs/heads/main'",
+  ])
+
   attribute_mapping = {
     "google.subject"             = "assertion.sub",
     "attribute.repository"       = "assertion.repository",
