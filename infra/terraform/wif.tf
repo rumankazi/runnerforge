@@ -23,7 +23,7 @@ resource "google_iam_workload_identity_pool_provider" "github_pool_provider" {
     "attribute.repository"       = "assertion.repository",
     "attribute.repository_owner" = "assertion.repository_owner",
     "attribute.ref"              = "assertion.ref",
-    "attribute.workflow_path"     = "assertion.job_workflow_ref.split('@')[0]"
+    "attribute.workflow_path"    = "assertion.job_workflow_ref.split('@')[0]"
   }
 
 }
