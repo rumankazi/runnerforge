@@ -1,41 +1,45 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended",
-    "helpers:pinGitHubActionDigestsToSemver"
-  ],
-  "rebaseWhen": "behind-base-branch",
-  "platformAutomerge": true,
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigestsToSemver", ":semanticCommits"],
+  "rebaseWhen": "conflicted",
+  "labels": ["deps"],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "autoApprove": true,
+    "automerge": true
+  },
+  "major": {
+    "autoApprove": false,
+    "addLabels": ["major", "{{depName}}"],
+    "dependencyDashboardApproval": true
+  },
+  "minor": {
+    "autoApprove": false,
+    "addLabels": ["minor", "{{depName}}"]
+  },
+  "patch": {
+    "autoApprove": true,
+    "addLabels": ["patch", "{{depName}}"]
+  },
   "packageRules": [
     {
-      "matchManagers": ["github-actions"],
-      "groupName": "github actions",
-      "matchUpdateTypes": ["digest", "patch", "minor"],
-      "automerge": true
+      "groupName": "all minor dependencies",
+      "groupSlug": "all-minor",
+      "matchPackageNames": ["*"],
+      "matchUpdateTypes": "minor"
     },
     {
-      "matchDepTypes": ["devDependencies"],
-      "matchUpdateTypes": ["patch"],
-      "automerge": true
-    },
-    {
-      "matchUpdateTypes": ["major"],
-      "automerge": false
-    },
-    {
-      "matchCategories": ["security"],
-      "groupName": "security advisories",
-      "automerge": true,
-      "prPriority": 10
+      "groupName": "all patch dependencies",
+      "groupSlug": "all-patch",
+      "matchPackageNames": ["*"],
+      "matchUpdateTypes": "patch"
     }
   ],
   "customManagers": [
     {
       "customType": "regex",
-      "managerFilePatterns": ["^infra/packer/scripts/install-runner\\.sh$"],
-      "matchStrings": [
-        "RUNNER_VERSION=\"(?<currentValue>[0-9.]+)\""
-      ],
+      "managerFilePatterns": ["infra/packer/scripts/install-runner.sh"],
+      "matchStrings": ["RUNNER_VERSION=\"(?<currentValue>[0-9.]+)\""],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "actions/runner",
       "extractVersionTemplate": "^v?(?<version>.+)$"
