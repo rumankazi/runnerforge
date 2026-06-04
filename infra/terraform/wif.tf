@@ -15,7 +15,7 @@ resource "google_iam_workload_identity_pool_provider" "github_pool_provider" {
   attribute_condition = join(" && ", [
     "assertion.repository_owner == 'rumankazi'",
     "assertion.repository == 'rumankazi/runnerforge'",
-    "assertion.job_workflow_ref == 'rumankazi/runnerforge/.github/workflows/deploy-orchestrator.yaml@refs/heads/main'",
+    "assertion.job_workflow_ref.startsWith('rumankazi/runnerforge/.github/workflows/deploy-orchestrator.yaml@')"
   ])
 
   attribute_mapping = {
