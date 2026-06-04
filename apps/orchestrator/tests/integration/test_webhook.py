@@ -168,7 +168,7 @@ def test_webhook_completed_event_triggers_vm_deletion(
 
 
 @respx.mock
-def test_webhook_completed_event_warns_when_no_vm_found(
+def test_webhook_completed_event_logs_when_no_vm_found(
     fixtures_dir, monkeypatch, caplog
 ):
     payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
@@ -188,8 +188,7 @@ def test_webhook_completed_event_warns_when_no_vm_found(
     assert response.status_code == 200
     delete_mock.assert_not_awaited()
     assert any(
-        r.levelno == logging.WARNING and "No VM found" in r.message
-        for r in caplog.records
+        r.levelno == logging.INFO and "No VM found" in r.message for r in caplog.records
     )
 
 
@@ -205,5 +204,23 @@ def test_webhook_unknown_action_logs_warning(fixtures_dir, caplog):
     assert response.status_code == 200
     assert any(
         r.levelno == logging.WARNING and "ignoring unknown action" in r.message.lower()
+        for r in caplog.records
+    )
+
+
+@respx.mock
+def test_webhook_without_runnerforge_label_skips_processing(fixtures_dir, caplog):
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    workflow_job = payload["workflow_job"]
+    workflow_job["labels"] = ["not-runnerforge-label"]  # not in our match arms
+    body = json.dumps(payload).encode()
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+        )
+    assert response.status_code == 200
+    assert any(
+        r.levelno == logging.INFO
+        and "skipping! not a runnerforge request" in r.message.lower()
         for r in caplog.records
     )

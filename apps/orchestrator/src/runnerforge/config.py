@@ -21,3 +21,6 @@ STARTUP_SCRIPT = (
 # for /sweep endpoint
 EXPECTED_SCHEDULER_SA_EMAIL = os.environ["EXPECTED_SCHEDULER_SA_EMAIL"]
 EXPECTED_AUDIENCE = os.environ["EXPECTED_AUDIENCE"]
+
+# Detect as runnerforge request if one of the labels found
+RUNNERFORGE_LABELS = ["runnerforge"]

@@ -9,6 +9,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from runnerforge.config import (
     EXPECTED_AUDIENCE,
     EXPECTED_SCHEDULER_SA_EMAIL,
+    RUNNERFORGE_LABELS,
     WEBHOOK_SECRET,
 )
 from runnerforge.handlers import handle_completed, handle_in_progress, handle_queued
@@ -90,6 +91,14 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         cause_hint="Webhook payload did not match the expected WorkflowJob schema. GitHub may have changed their payload format, or a non-workflow_job event was delivered.",
         logger=logger,
     )
+    # Stop fast for non-runnerforge requests
+    if not any(
+        runnerforge_label in event.workflow_job.labels
+        for runnerforge_label in RUNNERFORGE_LABELS
+    ):
+        logger.info("Skipping! Not a RunnerForge request")
+        return {"ok", True}
+
     # After "first" response(/webhook hit), setup the context vars
     update_context(
         repo=event.repository.full_name,

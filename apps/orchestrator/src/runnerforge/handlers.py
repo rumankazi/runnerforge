@@ -70,7 +70,7 @@ async def handle_completed(event: WorkflowJobEvent):
     vms = await find_vms_by_job_id(job_id)
 
     if not vms:
-        logger.warning(
+        logger.info(
             "No VM found for completed job (already cleaned up or never created)",
             extra={
                 "job_id": event.workflow_job.id,
