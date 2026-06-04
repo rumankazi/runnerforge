@@ -15,14 +15,15 @@ resource "google_iam_workload_identity_pool_provider" "github_pool_provider" {
   attribute_condition = join(" && ", [
     "assertion.repository_owner == 'rumankazi'",
     "assertion.repository == 'rumankazi/runnerforge'",
-    "assertion.job_workflow_ref.startsWith('rumankazi/runnerforge/.github/workflows/deploy-orchestrator.yaml@')"
+    "assertion.job_workflow_ref.startsWith('rumankazi/runnerforge/.github/workflows/deploy-')"
   ])
 
   attribute_mapping = {
     "google.subject"             = "assertion.sub",
     "attribute.repository"       = "assertion.repository",
     "attribute.repository_owner" = "assertion.repository_owner",
-    "attribute.ref"              = "assertion.ref"
+    "attribute.ref"              = "assertion.ref",
+    "attribute.workflow_path"    = "assertion.job_workflow_ref.split('@')[0]"
   }
 
 }
@@ -36,19 +37,7 @@ resource "google_service_account" "ci_build" {
 resource "google_service_account_iam_member" "ci_build_wif" {
   service_account_id = google_service_account.ci_build.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github_pool.workload_identity_pool_id}/attribute.repository/rumankazi/runnerforge"
-}
-
-resource "google_service_account" "ci_terraform" {
-  account_id   = "ci-terraform"
-  display_name = "RunnerForge CI Terraform"
-  description  = "Impersonated by GitHub Actions for terraform apply (state, IAM, secrets, scheduler)"
-}
-
-resource "google_service_account_iam_member" "ci_terraform_wif" {
-  service_account_id = google_service_account.ci_terraform.name
-  role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github_pool.workload_identity_pool_id}/attribute.repository/rumankazi/runnerforge"
+  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github_pool.workload_identity_pool_id}/attribute.workflow_path/rumankazi/runnerforge/.github/workflows/deploy-orchestrator.yaml"
 }
 
 # --- ci-build CD perms ---
@@ -88,9 +77,4 @@ output "wif_provider_name" {
 output "ci_build_sa_email" {
   value       = google_service_account.ci_build.email
   description = "SA email impersonated by build/deploy workflows."
-}
-
-output "ci_terraform_sa_email" {
-  value       = google_service_account.ci_terraform.email
-  description = "SA email impersonated by terraform-apply workflows."
 }
