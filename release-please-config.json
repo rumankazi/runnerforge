@@ -12,6 +12,10 @@
     "apps/web": {
       "release-type": "node",
       "package-name": "web"
+    },
+    "infra/packer": {
+      "release-type": "simple",
+      "package-name": "runner-image"
     }
   }
 }
