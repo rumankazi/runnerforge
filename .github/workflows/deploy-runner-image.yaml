@@ -1,0 +1,101 @@
+name: Deploy Runner Image
+
+on:
+  push:
+  release:
+    types: [published] # maybe we can narrow down on paths so that release-please doesn't trigger for other releases [web/orchestrator]
+  workflow_dispatch:
+    inputs:
+      action:
+        type: choice
+        description: 'deploy = full pipeline (build + publish → smoke test → promote to image family). rollback = remove image from the image family (instant, approval-gated)'
+        options: [deploy, rollback]
+        default: deploy
+      target:
+        description: 'For deploy: version (e.g. 1.2.3). For rollback: image name (e.g. runnerforge-runner-base-image-1.1.2)'
+        required: true
+
+permissions: {}
+
+defaults:
+  run:
+    working-directory: infra/packer
+
+concurrency:
+  group: deploy-runner-image
+  cancel-in-progress: false
+env:
+  WIF_PROVIDER: projects/8547588670/locations/global/workloadIdentityPools/github/providers/github
+  CI_RUNNER_IMAGE_BUILD_SA: ci-runner-image-build@runnerforge.iam.gserviceaccount.com
+  CI_VM_LOGGER_SA: ci-vm-logger@runnerforge.iam.gserviceaccount.com
+
+jobs:
+  setup:
+    name: Resolve target
+    runs-on: ubuntu-latest
+    outputs:
+      action: ${{ steps.parse.outputs.action }}
+      target: ${{ steps.parse.outputs.target }}
+    steps:
+      - id: parse
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          DISPATCH_ACTION: ${{ github.event.inputs.action }}
+          DISPATCH_TARGET: ${{ github.event.inputs.target }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "release" ]]; then
+            if [[ ! "$TAG_NAME" =~ ^runner-image-v ]]; then
+              echo "Tag '$TAG_NAME' is not an runner-image-v* release — skipping."
+              echo "action=skip" >> "$GITHUB_OUTPUT"
+              echo "target="     >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            VERSION="${TAG_NAME#runner-image-v}"
+            VERSION="${VERSION//./-}" # replacing dots with dashes
+            echo "Release deploy: $VERSION"
+            echo "action=deploy"   >> "$GITHUB_OUTPUT"
+            echo "target=$VERSION" >> "$GITHUB_OUTPUT"
+          else
+            echo "Dispatch $DISPATCH_ACTION: $DISPATCH_TARGET"
+            echo "action=$DISPATCH_ACTION" >> "$GITHUB_OUTPUT"
+            echo "target=$DISPATCH_TARGET" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build + Publish
+    needs: setup
+    if: needs.setup.outputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read    # actions/checkout
+      id-token: write   # WIF
+    env:
+      TARGET: ${{ needs.setup.outputs.target }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.CI_RUNNER_IMAGE_BUILD_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Setup `packer`
+        uses: hashicorp/setup-packer@3286471d6cc6756d056a0b199fea5e0becdbc189
+
+      - name: Run `packer init`
+        run: "packer init ./runner-image.pkr.hcl"
+
+      - name: Run `packer validate`
+        run: "packer validate ./runner-image.pkr.hcl"
+
+      - name: Build + publish image
+        run: |
+          packer init
+          # strip v prefix if present in TARGET
+          packer build ./runner-image.pkr.hcl -var "tag=${TARGET#v}"
