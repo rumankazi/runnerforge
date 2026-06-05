@@ -29,12 +29,6 @@ async def handle_queued(event: WorkflowJobEvent):
 
     # Create the VM with the registration token metadata
     vm_name = f"runnerforge-{event.workflow_job.id}"
-    labels = {
-        "runner": "runnerforge",
-        "job_id": str(event.workflow_job.id),
-        "repo": event.repository.full_name.replace("/", "_"),
-        "installation_id": str(event.installation.id),
-    }
 
     metadata = {
         "registration-token": registration_token,

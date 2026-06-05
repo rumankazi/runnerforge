@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
-from google.api_core.exceptions import GoogleAPIError
+from google.api_core.exceptions import AlreadyExists, GoogleAPIError
 from runnerforge.compute_client import (
     create_vm,
     delete_vm,
@@ -283,3 +283,25 @@ def test_delete_vm_returns_none_when_vm_already_gone(monkeypatch, caplog):
         result = asyncio.run(delete_vm(instance_name="ghost-vm"))
     assert result is None
     assert any("VM already deleted" in r.message for r in caplog.records)
+
+
+def test_vm_already_exists_returns_instance_name(monkeypatch, caplog):
+    mock_client = MagicMock()
+    mock_client.insert.side_effect = AlreadyExists("Instance already exists")
+    monkeypatch.setattr(
+        "runnerforge.compute_client.compute_v1.InstancesClient",
+        lambda: mock_client,
+    )
+
+    with caplog.at_level(logging.INFO):
+        response = asyncio.run(
+            create_vm(
+                instance_name="x",
+                machine_type="e2-micro",
+                labels={"runner": "runnerforge"},
+            )
+        )
+
+    assert response == "x"
+    assert any("VM already exists" in r.message for r in caplog.records)
+    assert all(record.levelno == logging.WARNING for record in caplog.records)

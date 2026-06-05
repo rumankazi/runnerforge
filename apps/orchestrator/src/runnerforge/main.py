@@ -85,9 +85,14 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         )
         raise HTTPException(status_code=401, detail="Invalid signature provided")
 
+    try:
+        json_body = json.loads(body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Failed to load request body")
+
     event = parse_github_response(
         WorkflowJobEvent,
-        data=json.loads(body),
+        data=json_body,
         cause_hint="Webhook payload did not match the expected WorkflowJob schema. GitHub may have changed their payload format, or a non-workflow_job event was delivered.",
         logger=logger,
     )
@@ -97,7 +102,7 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         for runnerforge_label in RUNNERFORGE_LABELS
     ):
         logger.info("Skipping! Not a RunnerForge request")
-        return {"ok", True}
+        return {"ok": True}
 
     # After "first" response(/webhook hit), setup the context vars
     update_context(

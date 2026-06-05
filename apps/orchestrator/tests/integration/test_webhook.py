@@ -224,3 +224,14 @@ def test_webhook_without_runnerforge_label_skips_processing(fixtures_dir, caplog
         and "skipping! not a runnerforge request" in r.message.lower()
         for r in caplog.records
     )
+
+
+def test_webhook_with_malformed_json_body():
+    # malformed json body
+    body = b"not a valid json"
+    response = client.post(
+        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Failed to load request body"
