@@ -31,7 +31,7 @@ variable "build_vm_sa" {
 variable "tag" {
   type = string
   description = "Semantic version tag for appending to image_name"
-  default = "0.1.0"
+  default = "0.0.1"
 }
 
 # Builder definition - what kind of machine, where, from what base
