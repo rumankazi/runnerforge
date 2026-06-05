@@ -95,6 +95,6 @@ jobs:
 
       - name: Build + publish image
         run: |
-          # strip v prefix if present in TARGET
-          process_tag=${${TARGET:=0.0.1}#v}
+          process_tag="${TARGET:-0.0.1}"   # fallback if TARGET unset
+          process_tag="${process_tag#v}"   # strip leading v
           packer build -var "tag=${process_tag}" ./runner-image.pkr.hcl
