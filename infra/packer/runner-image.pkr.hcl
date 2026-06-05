@@ -45,6 +45,10 @@ source "googlecompute" "runnerforge_runner" {
   ssh_username = "packer" # SSH user Packer uses during build
   disk_size = 10
 
+  image_labels = {
+    version = replace(var.tag, ".","-")
+    managed-by = "runnerforge-cd"
+  }
   # Output image naming
   image_name = "runnerforge-runner-base-image-${replace(var.tag, ".","-")}"
 }

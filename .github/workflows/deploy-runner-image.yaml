@@ -82,8 +82,6 @@ jobs:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.CI_RUNNER_IMAGE_BUILD_SA }}
 
-      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
-
       - name: Setup `packer`
         uses: hashicorp/setup-packer@3286471d6cc6756d056a0b199fea5e0becdbc189
 
@@ -95,6 +93,61 @@ jobs:
 
       - name: Build + publish image
         run: |
-          process_tag="${TARGET:-0.0.1}"   # fallback if TARGET unset
-          process_tag="${process_tag#v}"   # strip leading v
-          packer build -var "tag=${process_tag}" ./runner-image.pkr.hcl
+          processed_tag="${TARGET:-0.0.1}"   # fallback if TARGET unset
+          processed_tag="${processed_tag#v}"   # strip leading v
+          packer build -var "tag=${processed_tag}" ./runner-image.pkr.hcl
+
+  smoke:
+    name: Smoke Test
+    runs-on: ubuntu-latest
+    needs: [build, setup]
+    permissions:
+      contents: read    # actions/checkout
+      id-token: write   # WIF
+    env:
+      TARGET: ${{ needs.setup.outputs.target }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.CI_RUNNER_IMAGE_BUILD_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Create VM with base image
+        id: create-vm
+        run: |
+          processed_tag="${TARGET:-0.0.1}"   # fallback if TARGET unset
+          processed_tag="${processed_tag#v}"   # strip leading v
+          instance_name="runnerforge-runner-smoke-test-${{ github.job }}"
+          gcloud compute instances create ${instance_name} \
+            --machine-type="e2-medium" \
+            --image="projects/runnerforge/global/images/runnerforge-runner-base-image-${processed_tag}" \
+            --image-project="runnerforge"
+            --labels="runner=runnerfoge,job_id=${{ github.job }},repo=rumankazi_runnerforge,smoke_test"
+
+          echo "::info:: Instance has been created!"
+          echo "instance_name=${instance_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        run: |
+          response=$(gcloud compute-instance-describe "${{ steps.create-vm.outputs.instance_name }}" --format="json(name,status)")
+          response_instance_name=$(echo ${response} | jq -r ".name")
+          response_instance_status=$(echo ${response} | jq -r ".status")
+          if [[ "$response_instance_name" == "${{ steps.create-vm.outputs.instance_name }}" ]];
+            echo "Instance has been detected successfully"
+          else
+            echo "::error:: Instance ${{ steps.create-vm.outputs.instance_name }} could not be found"
+            exit 1
+          fi
+
+          if [[ "$response_instance_status" == "RUNNING" ]];
+            echo "Instance is up and running!"
+          else
+            echo "::error:: Instance status found $response_instance_status"
+            exit
+          fi
