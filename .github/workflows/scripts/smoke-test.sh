@@ -15,7 +15,7 @@ fi
 # Check config.sh exists AND is executable. Only attempt to run it if both pass.
 if [[ ! -f "$RUNNER_DIR/config.sh" ]]; then
   reasons+="- Could not locate ${RUNNER_DIR}/config.sh\n"
-elif ! config_output=$("$RUNNER_DIR/config.sh" --help 2>&1); then
+elif ! config_output=$("sudo -u runner $RUNNER_DIR/config.sh" --help 2>&1); then
   reasons+="- Failed to execute ${RUNNER_DIR}/config.sh: ${config_output}\n"
 fi
 
