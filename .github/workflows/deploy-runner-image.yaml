@@ -95,6 +95,5 @@ jobs:
 
       - name: Build + publish image
         run: |
-          packer init
           # strip v prefix if present in TARGET
           packer build ./runner-image.pkr.hcl -var "tag=${TARGET#v}"
