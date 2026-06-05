@@ -129,6 +129,7 @@ jobs:
           set -euo pipefail
           processed_tag="${TARGET:-0.0.1}"   # fallback if TARGET unset
           processed_tag="${processed_tag#v}"   # strip leading v
+          processed_tag="${processed_tag//./-}" # replacing dots with dashes
           instance_name="rf-smoke-test-${{ github.run_id }}"
           startup_script="${{ github.workspace }}/.github/workflows/scripts/smoke-test.sh"
 
