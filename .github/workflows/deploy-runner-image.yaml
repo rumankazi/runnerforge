@@ -234,7 +234,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ steps.create-vm.outputs.image }}
         run: |
-          gcloud compute images delete $IMAGE_NAME --quiet
+          gcloud compute images delete "$IMAGE_NAME" --quiet
 
 
   deploy:
