@@ -256,7 +256,7 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      - name: Promote image
+      - name: Promote Image
         run: |
           set -euo pipefail
           DST="runnerforge-runner-image-${TARGET}"   # new family member, references base
@@ -265,10 +265,13 @@ jobs:
             --source-image-project=runnerforge \
             --family="$IMAGE_FAMILY"
           echo "Promoted $SRC_IMAGE → $DST in family $IMAGE_FAMILY"
+          echo "Cleaning up source image"
+          gcloud compute images delete "$SRC_IMAGE"
+          echo "Cleaned up $SRC_IMAGE"
 
 
   rollback:
-    name: Remove image from family
+    name: Remove Image
     needs: [setup]
     if: needs.setup.outputs.action == 'rollback'
     runs-on: ubuntu-latest
