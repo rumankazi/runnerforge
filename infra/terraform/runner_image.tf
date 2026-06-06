@@ -67,7 +67,7 @@ output "ci_runner_image_build_sa_email" {
   description = "SA email impersonated by runner-image build/deploy workflow."
 }
 
-output "ci_smoke_test_vm_logger_sa_email" {
+output "ci_vm_logger_sa_email" {
   value       = google_service_account.ci_vm_logger.email
   description = "SA email attached via --service-account to the Packer build VM and smoke-test VM; provides logging.logWriter for the on-VM Cloud Ops Agent."
 }
