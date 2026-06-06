@@ -1,11 +1,6 @@
 name: Deploy Runner Image
 
 on:
-  push:
-    paths:
-      - '.github/workflows/deploy-runner-image.yaml'
-      - '.github/workflows/scripts/smoke-test.sh'
-      - 'infra/packer/**'
   release:
     types: [published] # setup job filters to runner-image-v* tags only
   workflow_dispatch:
@@ -16,7 +11,7 @@ on:
         options: [deploy, rollback]
         default: deploy
       target:
-        description: 'For deploy: version (e.g. 1.2.3). For rollback: image name (e.g. runnerforge-runner-base-image-1.1.2)'
+        description: 'For deploy: version (e.g. 1.2.3). For rollback: image name (e.g. runnerforge-runner-image-1-1-2)'
         required: true
 
 permissions: {}
@@ -28,6 +23,7 @@ env:
   WIF_PROVIDER: projects/8547588670/locations/global/workloadIdentityPools/github/providers/github
   CI_RUNNER_IMAGE_BUILD_SA: ci-runner-image-build@runnerforge.iam.gserviceaccount.com
   CI_VM_LOGGER_SA: ci-vm-logger@runnerforge.iam.gserviceaccount.com
+  IMAGE_FAMILY: runnerforge-runner
 
 jobs:
   setup:
@@ -45,28 +41,61 @@ jobs:
           DISPATCH_TARGET: ${{ github.event.inputs.target }}
         run: |
           set -euo pipefail
+
+          # Output schema:
+          #   action ∈ {deploy, rollback, skip}
+          #   target = dashed-semver (deploy)  OR  family-member image name (rollback)  OR  empty (skip)
+
           if [[ "$EVENT_NAME" == "release" ]]; then
-            if [[ ! "$TAG_NAME" =~ ^runner-image-v ]]; then
-              echo "Tag '$TAG_NAME' is not an runner-image-v* release — skipping."
+            # Release-triggered: must be a runner-image-vX.Y.Z tag, else this isn't our concern.
+            if [[ ! "$TAG_NAME" =~ ^runner-image-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Tag '$TAG_NAME' is not a runner-image-v* release — skipping."
               echo "action=skip" >> "$GITHUB_OUTPUT"
               echo "target="     >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            VERSION="${TAG_NAME#runner-image-v}"
-            VERSION="${VERSION//./-}" # replacing dots with dashes
+            VERSION="${TAG_NAME#runner-image-v}"   # 0.1.0
+            VERSION="${VERSION//./-}"              # 0-1-0 (gcloud-safe)
             echo "Release deploy: $VERSION"
             echo "action=deploy"   >> "$GITHUB_OUTPUT"
             echo "target=$VERSION" >> "$GITHUB_OUTPUT"
-          else
-            echo "Dispatch $DISPATCH_ACTION: $DISPATCH_TARGET"
-            echo "action=$DISPATCH_ACTION" >> "$GITHUB_OUTPUT"
-            echo "target=$DISPATCH_TARGET" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          # workflow_dispatch path — validate per action
+          case "$DISPATCH_ACTION" in
+            deploy)
+              # target must be semver: 0.1.0 or v0.1.0
+              if [[ ! "$DISPATCH_TARGET" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "::error::Invalid deploy target '$DISPATCH_TARGET'. Expected semver (e.g. 0.1.0 or v0.1.0)."
+                exit 1
+              fi
+              VERSION="${DISPATCH_TARGET#v}"
+              VERSION="${VERSION//./-}"
+              echo "Dispatch deploy: $VERSION"
+              echo "action=deploy"   >> "$GITHUB_OUTPUT"
+              echo "target=$VERSION" >> "$GITHUB_OUTPUT"
+              ;;
+            rollback)
+              # target must be a family-member image name: runnerforge-runner-image-X-Y-Z
+              if [[ ! "$DISPATCH_TARGET" =~ ^runnerforge-runner-image-[0-9]+-[0-9]+-[0-9]+$ ]]; then
+                echo "::error::Invalid rollback target '$DISPATCH_TARGET'. Expected family-member image name (e.g. runnerforge-runner-image-0-1-0)."
+                exit 1
+              fi
+              echo "Dispatch rollback: $DISPATCH_TARGET"
+              echo "action=rollback"        >> "$GITHUB_OUTPUT"
+              echo "target=$DISPATCH_TARGET" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Unknown action '$DISPATCH_ACTION'"
+              exit 1
+              ;;
+          esac
 
   build:
     name: Build + Publish
     needs: setup
-    # if: needs.setup.outputs.action == 'deploy'
+    if: needs.setup.outputs.action == 'deploy'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -98,7 +127,6 @@ jobs:
       - name: Build + publish image
         run: |
           processed_tag="${TARGET:-0.0.1}"   # fallback if TARGET unset
-          processed_tag="${processed_tag#v}"   # strip leading v
           packer build -var "tag=${processed_tag}" ./runner-image.pkr.hcl
 
   smoke:
@@ -111,6 +139,8 @@ jobs:
     env:
       TARGET: ${{ needs.setup.outputs.target }}
       ZONE: europe-west4-a
+    outputs:
+      image: ${{ steps.create-vm.outputs.image }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -127,18 +157,18 @@ jobs:
         id: create-vm
         run: |
           set -euo pipefail
-          processed_tag="${TARGET:-0.0.1}"   # fallback if TARGET unset
-          processed_tag="${processed_tag#v}"   # strip leading v
-          processed_tag="${processed_tag//./-}" # replacing dots with dashes
+          # TARGET is the dashed version produced by setup (e.g. 0-1-0).
+          # Packer built the base image as "runnerforge-runner-base-image-<tag>".
+          image_name="runnerforge-runner-base-image-${TARGET}"
           instance_name="rf-smoke-test-${{ github.run_id }}"
           startup_script="${{ github.workspace }}/.github/workflows/scripts/smoke-test.sh"
 
           gcloud compute instances create "$instance_name" \
             --machine-type="e2-medium" \
-            --image="projects/runnerforge/global/images/runnerforge-runner-base-image-${processed_tag}" \
+            --image="$image_name" \
             --image-project="runnerforge" \
             --zone="$ZONE" \
-            --service-account="$CI_VM_LOGGER_SA" \
+            --service-account="${{ env.CI_VM_LOGGER_SA }}" \
             --scopes=cloud-platform \
             --metadata-from-file "startup-script=$startup_script" \
             --labels="runner=runnerforge,job_id=${{ github.run_id }},repo=rumankazi_runnerforge"
@@ -147,8 +177,10 @@ jobs:
           echo "instance_name=$instance_name" >> "$GITHUB_OUTPUT"
           instance_id=$(gcloud compute instances describe "$instance_name" --zone "$ZONE" --format='value(id)')
           echo "instance_id=$instance_id" >> "$GITHUB_OUTPUT"
+          echo "image=$image_name" >> "$GITHUB_OUTPUT"
 
       - name: Verify runner binary readiness (serial console)
+        id: binary-ready
         env:
           VM: ${{ steps.create-vm.outputs.instance_name }}
         run: |
@@ -156,10 +188,15 @@ jobs:
           deadline=$(( $(date +%s) + 300 )) # 5 minutes
           while [[ $(date +%s) -lt $deadline ]]; do
             out=$(gcloud compute instances get-serial-port-output "$VM" --zone "$ZONE" || true)
-            if grep -q "SMOKE_OK" <<< "$out"; then echo "Runner binary readiness: OK"; exit 0; fi
+            if grep -q "SMOKE_OK" <<< "$out"; then
+              echo "Runner binary readiness: OK"
+              exit 0
+            fi
             if grep -q "SMOKE_NOK" <<< "$out"; then
               echo "::error::Runner binary readiness: FAILED"
-              grep "SMOKE_NOK" <<< "$out"
+              echo "::group::Full serial console output"
+              echo "$out"
+              echo "::endgroup::"
               exit 1
             fi
             sleep 5
@@ -168,16 +205,18 @@ jobs:
           exit 1
 
       - name: Verify Cloud Ops Agent log delivery
+        id: ops-agent
         env:
           INSTANCE_ID: ${{ steps.create-vm.outputs.instance_id }}
         run: |
           set -euo pipefail
+          FILTER="resource.type=\"gce_instance\" AND resource.labels.instance_id=\"$INSTANCE_ID\""
           deadline=$(( $(date +%s) + 300 ))
           while [[ $(date +%s) -lt $deadline ]]; do
-            count=$(gcloud logging read \
-              "resource.type=\"gce_instance\" AND resource.labels.instance_id=\"$INSTANCE_ID\"" \
-              --limit 1 --format='value(timestamp)' | wc -l)
-            if [[ "$count" -gt 0 ]]; then echo "Cloud Ops Agent log delivery: OK"; exit 0; fi
+            if [[ -n $(gcloud logging read "$FILTER" --limit 1 --format='value(timestamp)') ]]; then
+              echo "Cloud Ops Agent log delivery: OK"
+              exit 0
+            fi
             sleep 10
           done
           echo "::error::Cloud Ops Agent log delivery: TIMEOUT (no logs from instance $INSTANCE_ID within 5 min)"
@@ -189,3 +228,67 @@ jobs:
           VM: ${{ steps.create-vm.outputs.instance_name }}
         run: |
           gcloud compute instances delete "$VM" --zone "$ZONE" --quiet || true
+
+      - name: Cleanup image
+        if: steps.binary-ready.outcome == 'failure' || steps.ops-agent.outcome == 'failure'
+        env:
+          IMAGE_NAME: ${{ steps.create-vm.outputs.image }}
+        run: |
+          gcloud compute images delete $IMAGE_NAME --quiet
+
+
+  deploy:
+    name: Promote Image
+    needs: [setup, smoke]
+    if: needs.setup.outputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read    # actions/checkout
+      id-token: write   # WIF
+    env:
+      SRC_IMAGE: ${{ needs.smoke.outputs.image }}      # runnerforge-runner-base-image-X
+      TARGET: ${{ needs.setup.outputs.target }}
+    steps:
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.CI_RUNNER_IMAGE_BUILD_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Promote image
+        run: |
+          set -euo pipefail
+          DST="runnerforge-runner-image-${TARGET}"   # new family member, references base
+          gcloud compute images create "$DST" \
+            --source-image="$SRC_IMAGE" \
+            --source-image-project=runnerforge \
+            --family="$IMAGE_FAMILY"
+          echo "Promoted $SRC_IMAGE → $DST in family $IMAGE_FAMILY"
+
+
+  rollback:
+    name: Remove image from family
+    needs: [setup]
+    if: needs.setup.outputs.action == 'rollback'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read    # actions/checkout
+      id-token: write   # WIF
+    env:
+      IMAGE_NAME: ${{ needs.setup.outputs.target }}
+    steps:
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.CI_RUNNER_IMAGE_BUILD_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Deprecate family member (soft rollback)
+        run: |
+          set -euo pipefail
+          # Deprecate (don't delete) so the image survives for forensics.
+          # The family auto-routes to the next-newest non-deprecated member.
+          gcloud compute images delete "$IMAGE_NAME"
+          echo "Deleted $IMAGE_NAME — family $IMAGE_FAMILY."

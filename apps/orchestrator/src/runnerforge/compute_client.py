@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from runnerforge.config import GCP_PROJECT_ID, GCP_ZONE
 from runnerforge.models import RunnerForgeVmLabels, VmInfo
 
-_BOOT_IMAGE = "projects/runnerforge/global/images/family/runnerforge-runner"
+_BOOT_IMAGE_FAMILY = "projects/runnerforge/global/images/family/runnerforge-runner"
 _BOOT_DISK_SIZE_GB = 10
 _DATA_DISK_SIZE_GB = 50
 
@@ -37,7 +37,7 @@ async def create_vm(
             auto_delete=True,  # this is THE boot disk
             initialize_params=compute_v1.AttachedDiskInitializeParams(
                 disk_name="boot",
-                source_image=_BOOT_IMAGE,
+                source_image=_BOOT_IMAGE_FAMILY,
                 disk_size_gb=_BOOT_DISK_SIZE_GB,
             ),
         ),

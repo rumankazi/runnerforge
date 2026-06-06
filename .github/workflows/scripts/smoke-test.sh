@@ -20,7 +20,7 @@ elif ! config_output=$(sudo -u runner "$RUNNER_DIR/config.sh" --help 2>&1); then
 fi
 
 if [[ -n "$reasons" ]]; then
-  echo -e "SMOKE_NOK: ${reasons}" > /dev/console
+  echo -e "SMOKE_NOK: \n${reasons}" > /dev/console
   exit 1
 fi
 
