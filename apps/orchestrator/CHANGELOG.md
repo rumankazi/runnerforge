@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.2.1...orchestrator-v0.3.0) (2026-06-06)
+
+
+### Features
+
+* **ci:** deploy packer runner images workflow ([#52](https://github.com/rumankazi/runnerforge/issues/52)) ([2867b20](https://github.com/rumankazi/runnerforge/commit/2867b20b821559fc2fcaf7e59b7f0af81b1c3689))
+
 ## [0.2.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.2.0...orchestrator-v0.2.1) (2026-06-04)
 
 
