@@ -65,7 +65,7 @@ resource "google_cloud_run_v2_service" "orchestrator" {
         }
       }
       env {
-        name = "RUNNER_VM_SA_EMAIL"
+        name  = "RUNNER_VM_SA_EMAIL"
         value = google_service_account.runnerforge_runner_vm.email
       }
       env {
