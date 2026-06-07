@@ -11,7 +11,7 @@ from runnerforge.compute_client import (
     find_vms_by_job_id,
     list_runnerforge_vms,
 )
-from runnerforge.config import GCP_PROJECT_ID
+from runnerforge.config import GCP_PROJECT_ID, RUNNER_VM_SA_EMAIL
 from runnerforge.models import RunnerForgeVmLabels, VmInfo
 
 
@@ -305,3 +305,25 @@ def test_vm_already_exists_returns_instance_name(monkeypatch, caplog):
     assert response == "x"
     assert any("VM already exists" in r.message for r in caplog.records)
     assert all(record.levelno == logging.WARNING for record in caplog.records)
+
+
+def test_create_vm_requests_receives_runner_vm_sa(monkeypatch):
+    mock_client = MagicMock()
+    mock_client.insert.return_value = MagicMock(name="op-test")
+    monkeypatch.setattr(
+        "runnerforge.compute_client.compute_v1.InstancesClient",
+        lambda: mock_client,
+    )
+
+    asyncio.run(
+        create_vm(
+            instance_name="x",
+            machine_type="e2-micro",
+            labels={"runner": "runnerforge"},
+        )
+    )
+
+    captured_request = mock_client.insert.call_args.kwargs["request"]
+    service_account = captured_request.instance_resource.service_accounts[0]
+    assert service_account.email == RUNNER_VM_SA_EMAIL
+    assert service_account.scopes == ["https://www.googleapis.com/auth/cloud-platform"]

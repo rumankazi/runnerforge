@@ -65,6 +65,10 @@ resource "google_cloud_run_v2_service" "orchestrator" {
         }
       }
       env {
+        name  = "RUNNER_VM_SA_EMAIL"
+        value = google_service_account.runnerforge_runner_vm.email
+      }
+      env {
         name  = "EXPECTED_SCHEDULER_SA_EMAIL"
         value = google_service_account.scheduler.email
       }
@@ -110,7 +114,7 @@ resource "google_cloud_run_v2_service" "orchestrator" {
 # Make the service publicly invocable. Github needs to POST /webhook from random IPs.
 # The orchestrator's HMAC verification gates which payloads are accepted.
 resource "google_cloud_run_v2_service_iam_member" "orchestrator_public" {
-  project  = "runnerforge"
+  project  = data.google_project.current.project_id
   location = google_cloud_run_v2_service.orchestrator.location
   name     = google_cloud_run_v2_service.orchestrator.name
   role     = "roles/run.invoker"
