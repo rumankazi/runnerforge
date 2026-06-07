@@ -1,5 +1,0 @@
-# Configuration related to sself-hosted runner.
-self-hosted-runner:
-  labels:
-    - runnerforge
-    - e2-medium
