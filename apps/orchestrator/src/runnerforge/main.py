@@ -109,7 +109,9 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         repo=event.repository.full_name,
         owner=event.repository.owner.login,
         sender=event.sender.login,
+        job_id=event.workflow_job.id,
         run_id=event.workflow_job.run_id,
+        run_attempt=event.workflow_job.run_attempt,
         installation_id=event.installation.id,
     )
 

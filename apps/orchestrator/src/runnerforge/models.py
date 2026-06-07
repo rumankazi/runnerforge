@@ -67,6 +67,8 @@ class JobStatusResponse(BaseModel):
 class RunnerForgeVmLabels(BaseModel):
     runner: Literal["runnerforge"]
     job_id: str
+    run_id: str
+    run_attempt: str
     repo: str
     installation_id: str
 

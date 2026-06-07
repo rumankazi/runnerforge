@@ -24,11 +24,11 @@ async def handle_queued(event: WorkflowJobEvent):
     )
     logger.info(
         "Registration token received",
-        extra={"job_id": event.workflow_job.id},
+        extra={"job_id": event.workflow_job.id, "run_id": event.workflow_job.run_id},
     )
 
     # Create the VM with the registration token metadata
-    vm_name = f"runnerforge-{event.workflow_job.id}"
+    vm_name = f"runnerforge-{event.workflow_job.run_id}-{event.workflow_job.id}-{event.workflow_job.run_attempt}"
 
     metadata = {
         "registration-token": registration_token,
@@ -44,6 +44,8 @@ async def handle_queued(event: WorkflowJobEvent):
     labels = RunnerForgeVmLabels(
         runner="runnerforge",
         job_id=str(event.workflow_job.id),
+        run_id=str(event.workflow_job.run_id),
+        run_attempt=str(event.workflow_job.run_attempt),
         repo=event.repository.full_name.replace("/", "_"),
         installation_id=str(event.installation.id),
     )
@@ -61,7 +63,9 @@ def handle_in_progress(event: WorkflowJobEvent):
 
 async def handle_completed(event: WorkflowJobEvent):
     job_id = str(event.workflow_job.id)
-    vms = await find_vms_by_job_id(job_id)
+    run_id = str(event.workflow_job.run_id)
+    run_attempt = str(event.workflow_job.run_attempt)
+    vms = await find_vms_by_job_id(job_id, run_id, run_attempt)
 
     if not vms:
         logger.info(

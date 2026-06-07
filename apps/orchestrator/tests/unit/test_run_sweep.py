@@ -15,6 +15,8 @@ def _vm(age_hours: int, installation_id: str = "100", name_suffix: str = "") -> 
         labels=RunnerForgeVmLabels(
             runner="runnerforge",
             job_id="12",
+            run_id="23",
+            run_attempt="33",
             repo="foo/bar",
             installation_id=installation_id,
         ),

@@ -101,21 +101,34 @@ async def create_vm(
 
 
 async def find_vms_by_job_id(
-    job_id: str, zone: str = GCP_ZONE, project_id: str = GCP_PROJECT_ID
+    job_id: str,
+    run_id: str,
+    run_attempt: str,
+    zone: str = GCP_ZONE,
+    project_id: str = GCP_PROJECT_ID,
 ) -> list[str]:
     """Returns instance names of VMs labeled with the given job_id."""
     client = compute_v1.InstancesClient()
     request = compute_v1.ListInstancesRequest()
     request.zone = zone
     request.project = project_id
-    request.filter = f"labels.job_id={job_id}"
+    request.filter = (
+        f"labels.job_id={job_id} AND "
+        f"labels.run_id={run_id} AND "
+        f"labels.run_attempt={run_attempt}"
+    )
 
     instances = await asyncio.to_thread(lambda: list(client.list(request=request)))
 
     result = [i.name for i in instances]
     logger.info(
         "VM lookup by job_id",
-        extra={"job_id": job_id, "match_count": len(result)},
+        extra={
+            "job_id": job_id,
+            "run_id": run_id,
+            "run_attempt": run_attempt,
+            "match_count": len(result),
+        },
     )
     return result
 
