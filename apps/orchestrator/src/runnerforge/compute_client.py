@@ -36,7 +36,6 @@ async def create_vm(
             boot=True,
             auto_delete=True,  # this is THE boot disk
             initialize_params=compute_v1.AttachedDiskInitializeParams(
-                disk_name="boot",
                 source_image=_BOOT_IMAGE_FAMILY,
                 disk_size_gb=_BOOT_DISK_SIZE_GB,
             ),
