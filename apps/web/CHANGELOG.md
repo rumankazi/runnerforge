@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/rumankazi/runnerforge/compare/web-v1.0.2...web-v1.0.3) (2026-06-07)
+
+
+### Bug Fixes
+
+* **deps:** update all patch dependencies ([#48](https://github.com/rumankazi/runnerforge/issues/48)) ([7f61133](https://github.com/rumankazi/runnerforge/commit/7f6113315142ae81d81157143b18020643e69a37))
+
 ## [1.0.2](https://github.com/rumankazi/runnerforge/compare/web-v1.0.1...web-v1.0.2) (2026-06-04)
 
 
