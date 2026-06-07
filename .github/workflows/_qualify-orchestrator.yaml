@@ -72,6 +72,7 @@ jobs:
             -e GITHUB_APP_ID=12345 \
             -e GITHUB_APP_PRIVATE_KEY_PATH=/secrets/private-key.pem \
             -e GCP_PROJECT_ID=ci-probe-project \
+            -e RUNNER_VM_SA_EMAIL=ci-probe@example.iam.gserviceaccount.com \
             -e EXPECTED_SCHEDULER_SA_EMAIL=ci-probe@example.iam.gserviceaccount.com \
             -e EXPECTED_AUDIENCE=https://ci-probe.example \
             orchestrator:probe
