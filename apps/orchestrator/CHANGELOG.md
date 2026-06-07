@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.3.1...orchestrator-v0.3.2) (2026-06-07)
+
+
+### Bug Fixes
+
+* uniqueness of the runners ([#61](https://github.com/rumankazi/runnerforge/issues/61)) ([ffc99d6](https://github.com/rumankazi/runnerforge/commit/ffc99d63b4c4e5928cdb5d1866161ba34d7a90b3))
+
 ## [0.3.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.3.0...orchestrator-v0.3.1) (2026-06-07)
 
 
