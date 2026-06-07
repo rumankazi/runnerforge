@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.3.0...orchestrator-v0.3.1) (2026-06-07)
+
+
+### Bug Fixes
+
+* **orchestrator:** narrow SA permissions for runner vms ([#56](https://github.com/rumankazi/runnerforge/issues/56)) ([4f3a07f](https://github.com/rumankazi/runnerforge/commit/4f3a07f24574ad8e93390cb7a6af7ab82354ef9a))
+
 ## [0.3.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.2.1...orchestrator-v0.3.0) (2026-06-06)
 
 
