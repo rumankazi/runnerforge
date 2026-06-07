@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.4.0...orchestrator-v0.4.1) (2026-06-07)
+
+
+### Bug Fixes
+
+* bug for startup script ([#67](https://github.com/rumankazi/runnerforge/issues/67)) ([e38a1ff](https://github.com/rumankazi/runnerforge/commit/e38a1ff5168e555598adb2f227c4121b977281d8))
+
 ## [0.4.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.3.3...orchestrator-v0.4.0) (2026-06-07)
 
 
