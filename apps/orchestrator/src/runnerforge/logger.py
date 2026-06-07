@@ -5,11 +5,18 @@ import sys
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
 from types import MappingProxyType
+
+from opentelemetry import trace
 
 from runnerforge.config import GCP_PROJECT_ID
 
-_APP_VERSION = os.environ.get("APP_VERSION", "dev")
+try:
+    _APP_VERSION = version("runnerforge")
+except PackageNotFoundError:
+    _APP_VERSION = "dev"
+
 _GIT_SHA = os.environ.get("GIT_SHA", "unknown")[:7]  # short SHA
 
 # -----LogFormatter----#
@@ -112,6 +119,9 @@ class JsonFormatter(logging.Formatter):
             formatted_record["logging.googleapis.com/trace"] = (
                 f"projects/{GCP_PROJECT_ID}/traces/{trace_id}"
             )
+        span_id = getattr(record, "span_id", None)
+        if span_id and GCP_PROJECT_ID:
+            formatted_record["logging.googleapis.com/spanId"] = span_id
 
         return json.dumps(formatted_record, default=str)
 
@@ -122,7 +132,6 @@ class JsonFormatter(logging.Formatter):
 @dataclass(frozen=True)
 class LogContext:
     request_id: str | None = None
-    trace_id: str | None = None
     repo: str | None = None
     owner: str | None = None
     sender: str | None = None
@@ -146,6 +155,14 @@ class ContextFilter(logging.Filter):
         for name, value in asdict(_context_var.get()).items():
             if value is not None:
                 setattr(record, name, value)
+
+        # OTel
+        current_span = trace.get_current_span()
+        span_context = current_span.get_span_context()
+        if span_context.is_valid:
+            record.trace_id = format(span_context.trace_id, "032x")
+            record.span_id = format(span_context.span_id, "016x")
+
         record.app_version = _APP_VERSION
         record.git_sha = _GIT_SHA
         return True

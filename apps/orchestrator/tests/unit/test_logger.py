@@ -54,7 +54,7 @@ def test_json_formatter_emits_valid_json_with_cloud_logging_fields():
 def test_json_formatter_emits_trace_field_when_both_present(monkeypatch):
     # force reload of logger module so GCP_PROJECT_ID is re-read
     monkeypatch.setattr("runnerforge.logger.GCP_PROJECT_ID", "my-project")
-    update_context(trace_id="abc123")
+    update_context(request_id="abc123")
 
     output = _capture(JsonFormatter())
     parsed = json.loads(output)
@@ -99,7 +99,6 @@ def test_json_formatter_renders_exception():
     "field,value",
     [
         ("request_id", "req-123"),
-        ("trace_id", "trace-abc"),
         ("repo", "owner/repo"),
         ("owner", "owner"),
         ("sender", "sender-user"),

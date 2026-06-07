@@ -20,27 +20,20 @@ from runnerforge.logger import (
 from runnerforge.models import WorkflowJobEvent
 from runnerforge.security import verify_github_signature, verify_oidc_token
 from runnerforge.sweep import run_sweep
+from runnerforge.tracing import setup_tracing
 from runnerforge.validation import parse_github_response
 
 setup_logging()
 logger = logging.getLogger(__name__)
 app = FastAPI()
-
-
-def parse_trace_id(header: str | None) -> str | None:
-    """Extracts TRACE_ID from 'TRACE_ID/SPAN_ID;o=1' format."""
-    if not header:
-        return None
-    trace_id = header.split("/", 1)[0]
-    return trace_id or None
+setup_tracing(app)
 
 
 @app.middleware("http")
 async def access_log_middleware(request: Request, call_next):
     start = time.monotonic()
-    trace_id = parse_trace_id(request.headers.get("X-Cloud-Trace-Context"))
-    request_id = trace_id or str(uuid.uuid4())
-    update_context(request_id=request_id, trace_id=trace_id)
+    request_id = str(uuid.uuid4())
+    update_context(request_id=request_id)
     response = await call_next(request)
     duration = time.monotonic() - start
     logger.info(
@@ -123,7 +116,7 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         case "in_progress":
             handle_in_progress(event)
         case "completed":
-            await handle_completed(event.workflow_job.runner_name)
+            await handle_completed(event)
         case _:
             logger.warning("Ignoring unknown action", extra={"action": event.action})
     return {"ok": True}
