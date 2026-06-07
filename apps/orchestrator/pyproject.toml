@@ -1,6 +1,6 @@
 [project]
 name = "runnerforge"
-version = "0.3.2"
+version = "0.3.3"
 description = "Self-hosted runners on GCP for Github Actions"
 readme = "README.md"
 authors = [{ name = "Ruman Kazi", email = "kaziruman@gmail.com" }]

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.3.2...orchestrator-v0.3.3) (2026-06-07)
+
+
+### Bug Fixes
+
+* bug ofr boot disk name ([#63](https://github.com/rumankazi/runnerforge/issues/63)) ([75c18a6](https://github.com/rumankazi/runnerforge/commit/75c18a67888df2fd22d38ac4043c02a9dbf49a2f))
+
 ## [0.3.2](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.3.1...orchestrator-v0.3.2) (2026-06-07)
 
 
