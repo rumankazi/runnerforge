@@ -35,5 +35,5 @@ jobs:
           SLEEP_TIME_SECONDS: ${{ inputs.timeout || '10' }}
         run: |
           echo "Starting work simulation..."
-          sleep $SLEEP_TIME_SECONDS
+          sleep "$SLEEP_TIME_SECONDS"
           echo "Work completed!"

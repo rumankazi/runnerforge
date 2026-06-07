@@ -1,31 +1,5 @@
-name: Actionlint
-
-on:
-  pull_request:
-    paths:
-      - '.github/workflows/**'
-      - '.github/actions/**'
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/**'
-      - '.github/actions/**'
-
-permissions:
-  contents: read
-  checks: write
-  pull-requests: write
-
-jobs:
-  actionlint:
-    name: actionlint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          persist-credentials: false
-
-      - uses: reviewdog/action-actionlint@6fb7acc99f4a1008869fa8a0f09cfca740837d9d # v1.72.0
-        with:
-          reporter: github-pr-check
-          fail_level: error
+# Configuration related to sself-hosted runner.
+self-hosted-runner:
+  labels:
+    - runnerforge
+    - e2-medium
