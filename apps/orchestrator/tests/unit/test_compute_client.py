@@ -105,18 +105,25 @@ def test_find_vms_by_job_id(monkeypatch, caplog):
         "runnerforge.compute_client.compute_v1.InstancesClient", lambda: mock_client
     )
     with caplog.at_level(logging.INFO):
-        instances = asyncio.run(find_vms_by_job_id(job_id="12"))
+        instances = asyncio.run(
+            find_vms_by_job_id(job_id="12", run_id="23", run_attempt="1")
+        )
     mock_client.list.assert_called_once()
     request = mock_client.list.call_args.kwargs["request"]
     assert request.zone == "europe-west4-a"
     assert request.project == "test-project"
-    assert request.filter == "labels.job_id=12"
+    assert (
+        request.filter
+        == "labels.job_id=12 AND labels.run_id=23 AND labels.run_attempt=1"
+    )
     assert instances == ["runnerforge-12"]
 
     # Observability contract: lookup logs job_id + match_count
     log = next((r for r in caplog.records if "VM lookup by job_id" in r.message), None)
     assert log is not None
     assert log.job_id == "12"
+    assert log.run_id == "23"
+    assert log.run_attempt == "1"
     assert log.match_count == 1
 
 
@@ -146,7 +153,9 @@ def test_find_vms_by_job_id_returns_empty_when_no_match(monkeypatch, caplog):
     )
 
     with caplog.at_level(logging.INFO):
-        result = asyncio.run(find_vms_by_job_id(job_id="nonexistent"))
+        result = asyncio.run(
+            find_vms_by_job_id(job_id="nonexistent", run_id="NA", run_attempt="NA")
+        )
 
     assert result == []
     mock_client.list.assert_called_once()
@@ -167,6 +176,8 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
         "runner": "runnerforge",
         "repo": "rumankazi/runnerforge",
         "job_id": "1",
+        "run_id": "2",
+        "run_attempt": "2",
         "installation_id": "123",
     }
 
@@ -177,6 +188,8 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
         "runner": "runnerforge",
         "repo": "rumankazi/runnerforge",
         "job_id": "2",
+        "run_id": "3",
+        "run_attempt": "3",
         "installation_id": "124",
     }
     mock_client.list.return_value = [mock_vm_1, mock_vm_2]
@@ -200,6 +213,8 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
                 runner="runnerforge",
                 repo="rumankazi/runnerforge",
                 job_id="1",
+                run_id="2",
+                run_attempt="2",
                 installation_id="123",
             ),
         ),
@@ -210,6 +225,8 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
                 runner="runnerforge",
                 repo="rumankazi/runnerforge",
                 job_id="2",
+                run_id="3",
+                run_attempt="3",
                 installation_id="124",
             ),
         ),
@@ -230,6 +247,8 @@ def test_list_runnerforge_vms_with_malformed_labels(monkeypatch, caplog):
         "runner": "runnerforge",
         "repo": "rumankazi/runnerforge",
         "job_id": "1",
+        "run_id": "2",
+        "run_attempt": "3",
     }
 
     mock_vm_2 = MagicMock()
@@ -239,6 +258,8 @@ def test_list_runnerforge_vms_with_malformed_labels(monkeypatch, caplog):
         "runner": "runnerforge",
         "repo": "rumankazi/runnerforge",
         "job_id": "2",
+        "run_id": "3",
+        "run_attempt": "4",
         "installation_id": "124",
     }
     mock_client.list.return_value = [mock_vm_1, mock_vm_2]

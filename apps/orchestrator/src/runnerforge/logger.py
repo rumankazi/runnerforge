@@ -126,7 +126,9 @@ class LogContext:
     repo: str | None = None
     owner: str | None = None
     sender: str | None = None
+    job_id: int | None = None
     run_id: int | None = None
+    run_attempt: int | None = None
     installation_id: int | None = None
 
 
