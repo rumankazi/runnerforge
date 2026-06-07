@@ -5,10 +5,10 @@ from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import compute_v1
 from pydantic import ValidationError
 
-from runnerforge.config import GCP_PROJECT_ID, GCP_ZONE
+from runnerforge.config import GCP_PROJECT_ID, GCP_ZONE, RUNNER_VM_SA_EMAIL
 from runnerforge.models import RunnerForgeVmLabels, VmInfo
 
-_BOOT_IMAGE = "projects/runnerforge/global/images/family/runnerforge-runner"
+_BOOT_IMAGE_FAMILY = "projects/runnerforge/global/images/family/runnerforge-runner"
 _BOOT_DISK_SIZE_GB = 10
 _DATA_DISK_SIZE_GB = 50
 
@@ -37,7 +37,7 @@ async def create_vm(
             auto_delete=True,  # this is THE boot disk
             initialize_params=compute_v1.AttachedDiskInitializeParams(
                 disk_name="boot",
-                source_image=_BOOT_IMAGE,
+                source_image=_BOOT_IMAGE_FAMILY,
                 disk_size_gb=_BOOT_DISK_SIZE_GB,
             ),
         ),
@@ -70,6 +70,14 @@ async def create_vm(
     instance.name = instance_name
     instance.machine_type = f"zones/{zone}/machineTypes/{machine_type}"
     instance.labels = labels
+
+    # Service Accounts
+    instance.service_accounts = [
+        compute_v1.ServiceAccount(
+            email=RUNNER_VM_SA_EMAIL,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+    ]
 
     # Prepare the request to insert an instance
     request = compute_v1.InsertInstanceRequest()

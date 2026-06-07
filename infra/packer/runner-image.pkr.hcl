@@ -22,9 +22,22 @@ variable "zone" {
   default = "europe-west4-a"
 }
 
+variable "build_vm_sa" {
+  type = string
+  description = "Packer build VM Service Account with logWriter permissions for enabling ops agent"
+  default = "ci-vm-logger@runnerforge.iam.gserviceaccount.com"
+}
+
+variable "tag" {
+  type = string
+  description = "Semantic version tag for appending to image_name"
+  default = "0.0.1"
+}
+
 # Builder definition - what kind of machine, where, from what base
 source "googlecompute" "runnerforge_runner" {
   project_id = var.project_id
+  service_account_email = var.build_vm_sa
   source_image_family = "debian-12"   # base we start FROM
   source_image_project_id = ["debian-cloud"]  # where the base lives
   zone = var.zone
@@ -32,17 +45,20 @@ source "googlecompute" "runnerforge_runner" {
   ssh_username = "packer" # SSH user Packer uses during build
   disk_size = 10
 
+  image_labels = {
+    version = replace(var.tag, ".","-")
+    managed-by = "runnerforge-cd"
+  }
   # Output image naming
-  image_name = "runnerforge-runner-{{timestamp}}" # unique per build (Unix timestamp)
-  image_family = "runnerforge-runner"
+  image_name = "runnerforge-runner-base-image-${replace(var.tag, ".","-")}"
 }
 
-# Build recipe - ties source(s) to provisioner(s). No provisioners yet.
+# Build recipe - ties source(s) to provisioner(s).
 build {
   name = "runnerforge-runner"
   sources = ["source.googlecompute.runnerforge_runner"]
-  # Provisioners (to be added for installing runner binary, Docker, etc.)
 
+  # Provisioners (for installing runner binary, Docker, etc.)
   provisioner "shell" {
     script    = "scripts/install-runner.sh"
     execute_command = "sudo bash '{{ .Path }}'" # script needs root

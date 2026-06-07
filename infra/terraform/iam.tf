@@ -13,29 +13,21 @@ data "google_compute_default_service_account" "default" {}
 # ------- Project-level role bindings -----
 
 resource "google_project_iam_member" "orchestrator_instance_admin" {
-  project = "runnerforge"
+  project = data.google_project.current.project_id
   role    = "roles/compute.instanceAdmin.v1"
   member  = "serviceAccount:${google_service_account.orchestrator.email}"
 }
 
 resource "google_project_iam_member" "orchestrator_image_user" {
-  project = "runnerforge"
+  project = data.google_project.current.project_id
   role    = "roles/compute.imageUser"
   member  = "serviceAccount:${google_service_account.orchestrator.email}"
 }
 
 resource "google_project_iam_member" "orchestrator_log_write" {
-  project = "runnerforge"
+  project = data.google_project.current.project_id
   role    = "roles/logging.logWriter"
   member  = "serviceAccount:${google_service_account.orchestrator.email}"
-}
-
-# ----- Act-as the default compute SA (so orchestrator can attach it to VMs) ----
-
-resource "google_service_account_iam_member" "orchestrator_acts_as_default_compute" {
-  service_account_id = data.google_compute_default_service_account.default.name
-  role               = "roles/iam.serviceAccountUser"
-  member             = "serviceAccount:${google_service_account.orchestrator.email}"
 }
 
 # ----- Secret-level grants (narrowest scope possible) ----

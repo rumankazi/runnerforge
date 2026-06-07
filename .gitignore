@@ -31,6 +31,7 @@ venv/
 .ruff_cache/
 .mypy_cache/
 *,cover
+**/.coverage
 
 # Coverage / test
 coverage/

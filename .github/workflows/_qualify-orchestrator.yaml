@@ -20,7 +20,7 @@ jobs:
           persist-credentials: false
 
       - name: Mise
-        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+        uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
         with:
           working_directory: apps/orchestrator
 
@@ -72,6 +72,7 @@ jobs:
             -e GITHUB_APP_ID=12345 \
             -e GITHUB_APP_PRIVATE_KEY_PATH=/secrets/private-key.pem \
             -e GCP_PROJECT_ID=ci-probe-project \
+            -e RUNNER_VM_SA_EMAIL=ci-probe@example.iam.gserviceaccount.com \
             -e EXPECTED_SCHEDULER_SA_EMAIL=ci-probe@example.iam.gserviceaccount.com \
             -e EXPECTED_AUDIENCE=https://ci-probe.example \
             orchestrator:probe

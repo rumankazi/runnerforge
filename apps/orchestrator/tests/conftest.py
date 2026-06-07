@@ -32,6 +32,9 @@ os.environ.setdefault("GITHUB_APP_ID", "12345")
 os.environ.setdefault("GCP_PROJECT_ID", "test-project")
 os.environ.setdefault("GCP_ZONE", "europe-west4-a")
 os.environ.setdefault(
+    "RUNNER_VM_SA_EMAIL", "test-runner-vm@example.iam.gserviceaccount.com"
+)
+os.environ.setdefault(
     "EXPECTED_SCHEDULER_SA_EMAIL", "test-scheduler@example.iam.gserviceaccount.com"
 )
 os.environ.setdefault("EXPECTED_AUDIENCE", "https://test-orchestrator.example")

@@ -15,8 +15,7 @@
     },
     "infra/packer": {
       "release-type": "simple",
-      "package-name": "runner-image",
-      "release-as": "0.1.0"
+      "package-name": "runner-image"
     }
   }
 }
