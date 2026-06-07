@@ -30,14 +30,6 @@ resource "google_project_iam_member" "orchestrator_log_write" {
   member  = "serviceAccount:${google_service_account.orchestrator.email}"
 }
 
-# ----- Act-as the default compute SA (so orchestrator can attach it to VMs) ----
-
-resource "google_service_account_iam_member" "orchestrator_acts_as_default_compute" {
-  service_account_id = data.google_compute_default_service_account.default.name
-  role               = "roles/iam.serviceAccountUser"
-  member             = "serviceAccount:${google_service_account.orchestrator.email}"
-}
-
 # ----- Secret-level grants (narrowest scope possible) ----
 
 resource "google_secret_manager_secret_iam_member" "orchestrator_reads_webhook_secret" {
