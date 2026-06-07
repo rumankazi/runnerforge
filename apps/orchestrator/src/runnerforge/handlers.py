@@ -1,6 +1,6 @@
 import logging
 
-from runnerforge.compute_client import create_vm, delete_vm, find_vms_by_job_id
+from runnerforge.compute_client import create_vm, delete_vm
 from runnerforge.config import STARTUP_SCRIPT
 from runnerforge.github_client import get_installation_token, get_registration_token
 from runnerforge.models import RunnerForgeVmLabels, WorkflowJobEvent
@@ -61,25 +61,16 @@ def handle_in_progress(event: WorkflowJobEvent):
     logger.info("Job picked up by a runner", extra={"job_id": event.workflow_job.id})
 
 
-async def handle_completed(event: WorkflowJobEvent):
-    job_id = str(event.workflow_job.id)
-    run_id = str(event.workflow_job.run_id)
-    run_attempt = str(event.workflow_job.run_attempt)
-    vms = await find_vms_by_job_id(job_id, run_id, run_attempt)
-
-    if not vms:
+async def handle_completed(runner_name: str | None):
+    if not runner_name:
         logger.info(
             "No VM found for completed job (already cleaned up or never created)",
-            extra={
-                "job_id": event.workflow_job.id,
-                "conclusion": event.workflow_job.conclusion,
-            },
+            extra={"runner_name": runner_name},
         )
         return
 
-    for vm_name in vms:
-        operation_id = await delete_vm(vm_name)
-        logger.info(
-            "VM deletion submitted",
-            extra={"job_id": job_id, "vm_name": vm_name, "operation_id": operation_id},
-        )
+    operation_id = await delete_vm(runner_name)
+    logger.info(
+        "VM deletion submitted",
+        extra={"runner_name": runner_name, "operation_id": operation_id},
+    )

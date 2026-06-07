@@ -68,6 +68,7 @@ fetch_meta() {
 # GCE stores it on the VM; the metadata server serves it locally to us here.
 REGISTRATION_TOKEN=$(fetch_meta registration-token)
 REPO_URL=$(fetch_meta repo-url)
+INSTANCE_NAME=$(fetch_meta name)
 RUNNER_LABELS=$(fetch_meta runner-labels)
 
 log "Fetched metadata for repo $REPO_URL"
@@ -85,6 +86,7 @@ sudo --user=runner bash -c "
     ./config.sh \
         --url '$REPO_URL' \
         --token '$REGISTRATION_TOKEN' \
+        --name '$INSTANCE_NAME' \
         --labels '$RUNNER_LABELS' \
         --ephemeral \
         --unattended
