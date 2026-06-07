@@ -1,5 +1,3 @@
-data "google_project" "current" {}
-
 resource "google_iam_workload_identity_pool" "github_pool" {
   workload_identity_pool_id = "github"
 }
