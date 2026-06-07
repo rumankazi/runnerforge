@@ -112,6 +112,8 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         job_id=event.workflow_job.id,
         run_id=event.workflow_job.run_id,
         run_attempt=event.workflow_job.run_attempt,
+        runner_name=event.workflow_job.runner_name,
+        runner_id=event.workflow_job.runner_id,
         installation_id=event.installation.id,
     )
 
@@ -121,7 +123,7 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         case "in_progress":
             handle_in_progress(event)
         case "completed":
-            await handle_completed(event)
+            await handle_completed(event.workflow_job.runner_name)
         case _:
             logger.warning("Ignoring unknown action", extra={"action": event.action})
     return {"ok": True}

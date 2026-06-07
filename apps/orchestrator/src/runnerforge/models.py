@@ -11,6 +11,8 @@ class WorkflowJob(BaseModel):
     conclusion: str | None = None
     run_id: int
     run_attempt: int
+    runner_name: str | None = None
+    runner_id: int | None = None
 
 
 class User(BaseModel):

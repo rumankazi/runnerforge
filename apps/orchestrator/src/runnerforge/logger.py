@@ -129,6 +129,8 @@ class LogContext:
     job_id: int | None = None
     run_id: int | None = None
     run_attempt: int | None = None
+    runner_name: str | None = None
+    runner_id: int | None = None
     installation_id: int | None = None
 
 

@@ -150,10 +150,10 @@ def test_webhook_completed_event_triggers_vm_deletion(
     payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
     payload["action"] = "completed"
     payload["workflow_job"]["conclusion"] = "success"
+    payload["workflow_job"]["runner_name"] = "test-runner-name"
+    payload["workflow_job"]["runner_id"] = 1234
     body = json.dumps(payload).encode()
     # Mock delete_vm, to we don't hit real GCP
-    find_mock = AsyncMock(return_value=["runnerforge-77678867086"])
-    monkeypatch.setattr("runnerforge.handlers.find_vms_by_job_id", find_mock)
 
     delete_mock = AsyncMock(return_value="op-test-delete")
     monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
@@ -176,9 +176,7 @@ def test_webhook_completed_event_logs_when_no_vm_found(
     payload["workflow_job"]["conclusion"] = "success"
     body = json.dumps(payload).encode()
 
-    find_mock = AsyncMock(return_value=[])  # ← no VMs found
     delete_mock = AsyncMock()
-    monkeypatch.setattr("runnerforge.handlers.find_vms_by_job_id", find_mock)
     monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
 
     response = client.post(
