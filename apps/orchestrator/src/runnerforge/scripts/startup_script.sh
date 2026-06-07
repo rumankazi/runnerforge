@@ -68,8 +68,13 @@ fetch_meta() {
 # GCE stores it on the VM; the metadata server serves it locally to us here.
 REGISTRATION_TOKEN=$(fetch_meta registration-token)
 REPO_URL=$(fetch_meta repo-url)
-INSTANCE_NAME=$(fetch_meta name)
 RUNNER_LABELS=$(fetch_meta runner-labels)
+
+# Instance name is a top-level metadata field, not a custom attribute, so it
+# lives at /instance/name (not /instance/attributes/name).
+INSTANCE_NAME=$(curl --fail --silent --show-error \
+    --header "$METADATA_HEADER" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/name")
 
 log "Fetched metadata for repo $REPO_URL"
 
