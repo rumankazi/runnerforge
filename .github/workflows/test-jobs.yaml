@@ -1,0 +1,38 @@
+name: Test Jobs
+
+on:
+  workflow_dispatch:
+    inputs:
+      timeout:
+        description: "Sleep timeout in seconds"
+        default: "10"
+        type: string
+        required: false
+
+  push: # remove after testing
+
+
+permissions: {}
+
+jobs:
+  stress-test:
+    name: Stress Test
+    runs-on: [runnerforge, e2-medium]
+    strategy:
+      matrix:
+        req: [1, 2, 3]
+    steps:
+      - name: Job info
+        run: |
+          echo "Hostname: $(hostname)"
+          echo "CPU cores: $(nproc)"
+          echo "Memory: $(free -h | grep Mem | awk '{print $2}')"
+          echo "============================================"
+
+      - name: Simulate work
+        env:
+          SLEEP_TIME_SECONDS: ${{ inputs.timeout || '10' }}
+        run: |
+          echo "Starting work simulation..."
+          sleep $SLEEP_TIME_SECONDS
+          echo "Work completed!"
