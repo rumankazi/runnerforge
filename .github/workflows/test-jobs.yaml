@@ -9,7 +9,8 @@ on:
         type: string
         required: false
 
-  push: # remove after testing
+  push:
+    branches: [main]
 
 
 permissions: {}
