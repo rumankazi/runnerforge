@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.3.3...orchestrator-v0.4.0) (2026-06-07)
+
+
+### Features
+
+* **orchestrator:** use runner-name explicitly ([#65](https://github.com/rumankazi/runnerforge/issues/65)) ([c830f75](https://github.com/rumankazi/runnerforge/commit/c830f7592d04849d07a9c6857351196b2b3e793c))
+
 ## [0.3.3](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.3.2...orchestrator-v0.3.3) (2026-06-07)
 
 
