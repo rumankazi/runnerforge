@@ -1,0 +1,29 @@
+---
+title: Webhook Availability SLO Alert
+---
+
+## What this alert means
+
+The orchestrator's `/webhook` endpoint is returning 5xx responses faster than 14.4× the sustainable rate over the last 1 hour. At this burn rate, the 99.5% / 30-day SLO budget would be exhausted in ~2 days if uncorrected.
+
+Each 5xx response is a webhook GitHub will NOT retry — a lost runner provisioning event.
+
+## First 5 minutes
+
+1. Open Cloud Logging: filter `resource.type="cloud_run_revision" AND severity=ERROR AND resource.labels.service_name="runnerforge-orchestrator"`.
+2. Look at recent stack traces. Are they:
+   - GitHub API errors (rate limit, 5xx from GitHub)?
+   - GCP API errors (compute quota, IAM, network)?
+   - Code-level (Pydantic validation, type errors)?
+3. Check Cloud Run revisions: did a recent deploy correlate with the spike?
+
+## Common causes
+
+- **Recent bad deploy**: roll back via deploy-orchestrator.yaml workflow_dispatch with `action=rollback`, `target=<previous-revision-name>`.
+- **GitHub API outage**: check status.github.com. Wait it out; webhooks GitHub couldn't deliver are gone (no retry).
+- **GCP quota exhausted**: check `gcloud compute project-info describe` for quota usage. Request increase if hit.
+- **Bad secret rotation**: webhook secret or GitHub App PEM out of sync → HMAC failures show as 401s, not 5xx; if you see 5xx unauth-related, check Secret Manager versions.
+
+## Silencing
+
+If the cause is known and tolerated (e.g., synthetic test, GitHub-side outage), silence the alert in Cloud Monitoring → Alerting → Silences → 1-hour silence with reason.
