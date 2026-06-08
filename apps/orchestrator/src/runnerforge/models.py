@@ -13,6 +13,9 @@ class WorkflowJob(BaseModel):
     run_attempt: int
     runner_name: str | None = None
     runner_id: int | None = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 class User(BaseModel):
@@ -73,6 +76,8 @@ class RunnerForgeVmLabels(BaseModel):
     run_attempt: str
     repo: str
     installation_id: str
+    queued_trace_id: str = ""
+    queued_span_id: str = ""
 
 
 class VmInfo(BaseModel):

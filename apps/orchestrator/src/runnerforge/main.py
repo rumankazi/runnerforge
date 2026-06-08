@@ -118,7 +118,7 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         case "queued":
             await handle_queued(event)
         case "in_progress":
-            handle_in_progress(event)
+            await handle_in_progress(event)
         case "completed":
             await handle_completed(event)
         case _:

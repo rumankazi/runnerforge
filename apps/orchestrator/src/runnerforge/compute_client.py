@@ -148,6 +148,43 @@ async def find_vms_by_job_id(
     return result
 
 
+async def get_vm_labels_by_job(
+    job_id: str,
+    run_id: str,
+    run_attempt: str,
+    zone: str = GCP_ZONE,
+    project_id: str = GCP_PROJECT_ID,
+) -> dict[str, str] | None:
+    with tracer.start_as_current_span("compute.get_vm_labels_by_job") as span:
+        span.set_attribute("job_id", job_id)
+        client = compute_v1.InstancesClient()
+        request = compute_v1.ListInstancesRequest()
+        request.zone = zone
+        request.project = project_id
+        request.filter = (
+            f"labels.job_id={job_id} AND "
+            f"labels.run_id={run_id} AND "
+            f"labels.run_attempt={run_attempt}"
+        )
+        instances = await asyncio.to_thread(lambda: list(client.list(request=request)))
+        if not instances:
+            return None
+
+        result = [i.name for i in instances]
+        logger.info(
+            "VM lookup by job_id",
+            extra={
+                "job_id": job_id,
+                "run_id": run_id,
+                "run_attempt": run_attempt,
+                "match_count": len(result),
+            },
+        )
+        labels = RunnerForgeVmLabels.model_validate(dict(instances[0].labels))
+
+        return labels.model_dump()
+
+
 async def delete_vm(
     instance_name: str, zone: str = GCP_ZONE, project_id: str = GCP_PROJECT_ID
 ) -> str | None:
