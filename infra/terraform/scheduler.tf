@@ -10,7 +10,7 @@ resource "google_cloud_scheduler_job" "sweep" {
   name             = "runnerforge-sweep"
   region           = "europe-west4"
   description      = "Triggers POST /sweep on the orchestrator to clean up orphan runner VMs"
-  schedule         = "12 * */1 * *"
+  schedule         = "12 0 * * *"
   time_zone        = "Etc/UTC"
   attempt_deadline = "60s"
 
