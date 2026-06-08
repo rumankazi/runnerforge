@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from google.api_core.exceptions import AlreadyExists, NotFound
+from google.auth.exceptions import DefaultCredentialsError
 from google.cloud import compute_v1
 from opentelemetry import trace
 from pydantic import ValidationError
@@ -21,7 +22,13 @@ _compute_client: compute_v1.InstancesClient | None = None
 # Not async since these are not async methods (sync operations)
 def init_compute_client():
     global _compute_client
-    _compute_client = compute_v1.InstancesClient()
+    try:
+        _compute_client = compute_v1.InstancesClient()
+    except DefaultCredentialsError:
+        logger.warning(
+            "compute client init skipped - no GCP credentials available; "
+            "VM operations will fail until creds are present"
+        )
 
 
 def close_compute_client():

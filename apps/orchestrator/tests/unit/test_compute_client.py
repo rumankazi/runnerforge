@@ -5,6 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from google.api_core.exceptions import AlreadyExists, GoogleAPIError
+from google.auth.exceptions import DefaultCredentialsError
+from runnerforge import compute_client
 from runnerforge.compute_client import (
     create_vm,
     delete_vm,
@@ -388,3 +390,28 @@ def test_create_vm_requests_receives_runner_vm_sa(monkeypatch):
     service_account = captured_request.instance_resource.service_accounts[0]
     assert service_account.email == RUNNER_VM_SA_EMAIL
     assert service_account.scopes == ["https://www.googleapis.com/auth/cloud-platform"]
+
+
+def test_init_compute_client_logs_warning_when_no_credentials(monkeypatch, caplog):
+    # Make the constructor raise the credentials error
+    def _raise():
+        raise DefaultCredentialsError("no creds")
+
+    monkeypatch.setattr(
+        "runnerforge.compute_client.compute_v1.InstancesClient",
+        _raise,
+    )
+    monkeypatch.setattr(compute_client, "_compute_client", None)
+
+    # Should NOT raise — we catch and log instead
+    with caplog.at_level(logging.WARNING):
+        compute_client.init_compute_client()
+
+    # Module global stays None — init failed gracefully
+    assert compute_client._compute_client is None
+
+    # Warning was logged with the expected message
+    assert any(
+        r.levelno == logging.WARNING and "compute client init skipped" in r.message
+        for r in caplog.records
+    )
