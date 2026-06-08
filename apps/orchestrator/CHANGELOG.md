@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.5.1...orchestrator-v0.6.0) (2026-06-08)
+
+
+### Features
+
+* shared httpx + compute clients via lifespan-managed module globals ([#76](https://github.com/rumankazi/runnerforge/issues/76)) ([220a692](https://github.com/rumankazi/runnerforge/commit/220a692080aea93b005739788c5230718f349f15))
+
 ## [0.5.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.5.0...orchestrator-v0.5.1) (2026-06-08)
 
 
