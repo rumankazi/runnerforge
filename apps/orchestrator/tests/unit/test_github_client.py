@@ -377,6 +377,28 @@ async def test_get_job_status_returns_job_status(caplog):
 
 
 @respx.mock
+async def test_get_job_status_handles_null_conclusion_for_in_progress_jobs():
+    # In-progress jobs return conclusion=null from GitHub.
+    # Exercise the `conclusion is not None` branch where conclusion IS None,
+    # so we don't attempt to set None as an OTel attribute.
+    route = respx.get("https://api.github.com/repos/foo/bar/actions/jobs/13").mock(
+        return_value=httpx.Response(
+            200, json={"status": "in_progress", "conclusion": None}
+        )
+    )
+
+    response = await get_job_status(
+        installation_token="ghs_test_installation_token",
+        repo_full_name="foo/bar",
+        job_id="13",
+    )
+    assert route.called
+    assert response is not None
+    assert response.status == "in_progress"
+    assert response.conclusion is None
+
+
+@respx.mock
 async def test_get_job_status_returns_none_on_404(caplog):
     route = respx.get("https://api.github.com/repos/foo/bar/actions/jobs/12").mock(
         return_value=httpx.Response(404, json={"message": "Job not found"})

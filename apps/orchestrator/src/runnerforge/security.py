@@ -4,14 +4,21 @@ import logging
 
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
+from opentelemetry import trace
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
-def verify_github_signature(body: bytes, header_signature: str, secret: bytes) -> bool:
+def verify_github_signature(
+    body: bytes, x_hub_signature_256: str, secret: bytes
+) -> bool:
     """Returns True if body's HMAC-SHA256 matches header_signature"""
-    expected = "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, header_signature)
+    with tracer.start_as_current_span("webhook.verify_github_signature") as span:
+        span.set_attribute("signature_present", bool(x_hub_signature_256))
+
+        expected = "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, x_hub_signature_256)
 
 
 def verify_oidc_token(

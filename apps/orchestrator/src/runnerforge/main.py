@@ -5,6 +5,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from opentelemetry import trace
 
 from runnerforge.config import (
     EXPECTED_AUDIENCE,
@@ -20,27 +21,21 @@ from runnerforge.logger import (
 from runnerforge.models import WorkflowJobEvent
 from runnerforge.security import verify_github_signature, verify_oidc_token
 from runnerforge.sweep import run_sweep
+from runnerforge.tracing import setup_tracing
 from runnerforge.validation import parse_github_response
 
 setup_logging()
 logger = logging.getLogger(__name__)
 app = FastAPI()
-
-
-def parse_trace_id(header: str | None) -> str | None:
-    """Extracts TRACE_ID from 'TRACE_ID/SPAN_ID;o=1' format."""
-    if not header:
-        return None
-    trace_id = header.split("/", 1)[0]
-    return trace_id or None
+setup_tracing(app)
+tracer = trace.get_tracer(__name__)
 
 
 @app.middleware("http")
 async def access_log_middleware(request: Request, call_next):
     start = time.monotonic()
-    trace_id = parse_trace_id(request.headers.get("X-Cloud-Trace-Context"))
-    request_id = trace_id or str(uuid.uuid4())
-    update_context(request_id=request_id, trace_id=trace_id)
+    request_id = str(uuid.uuid4())
+    update_context(request_id=request_id)
     response = await call_next(request)
     duration = time.monotonic() - start
     logger.info(
@@ -77,7 +72,7 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
 
     # HMAC validation
     if not verify_github_signature(
-        body=body, header_signature=x_hub_signature_256, secret=WEBHOOK_SECRET
+        body=body, x_hub_signature_256=x_hub_signature_256, secret=WEBHOOK_SECRET
     ):
         logger.warning(
             "Webhook signature validation failed",
@@ -85,17 +80,19 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         )
         raise HTTPException(status_code=401, detail="Invalid signature provided")
 
-    try:
-        json_body = json.loads(body)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Failed to load request body")
+    with tracer.start_as_current_span("webhook.parse_github_response") as span:
+        try:
+            json_body = json.loads(body)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Failed to load request body")
 
-    event = parse_github_response(
-        WorkflowJobEvent,
-        data=json_body,
-        cause_hint="Webhook payload did not match the expected WorkflowJob schema. GitHub may have changed their payload format, or a non-workflow_job event was delivered.",
-        logger=logger,
-    )
+        event = parse_github_response(
+            WorkflowJobEvent,
+            data=json_body,
+            cause_hint="Webhook payload did not match the expected WorkflowJob schema. GitHub may have changed their payload format, or a non-workflow_job event was delivered.",
+            logger=logger,
+        )
+        span.set_attribute("event_type", event.action)
     # Stop fast for non-runnerforge requests
     if not any(
         runnerforge_label in event.workflow_job.labels
@@ -123,7 +120,7 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         case "in_progress":
             handle_in_progress(event)
         case "completed":
-            await handle_completed(event.workflow_job.runner_name)
+            await handle_completed(event)
         case _:
             logger.warning("Ignoring unknown action", extra={"action": event.action})
     return {"ok": True}
