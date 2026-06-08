@@ -30,6 +30,12 @@ resource "google_project_iam_member" "orchestrator_log_write" {
   member  = "serviceAccount:${google_service_account.orchestrator.email}"
 }
 
+resource "google_project_iam_member" "orchestrator_cloud_trace_agent" {
+  project = "runnerforge"
+  role    = "roles/cloudtrace.agent"
+  member  = "serviceAccount:${google_service_account.orchestrator.email}"
+}
+
 # ----- Secret-level grants (narrowest scope possible) ----
 
 resource "google_secret_manager_secret_iam_member" "orchestrator_reads_webhook_secret" {
