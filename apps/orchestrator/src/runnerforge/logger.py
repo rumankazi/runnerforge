@@ -12,11 +12,16 @@ from opentelemetry import trace
 
 from runnerforge.config import GCP_PROJECT_ID
 
-try:
-    _APP_VERSION = version("runnerforge")
-except PackageNotFoundError:
-    _APP_VERSION = "dev"
 
+def _resolve_app_version() -> str:
+    """Read version from installed package metadata, fall back to 'dev'."""
+    try:
+        return version("runnerforge")
+    except PackageNotFoundError:
+        return "dev"
+
+
+_APP_VERSION = _resolve_app_version()
 _GIT_SHA = os.environ.get("GIT_SHA", "unknown")[:7]  # short SHA
 
 # -----LogFormatter----#

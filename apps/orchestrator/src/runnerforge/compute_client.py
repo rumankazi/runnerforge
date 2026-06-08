@@ -33,6 +33,8 @@ async def create_vm(
         # image is the family alias for now; will be specific after the 3.1 pivot
         span.set_attribute("image_family", _BOOT_IMAGE_FAMILY)
         span.set_attributes({"label." + k: v for k, v in labels.items()})
+        span.set_attribute("project_id", project_id)
+        span.set_attribute("zone", zone)
 
         instance_client = compute_v1.InstancesClient()
 
@@ -153,65 +155,75 @@ async def delete_vm(
     with tracer.start_as_current_span("compute.delete_vm") as span:
         span.set_attribute("instance_name", instance_name)
         span.set_attribute("project_id", project_id)
+        span.set_attribute("zone", zone)
 
-    client = compute_v1.InstancesClient()
-    try:
-        operation = await asyncio.to_thread(
-            client.delete, project=project_id, zone=zone, instance=instance_name
-        )
-    except NotFound:
+        client = compute_v1.InstancesClient()
+        try:
+            operation = await asyncio.to_thread(
+                client.delete, project=project_id, zone=zone, instance=instance_name
+            )
+        except NotFound:
+            logger.info(
+                "VM already deleted (idempotent no-op)",
+                extra={"vm_name": instance_name, "zone": zone},
+            )
+            return None
         logger.info(
-            "VM already deleted (idempotent no-op)",
-            extra={"vm_name": instance_name, "zone": zone},
+            "Submitted VM deletion",
+            extra={
+                "vm_name": instance_name,
+                "zone": zone,
+                "operation_id": operation.name,
+            },
         )
-        return None
-    logger.info(
-        "Submitted VM deletion",
-        extra={"vm_name": instance_name, "zone": zone, "operation_id": operation.name},
-    )
-    return operation.name
+        return operation.name
 
 
 async def list_runnerforge_vms(
     zone: str = GCP_ZONE, project_id: str = GCP_PROJECT_ID
 ) -> list[VmInfo]:
     """Returns all VMs labeled runner=runnerforge with their creation timestamp + labels."""
-    client = compute_v1.InstancesClient()
-    request = compute_v1.ListInstancesRequest()
-    request.zone = zone
-    request.project = project_id
+    with tracer.start_as_current_span("compute.list_runnerforge_vms") as span:
+        span.set_attribute("project_id", project_id)
+        span.set_attribute("zone", zone)
+        client = compute_v1.InstancesClient()
+        request = compute_v1.ListInstancesRequest()
+        request.zone = zone
+        request.project = project_id
 
-    # TODO: filtering based on labels. less secure of ensuring the runners are the ones we want to delete, either use some secured handshake, or use uuid while creation (still problematic once you want users to bring their projects)
-    request.filter = "labels.runner=runnerforge"
+        # TODO: filtering based on labels. less secure of ensuring the runners are the ones we want to delete, either use some secured handshake, or use uuid while creation (still problematic once you want users to bring their projects)
+        request.filter = "labels.runner=runnerforge"
 
-    instances = await asyncio.to_thread(lambda: list(client.list(request=request)))
-    valid_vms: list[VmInfo] = []
-    skipped_malformed = 0
-    for i in instances:
-        try:
-            labels = RunnerForgeVmLabels.model_validate(dict(i.labels))
-        except ValidationError:
-            logger.warning(
-                "Skipping VM with unexpected label shape",
-                extra={"vm_name": i.name, "raw_labels": dict(i.labels)},
+        instances = await asyncio.to_thread(lambda: list(client.list(request=request)))
+        valid_vms: list[VmInfo] = []
+        skipped_malformed = 0
+        for i in instances:
+            try:
+                labels = RunnerForgeVmLabels.model_validate(dict(i.labels))
+            except ValidationError:
+                logger.warning(
+                    "Skipping VM with unexpected label shape",
+                    extra={"vm_name": i.name, "raw_labels": dict(i.labels)},
+                )
+                skipped_malformed += 1
+                continue
+            valid_vms.append(
+                VmInfo.model_validate(
+                    {
+                        "name": i.name,
+                        "creation_timestamp": i.creation_timestamp,
+                        "labels": labels,
+                    }
+                )
             )
-            skipped_malformed += 1
-            continue
-        valid_vms.append(
-            VmInfo.model_validate(
-                {
-                    "name": i.name,
-                    "creation_timestamp": i.creation_timestamp,
-                    "labels": labels,
-                }
-            )
+
+        logger.info(
+            "VM list scan",
+            extra={
+                "runnerforge_vm_count": len(valid_vms),
+                "skipped_malformed_count": skipped_malformed,
+            },
         )
-
-    logger.info(
-        "VM list scan",
-        extra={
-            "runnerforge_vm_count": len(valid_vms),
-            "skipped_malformed_count": skipped_malformed,
-        },
-    )
-    return valid_vms
+        span.set_attribute("result_count", len(valid_vms))
+        span.set_attribute("skipped_malformed_count", skipped_malformed)
+        return valid_vms

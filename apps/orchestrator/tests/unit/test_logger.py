@@ -3,6 +3,9 @@ import json
 import logging
 
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace import set_tracer_provider
 from runnerforge.logger import (
     ColorFormatter,
     ContextFilter,
@@ -52,19 +55,29 @@ def test_json_formatter_emits_valid_json_with_cloud_logging_fields():
 
 
 def test_json_formatter_emits_trace_field_when_both_present(monkeypatch):
-    # force reload of logger module so GCP_PROJECT_ID is re-read
     monkeypatch.setattr("runnerforge.logger.GCP_PROJECT_ID", "my-project")
-    update_context(request_id="abc123")
+    set_tracer_provider(TracerProvider())
+    tracer = trace.get_tracer("test")
 
-    output = _capture(JsonFormatter())
+    # Start a real span so ContextFilter picks up trace_id/span_id from OTel
+    with tracer.start_as_current_span("test-span"):
+        output = _capture(JsonFormatter())
+
     parsed = json.loads(output)
-    assert parsed["logging.googleapis.com/trace"] == "projects/my-project/traces/abc123"
+    assert "logging.googleapis.com/trace" in parsed
+    assert parsed["logging.googleapis.com/trace"].startswith(
+        "projects/my-project/traces/"
+    )
+    assert "logging.googleapis.com/spanId" in parsed
 
 
 def test_json_formatter_omits_trace_fields_when_project_id_missing(monkeypatch):
     monkeypatch.setattr("runnerforge.logger.GCP_PROJECT_ID", None)
-    update_context(trace_id="abc123")
-    output = _capture(JsonFormatter())
+    set_tracer_provider(TracerProvider())
+    tracer = trace.get_tracer("test")
+
+    with tracer.start_as_current_span("test-span"):
+        output = _capture(JsonFormatter())
     parsed = json.loads(output)
 
     assert "logging.googleapis.com/trace" not in parsed
@@ -113,6 +126,18 @@ def test_context_filter_injects_field(field, value):
     assert parsed[field] == value
 
 
+def test_resolve_app_version_falls_back_to_dev_when_package_not_installed(monkeypatch):
+    from importlib.metadata import PackageNotFoundError
+
+    from runnerforge.logger import _resolve_app_version
+
+    def raise_not_found(*args, **kwargs):
+        raise PackageNotFoundError
+
+    monkeypatch.setattr("runnerforge.logger.version", raise_not_found)
+    assert _resolve_app_version() == "dev"
+
+
 def test_context_filter_always_injects_version_and_sha():
     output = _capture(JsonFormatter())
     parsed = json.loads(output)
@@ -129,11 +154,15 @@ def test_color_formatter_is_human_readable():
 
 
 def test_color_formatter_emits_valid_extra_fields():
+    from importlib.metadata import version
+
     output = _capture(ColorFormatter(), {"job_id": 31, "random": "foo-bar"})
     assert "INFO" in output
     assert "job_id=31" in output
     assert "random=foo-bar" in output
-    assert "app_version=dev" in output
+    # app_version is sourced from pyproject.toml via importlib.metadata;
+    # don't hardcode a string that changes on every release.
+    assert f"app_version={version('runnerforge')}" in output
     assert "git_sha=unknown" in output
 
 

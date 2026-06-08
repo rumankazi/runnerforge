@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 from opentelemetry import trace
 from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
@@ -11,6 +13,8 @@ from runnerforge.config import GCP_PROJECT_ID
 
 
 def setup_tracing(app: FastAPI) -> None:
+    if not os.environ.get("K_SERVICE"):
+        return
     resource = Resource.create(
         attributes={
             # Use the PID as the service.instance.id to avoid duplicate timeseries from different Gunicorn worker processes.

@@ -5,6 +5,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from opentelemetry import trace
 
 from runnerforge.config import (
     EXPECTED_AUDIENCE,
@@ -27,6 +28,7 @@ setup_logging()
 logger = logging.getLogger(__name__)
 app = FastAPI()
 setup_tracing(app)
+tracer = trace.get_tracer(__name__)
 
 
 @app.middleware("http")
@@ -70,7 +72,7 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
 
     # HMAC validation
     if not verify_github_signature(
-        body=body, header_signature=x_hub_signature_256, secret=WEBHOOK_SECRET
+        body=body, x_hub_signature_256=x_hub_signature_256, secret=WEBHOOK_SECRET
     ):
         logger.warning(
             "Webhook signature validation failed",
@@ -78,17 +80,19 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
         )
         raise HTTPException(status_code=401, detail="Invalid signature provided")
 
-    try:
-        json_body = json.loads(body)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Failed to load request body")
+    with tracer.start_as_current_span("webhook.parse_github_response") as span:
+        try:
+            json_body = json.loads(body)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Failed to load request body")
 
-    event = parse_github_response(
-        WorkflowJobEvent,
-        data=json_body,
-        cause_hint="Webhook payload did not match the expected WorkflowJob schema. GitHub may have changed their payload format, or a non-workflow_job event was delivered.",
-        logger=logger,
-    )
+        event = parse_github_response(
+            WorkflowJobEvent,
+            data=json_body,
+            cause_hint="Webhook payload did not match the expected WorkflowJob schema. GitHub may have changed their payload format, or a non-workflow_job event was delivered.",
+            logger=logger,
+        )
+        span.set_attribute("event_type", event.action)
     # Stop fast for non-runnerforge requests
     if not any(
         runnerforge_label in event.workflow_job.labels
