@@ -56,11 +56,13 @@ def rsa_keys() -> tuple[bytes, bytes]:
 
 
 import pytest_asyncio
-from runnerforge import github_client
+from runnerforge import compute_client, github_client
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True, loop_scope="session")
 async def _shared_clients():  # async def + a more descriptive name
     await github_client.init_http_client()
+    compute_client.init_compute_client()
     yield
     await github_client.close_http_client()
+    compute_client.close_compute_client()
