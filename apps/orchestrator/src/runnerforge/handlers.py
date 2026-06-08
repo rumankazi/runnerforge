@@ -17,7 +17,7 @@ def machine_type_for_labels(labels: list[str]) -> str:
     return "e2-medium"
 
 
-async def handle_queued(event: WorkflowJobEvent):
+async def handle_queued(event: WorkflowJobEvent) -> str:
     with tracer.start_as_current_span("webhook.handle_queued") as span:
         span_context = span.get_span_context()
         queued_trace_id = format(span_context.trace_id, "032x")
@@ -64,12 +64,13 @@ async def handle_queued(event: WorkflowJobEvent):
             queued_trace_id=queued_trace_id,
             queued_span_id=queued_span_id,
         )
-        await create_vm(
+        operation_name = await create_vm(
             instance_name=vm_name,
             machine_type=machine_type_for_labels(event.workflow_job.labels),
             labels=labels.model_dump(),
             metadata=metadata,
         )
+        return operation_name
 
 
 async def handle_in_progress(event: WorkflowJobEvent):

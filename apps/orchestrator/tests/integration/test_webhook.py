@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import json
@@ -318,3 +319,95 @@ def test_webhook_with_malformed_json_body():
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Failed to load request body"
+
+
+@respx.mock
+async def test_concurrent_webhooks_keep_per_request_context_isolated(
+    fixtures_dir, monkeypatch, caplog
+):
+    monkeypatch.setenv("K_SERVICE", "runnerforge")
+    # Two payloads with distinct job_id + repo
+    payload_a = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload_a["workflow_job"]["id"] = 1001
+    payload_a["repository"]["full_name"] = "alice/repo-a"
+    body_a = json.dumps(payload_a).encode()
+
+    payload_b = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload_b["workflow_job"]["id"] = 1002
+    payload_b["repository"]["full_name"] = "bob/repo-b"
+    body_b = json.dumps(payload_b).encode()
+
+    # respx mocks: one access_tokens route, two registration-token routes (per repo)
+    # See test_webhook_queued_event_triggers_github_auth_chain for the pattern
+    # TODO — set up respx.post(...).mock(...) for the three URLs
+    respx.post("https://api.github.com/app/installations/135399152/access_tokens").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "token": "ghs_installation_token",
+                "expires_at": "2026-05-30T11:00:00Z",
+                "permissions": {
+                    "actions": "read",
+                    "metadata": "read",
+                    "administration": "write",
+                },
+                "repository_selection": "selected",
+            },
+        )
+    )
+    respx.post(
+        "https://api.github.com/repos/alice/repo-a/actions/runners/registration-token"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "token": "ghs_registration_token_a",
+                "expires_at": "2026-05-30T11:00:00Z",
+            },
+        )
+    )
+    respx.post(
+        "https://api.github.com/repos/bob/repo-b/actions/runners/registration-token"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "token": "ghs_registration_token_b",
+                "expires_at": "2026-05-30T11:00:00Z",
+            },
+        )
+    )
+    # Stop short of real GCP
+    create_vm_mock = AsyncMock(return_value="op-test")
+    monkeypatch.setattr("runnerforge.handlers.create_vm", create_vm_mock)
+
+    # Fire concurrently against an in-memory ASGI transport
+    transport = httpx.ASGITransport(app=app)
+    with caplog.at_level(logging.INFO):
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            response_a, response_b = await asyncio.gather(
+                client.post(
+                    "/webhook",
+                    content=body_a,
+                    headers={"X-Hub-Signature-256": _sign(body_a)},
+                ),
+                client.post(
+                    "/webhook",
+                    content=body_b,
+                    headers={"X-Hub-Signature-256": _sign(body_b)},
+                ),
+            )
+
+    assert response_a.status_code == 200
+    assert response_b.status_code == 200
+
+    # Isolation assertions
+    records_a = [r for r in caplog.records if getattr(r, "job_id", None) == 1001]
+    records_b = [r for r in caplog.records if getattr(r, "job_id", None) == 1002]
+
+    assert records_a, "no log records tagged with A's job_id — handler may not have run"
+    assert records_b
+    assert all(getattr(r, "repo", None) == "alice/repo-a" for r in records_a)
+    assert all(getattr(r, "repo", None) == "bob/repo-b" for r in records_b)

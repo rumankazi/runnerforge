@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from google.api_core.exceptions import AlreadyExists, NotFound
+from google.auth.exceptions import DefaultCredentialsError
 from google.cloud import compute_v1
 from opentelemetry import trace
 from pydantic import ValidationError
@@ -15,6 +16,26 @@ _DATA_DISK_SIZE_GB = 50
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
+_compute_client: compute_v1.InstancesClient | None = None
+
+
+# Not async since these are not async methods (sync operations)
+def init_compute_client():
+    global _compute_client
+    try:
+        _compute_client = compute_v1.InstancesClient()
+    except DefaultCredentialsError:
+        logger.warning(
+            "compute client init skipped - no GCP credentials available; "
+            "VM operations will fail until creds are present"
+        )
+
+
+def close_compute_client():
+    global _compute_client
+    if _compute_client is not None:
+        _compute_client.transport.close()
+        _compute_client = None
 
 
 async def create_vm(
@@ -27,6 +48,7 @@ async def create_vm(
     project_id: str = GCP_PROJECT_ID,
 ) -> str:
     """Submits a VM creation request. Returns the operation ID (does not wait for VM to boot)."""
+    assert _compute_client is not None
     with tracer.start_as_current_span("compute.create_vm") as span:
         span.set_attribute("instance_name", instance_name)
         span.set_attribute("machine_type", machine_type)
@@ -35,8 +57,6 @@ async def create_vm(
         span.set_attributes({"label." + k: v for k, v in labels.items()})
         span.set_attribute("project_id", project_id)
         span.set_attribute("zone", zone)
-
-        instance_client = compute_v1.InstancesClient()
 
         instance = compute_v1.Instance()
 
@@ -95,8 +115,11 @@ async def create_vm(
         request.project = project_id
         request.instance_resource = instance
         try:
+            # NOTE: do not call our logger from inside `to_thread` callables —
+            # contextvars (request_id, job_id, etc.) don't propagate across the
+            # thread boundary, so logs would be missing request-scoped tags.
             # .insert is sync, would block the whole application
-            operation = await asyncio.to_thread(instance_client.insert, request=request)
+            operation = await asyncio.to_thread(_compute_client.insert, request=request)
         except AlreadyExists as e:
             logger.warning(
                 "VM already exists",
@@ -123,7 +146,8 @@ async def find_vms_by_job_id(
     project_id: str = GCP_PROJECT_ID,
 ) -> list[str]:
     """Returns instance names of VMs labeled with the given job_id."""
-    client = compute_v1.InstancesClient()
+    assert _compute_client is not None
+    client = _compute_client
     request = compute_v1.ListInstancesRequest()
     request.zone = zone
     request.project = project_id
@@ -155,9 +179,10 @@ async def get_vm_labels_by_job(
     zone: str = GCP_ZONE,
     project_id: str = GCP_PROJECT_ID,
 ) -> dict[str, str] | None:
+    assert _compute_client is not None
     with tracer.start_as_current_span("compute.get_vm_labels_by_job") as span:
         span.set_attribute("job_id", job_id)
-        client = compute_v1.InstancesClient()
+        client = _compute_client
         request = compute_v1.ListInstancesRequest()
         request.zone = zone
         request.project = project_id
@@ -189,15 +214,17 @@ async def delete_vm(
     instance_name: str, zone: str = GCP_ZONE, project_id: str = GCP_PROJECT_ID
 ) -> str | None:
     """Submits VM deletion. Returns operation ID. Does not wait for completion."""
+    assert _compute_client is not None
     with tracer.start_as_current_span("compute.delete_vm") as span:
         span.set_attribute("instance_name", instance_name)
         span.set_attribute("project_id", project_id)
         span.set_attribute("zone", zone)
-
-        client = compute_v1.InstancesClient()
         try:
             operation = await asyncio.to_thread(
-                client.delete, project=project_id, zone=zone, instance=instance_name
+                _compute_client.delete,
+                project=project_id,
+                zone=zone,
+                instance=instance_name,
             )
         except NotFound:
             logger.info(
@@ -220,10 +247,12 @@ async def list_runnerforge_vms(
     zone: str = GCP_ZONE, project_id: str = GCP_PROJECT_ID
 ) -> list[VmInfo]:
     """Returns all VMs labeled runner=runnerforge with their creation timestamp + labels."""
+    assert _compute_client is not None
     with tracer.start_as_current_span("compute.list_runnerforge_vms") as span:
         span.set_attribute("project_id", project_id)
         span.set_attribute("zone", zone)
-        client = compute_v1.InstancesClient()
+
+        client = _compute_client
         request = compute_v1.ListInstancesRequest()
         request.zone = zone
         request.project = project_id

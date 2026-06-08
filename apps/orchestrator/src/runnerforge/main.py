@@ -2,11 +2,13 @@ import json
 import logging
 import time
 import uuid
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from opentelemetry import trace
 
+from runnerforge import compute_client, github_client
 from runnerforge.config import (
     EXPECTED_AUDIENCE,
     EXPECTED_SCHEDULER_SA_EMAIL,
@@ -24,9 +26,26 @@ from runnerforge.sweep import run_sweep
 from runnerforge.tracing import setup_tracing
 from runnerforge.validation import parse_github_response
 
+# Setup logging
 setup_logging()
 logger = logging.getLogger(__name__)
-app = FastAPI()
+
+
+# Setup client context lifespan and FastAPI App
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await github_client.init_http_client()
+    compute_client.init_compute_client()
+    logger.info("Clients initialized")
+    yield
+    await github_client.close_http_client()
+    compute_client.close_compute_client()
+
+
+# Initialize the app
+app = FastAPI(lifespan=lifespan)
+
+# Setup tracing
 setup_tracing(app)
 tracer = trace.get_tracer(__name__)
 

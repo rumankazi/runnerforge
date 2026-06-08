@@ -102,7 +102,7 @@
           }
         },
         "width": 24,
-        "yPos": 16
+        "yPos": 32
       },
       {
         "height": 16,
@@ -137,38 +137,6 @@
         "width": 24,
         "xPos": 24,
         "yPos": 16
-      },
-      {
-        "height": 16,
-        "widget": {
-          "title": "Job picked up by runner count",
-          "xyChart": {
-            "chartOptions": {
-              "mode": "COLOR"
-            },
-            "dataSets": [
-              {
-                "minAlignmentPeriod": "60s",
-                "plotType": "LINE",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {
-                  "timeSeriesFilter": {
-                    "aggregation": {
-                      "alignmentPeriod": "60s",
-                      "perSeriesAligner": "ALIGN_MEAN"
-                    },
-                    "filter": "metric.type=\"logging.googleapis.com/user/job_picked_up_count\" resource.type=\"cloud_run_revision\""
-                  }
-                }
-              }
-            ],
-            "yAxis": {
-              "scale": "LINEAR"
-            }
-          }
-        },
-        "width": 24,
-        "yPos": 32
       },
       {
         "height": 16,
@@ -408,7 +376,7 @@
                   "timeSeriesFilter": {
                     "aggregation": {
                       "alignmentPeriod": "60s",
-                      "crossSeriesReducer": "REDUCE_PERCENTILE_50",
+                      "crossSeriesReducer": "REDUCE_MEAN",
                       "perSeriesAligner": "ALIGN_DELTA"
                     },
                     "filter": "metric.type=\"logging.googleapis.com/user/deleted_orphaned_runners\" resource.type=\"cloud_run_revision\""
@@ -500,6 +468,39 @@
         "width": 24,
         "xPos": 24,
         "yPos": 96
+      },
+      {
+        "height": 16,
+        "widget": {
+          "title": "VMs picked up by Github[MEAN]",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_RATE"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/job_picked_count\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        },
+        "width": 24,
+        "yPos": 16
       }
     ]
   }

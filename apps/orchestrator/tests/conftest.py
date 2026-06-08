@@ -1,8 +1,10 @@
 import os
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
+import pytest_asyncio
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -38,6 +40,25 @@ os.environ.setdefault(
     "EXPECTED_SCHEDULER_SA_EMAIL", "test-scheduler@example.iam.gserviceaccount.com"
 )
 os.environ.setdefault("EXPECTED_AUDIENCE", "https://test-orchestrator.example")
+
+from runnerforge import (  # noqa: E402, RUF100, this is on purpose as clients can't be initiated without the required env vars
+    compute_client,
+    github_client,
+)
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True, loop_scope="session")
+async def _shared_clients():
+    mp = pytest.MonkeyPatch()
+    mp.setattr(
+        "runnerforge.compute_client.compute_v1.InstancesClient",
+        lambda: MagicMock(),
+    )
+    await github_client.init_http_client()
+    compute_client.init_compute_client()
+    yield
+    await github_client.close_http_client()
+    compute_client.close_compute_client()
 
 
 @pytest.fixture(scope="session")

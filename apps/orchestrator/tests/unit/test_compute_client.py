@@ -5,6 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from google.api_core.exceptions import AlreadyExists, GoogleAPIError
+from google.auth.exceptions import DefaultCredentialsError
+from runnerforge import compute_client
 from runnerforge.compute_client import (
     create_vm,
     delete_vm,
@@ -20,8 +22,8 @@ def test_create_vm_builds_correct_instance(monkeypatch, caplog):
     mock_client = MagicMock()
     mock_client.insert.return_value.name = "op-abc-123"
     monkeypatch.setattr(
-        "runnerforge.compute_client.compute_v1.InstancesClient",
-        lambda: mock_client,
+        "runnerforge.compute_client._compute_client",
+        mock_client,
     )
     with caplog.at_level(logging.INFO):
         op_id = asyncio.run(
@@ -69,9 +71,7 @@ def test_create_vm_builds_correct_instance(monkeypatch, caplog):
 def test_delete_vm_deletes_instance(monkeypatch, caplog):
     mock_client = MagicMock()
     mock_client.delete.return_value.name = "op-abc-123"
-    monkeypatch.setattr(
-        "runnerforge.compute_client.compute_v1.InstancesClient", lambda: mock_client
-    )
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
 
     with caplog.at_level(logging.INFO):
         op_id = asyncio.run(
@@ -102,9 +102,7 @@ def test_find_vms_by_job_id(monkeypatch, caplog):
     mock_vm = MagicMock()
     mock_vm.name = "runnerforge-12"
     mock_client.list.return_value = [mock_vm]
-    monkeypatch.setattr(
-        "runnerforge.compute_client.compute_v1.InstancesClient", lambda: mock_client
-    )
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
     with caplog.at_level(logging.INFO):
         instances = asyncio.run(
             find_vms_by_job_id(job_id="12", run_id="23", run_attempt="1")
@@ -132,8 +130,8 @@ def test_create_vm_propagates_gce_errors(monkeypatch):
     mock_client = MagicMock()
     mock_client.insert.side_effect = GoogleAPIError("simulated quota exceeded")
     monkeypatch.setattr(
-        "runnerforge.compute_client.compute_v1.InstancesClient",
-        lambda: mock_client,
+        "runnerforge.compute_client._compute_client",
+        mock_client,
     )
 
     with pytest.raises(GoogleAPIError):
@@ -149,9 +147,7 @@ def test_create_vm_propagates_gce_errors(monkeypatch):
 def test_find_vms_by_job_id_returns_empty_when_no_match(monkeypatch, caplog):
     mock_client = MagicMock()
     mock_client.list.return_value = []
-    monkeypatch.setattr(
-        "runnerforge.compute_client.compute_v1.InstancesClient", lambda: mock_client
-    )
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
 
     with caplog.at_level(logging.INFO):
         result = asyncio.run(
@@ -171,9 +167,7 @@ def test_find_vms_by_job_id_returns_empty_when_no_match(monkeypatch, caplog):
 def test_get_vm_labels_by_job_returns_empty_when_no_match(monkeypatch, caplog):
     mock_client = MagicMock()
     mock_client.list.return_value = []
-    monkeypatch.setattr(
-        "runnerforge.compute_client.compute_v1.InstancesClient", lambda: mock_client
-    )
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
 
     with caplog.at_level(logging.INFO):
         result = asyncio.run(
@@ -204,9 +198,7 @@ def test_get_vm_labels_by_job_returns_labels_when_matched(monkeypatch, caplog):
         "queued_span_id": "129asd",
     }
     mock_client.list.return_value = [mock_vm]
-    monkeypatch.setattr(
-        "runnerforge.compute_client.compute_v1.InstancesClient", lambda: mock_client
-    )
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
 
     with caplog.at_level(logging.INFO):
         result = asyncio.run(
@@ -249,9 +241,7 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
         "installation_id": "124",
     }
     mock_client.list.return_value = [mock_vm_1, mock_vm_2]
-    monkeypatch.setattr(
-        "runnerforge.compute_client.compute_v1.InstancesClient", lambda: mock_client
-    )
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
     with caplog.at_level(logging.INFO):
         vms = asyncio.run(
             list_runnerforge_vms(zone="europe-west4-a", project_id=GCP_PROJECT_ID)
@@ -319,9 +309,7 @@ def test_list_runnerforge_vms_with_malformed_labels(monkeypatch, caplog):
         "installation_id": "124",
     }
     mock_client.list.return_value = [mock_vm_1, mock_vm_2]
-    monkeypatch.setattr(
-        "runnerforge.compute_client.compute_v1.InstancesClient", lambda: mock_client
-    )
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
     with caplog.at_level(logging.INFO):
         vms = asyncio.run(
             list_runnerforge_vms(zone="europe-west4-a", project_id=GCP_PROJECT_ID)
@@ -353,9 +341,7 @@ def test_delete_vm_returns_none_when_vm_already_gone(monkeypatch, caplog):
 
     mock_client = MagicMock()
     mock_client.delete.side_effect = NotFound("not found")
-    monkeypatch.setattr(
-        "runnerforge.compute_client.compute_v1.InstancesClient", lambda: mock_client
-    )
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
     with caplog.at_level(logging.INFO):
         result = asyncio.run(delete_vm(instance_name="ghost-vm"))
     assert result is None
@@ -366,8 +352,8 @@ def test_vm_already_exists_returns_instance_name(monkeypatch, caplog):
     mock_client = MagicMock()
     mock_client.insert.side_effect = AlreadyExists("Instance already exists")
     monkeypatch.setattr(
-        "runnerforge.compute_client.compute_v1.InstancesClient",
-        lambda: mock_client,
+        "runnerforge.compute_client._compute_client",
+        mock_client,
     )
 
     with caplog.at_level(logging.INFO):
@@ -388,8 +374,8 @@ def test_create_vm_requests_receives_runner_vm_sa(monkeypatch):
     mock_client = MagicMock()
     mock_client.insert.return_value = MagicMock(name="op-test")
     monkeypatch.setattr(
-        "runnerforge.compute_client.compute_v1.InstancesClient",
-        lambda: mock_client,
+        "runnerforge.compute_client._compute_client",
+        mock_client,
     )
 
     asyncio.run(
@@ -404,3 +390,28 @@ def test_create_vm_requests_receives_runner_vm_sa(monkeypatch):
     service_account = captured_request.instance_resource.service_accounts[0]
     assert service_account.email == RUNNER_VM_SA_EMAIL
     assert service_account.scopes == ["https://www.googleapis.com/auth/cloud-platform"]
+
+
+def test_init_compute_client_logs_warning_when_no_credentials(monkeypatch, caplog):
+    # Make the constructor raise the credentials error
+    def _raise():
+        raise DefaultCredentialsError("no creds")
+
+    monkeypatch.setattr(
+        "runnerforge.compute_client.compute_v1.InstancesClient",
+        _raise,
+    )
+    monkeypatch.setattr(compute_client, "_compute_client", None)
+
+    # Should NOT raise — we catch and log instead
+    with caplog.at_level(logging.WARNING):
+        compute_client.init_compute_client()
+
+    # Module global stays None — init failed gracefully
+    assert compute_client._compute_client is None
+
+    # Warning was logged with the expected message
+    assert any(
+        r.levelno == logging.WARNING and "compute client init skipped" in r.message
+        for r in caplog.records
+    )
