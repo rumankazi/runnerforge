@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.5.0...orchestrator-v0.5.1) (2026-06-08)
+
+
+### Bug Fixes
+
+* update the sweep schedule per day instead of every hour ([#73](https://github.com/rumankazi/runnerforge/issues/73)) ([9e96448](https://github.com/rumankazi/runnerforge/commit/9e96448a35c65c344427f7dd91a4b71c80470d19))
+
 ## [0.5.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.4.1...orchestrator-v0.5.0) (2026-06-08)
 
 
