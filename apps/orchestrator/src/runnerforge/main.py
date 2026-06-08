@@ -38,8 +38,8 @@ async def lifespan(app: FastAPI):
     compute_client.init_compute_client()
     logger.info("Clients initialized")
     yield
-    await github_client.init_http_client()
-    compute_client.init_compute_client()
+    await github_client.close_http_client()
+    compute_client.close_compute_client()
 
 
 # Initialize the app
