@@ -29,6 +29,19 @@ from runnerforge.validation import parse_github_response
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
+_http_client: httpx.AsyncClient | None = None
+
+
+async def init_http_client():
+    global _http_client
+    _http_client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
+
+
+async def close_http_client():
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
 
 
 def _is_retriable_github_error(exc: BaseException) -> bool:
@@ -84,6 +97,7 @@ def generate_app_jwt(
 
 
 async def get_installation_token(installation_id: int) -> str:
+    assert _http_client is not None
     with tracer.start_as_current_span("github.get_installation_token") as span:
         span.set_attribute("installation_id", installation_id)
         url = (
@@ -94,11 +108,8 @@ async def get_installation_token(installation_id: int) -> str:
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0, connect=5.0)
-        ) as client:
-            r = await _post_with_retry(client=client, url=url, headers=headers)
-            data = r.json()
+        r = await _post_with_retry(client=_http_client, url=url, headers=headers)
+        data = r.json()
 
         response = parse_github_response(
             InstallationTokenResponse,
@@ -113,6 +124,7 @@ async def get_installation_token(installation_id: int) -> str:
 
 
 async def get_registration_token(installation_token: str, repo_full_name: str) -> str:
+    assert _http_client is not None
     with tracer.start_as_current_span("github.get_registration_token") as span:
         span.set_attribute("repo", repo_full_name)
         url = f"https://api.github.com/repos/{repo_full_name}/actions/runners/registration-token"
@@ -121,11 +133,8 @@ async def get_registration_token(installation_token: str, repo_full_name: str) -
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0, connect=5.0)
-        ) as client:
-            r = await _post_with_retry(client=client, url=url, headers=headers)
-            data = r.json()
+        r = await _post_with_retry(client=_http_client, url=url, headers=headers)
+        data = r.json()
 
         response = parse_github_response(
             RegistrationTokenResponse,
@@ -148,6 +157,7 @@ async def get_job_status(
     Returns the job's status + conclusion, or None if the job doesn't exist (404).
     Other errors (auth, 5xx) propagate.
     """
+    assert _http_client is not None
     with tracer.start_as_current_span("github.get_job_status") as span:
         span.set_attribute("repo", repo_full_name)
         span.set_attribute("job_id", job_id)
@@ -158,21 +168,17 @@ async def get_job_status(
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
-
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0, connect=5.0)
-        ) as client:
-            try:
-                r = await _get_with_retry(client=client, url=url, headers=headers)
-                data = r.json()
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 404:
-                    logger.info(
-                        "Job not found (treating as orphan)",
-                        extra={"job_id": job_id},
-                    )
-                    return None
-                raise
+        try:
+            r = await _get_with_retry(client=_http_client, url=url, headers=headers)
+            data = r.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.info(
+                    "Job not found (treating as orphan)",
+                    extra={"job_id": job_id},
+                )
+                return None
+            raise
         response = parse_github_response(
             JobStatusResponse,
             data=data,

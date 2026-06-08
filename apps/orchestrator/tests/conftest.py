@@ -53,3 +53,14 @@ def rsa_keys() -> tuple[bytes, bytes]:
         (_KEYS_DIR / "private_key.pem").read_bytes(),
         (_KEYS_DIR / "public_key.pem").read_bytes(),
     )
+
+
+import pytest_asyncio
+from runnerforge import github_client
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True, loop_scope="session")
+async def _shared_clients():  # async def + a more descriptive name
+    await github_client.init_http_client()
+    yield
+    await github_client.close_http_client()
