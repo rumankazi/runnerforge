@@ -2,7 +2,7 @@ import logging
 
 from opentelemetry import trace
 
-from runnerforge.compute_client import create_vm, delete_vm
+from runnerforge.compute_client import create_vm, delete_vm, get_vm_labels_by_job
 from runnerforge.config import STARTUP_SCRIPT
 from runnerforge.github_client import get_installation_token, get_registration_token
 from runnerforge.models import RunnerForgeVmLabels, WorkflowJobEvent
@@ -19,6 +19,9 @@ def machine_type_for_labels(labels: list[str]) -> str:
 
 async def handle_queued(event: WorkflowJobEvent):
     with tracer.start_as_current_span("webhook.handle_queued") as span:
+        span_context = span.get_span_context()
+        queued_trace_id = format(span_context.trace_id, "032x")
+        queued_span_id = format(span_context.span_id, "016x")
         span.set_attribute("repo", event.repository.full_name)
         span.set_attribute("sender", event.sender.login)
         span.set_attribute("job_id", event.workflow_job.id)
@@ -58,6 +61,8 @@ async def handle_queued(event: WorkflowJobEvent):
             run_attempt=str(event.workflow_job.run_attempt),
             repo=event.repository.full_name.replace("/", "_"),
             installation_id=str(event.installation.id),
+            queued_trace_id=queued_trace_id,
+            queued_span_id=queued_span_id,
         )
         await create_vm(
             instance_name=vm_name,
@@ -67,7 +72,7 @@ async def handle_queued(event: WorkflowJobEvent):
         )
 
 
-def handle_in_progress(event: WorkflowJobEvent):
+async def handle_in_progress(event: WorkflowJobEvent):
     with tracer.start_as_current_span("webhook.handle_in_progress") as span:
         span.set_attribute("repo", event.repository.full_name)
         span.set_attribute("sender", event.sender.login)
@@ -76,10 +81,34 @@ def handle_in_progress(event: WorkflowJobEvent):
         span.set_attribute("labels", event.workflow_job.labels)
         span.set_attribute("run_id", event.workflow_job.run_id)
         span.set_attribute("run_attempt", event.workflow_job.run_attempt)
-
-        logger.info(
-            "Job picked up by a runner", extra={"job_id": event.workflow_job.id}
+        vm_labels = await get_vm_labels_by_job(
+            job_id=str(event.workflow_job.id),
+            run_id=str(event.workflow_job.run_id),
+            run_attempt=str(event.workflow_job.run_attempt),
         )
+        if vm_labels and vm_labels.get("queued_trace_id"):
+            from opentelemetry.trace import SpanContext, TraceFlags
+
+            queued_ctx = SpanContext(
+                trace_id=int(vm_labels["queued_trace_id"], 16),
+                span_id=int(vm_labels["queued_span_id"], 16),
+                is_remote=True,
+                trace_flags=TraceFlags(TraceFlags.SAMPLED),
+            )
+            span.add_link(queued_ctx)
+        if event.workflow_job.started_at and event.workflow_job.created_at:
+            delta_seconds = (
+                event.workflow_job.started_at - event.workflow_job.created_at
+            ).total_seconds()
+            logger.info(
+                "Time for runner to be picked up by github",
+                extra={
+                    "job_id": event.workflow_job.id,
+                    "repo": event.repository.full_name,
+                    "time_to_runner_seconds": delta_seconds,
+                    "labels": event.workflow_job.labels,
+                },
+            )
 
 
 async def handle_completed(event: WorkflowJobEvent):

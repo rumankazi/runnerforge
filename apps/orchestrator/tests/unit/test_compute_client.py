@@ -9,6 +9,7 @@ from runnerforge.compute_client import (
     create_vm,
     delete_vm,
     find_vms_by_job_id,
+    get_vm_labels_by_job,
     list_runnerforge_vms,
 )
 from runnerforge.config import GCP_PROJECT_ID, RUNNER_VM_SA_EMAIL
@@ -165,6 +166,61 @@ def test_find_vms_by_job_id_returns_empty_when_no_match(monkeypatch, caplog):
     assert log is not None
     assert log.job_id == "nonexistent"
     assert log.match_count == 0
+
+
+def test_get_vm_labels_by_job_returns_empty_when_no_match(monkeypatch, caplog):
+    mock_client = MagicMock()
+    mock_client.list.return_value = []
+    monkeypatch.setattr(
+        "runnerforge.compute_client.compute_v1.InstancesClient", lambda: mock_client
+    )
+
+    with caplog.at_level(logging.INFO):
+        result = asyncio.run(
+            get_vm_labels_by_job(job_id="nonexistent", run_id="NA", run_attempt="NA")
+        )
+
+    assert result is None
+    mock_client.list.assert_called_once()
+
+    # Observability contract: empty-result case still logs (with match_count=0)
+    log = next((r for r in caplog.records if "VM lookup by job_id" in r.message), None)
+    assert log is None
+
+
+def test_get_vm_labels_by_job_returns_labels_when_matched(monkeypatch, caplog):
+    mock_client = MagicMock()
+
+    mock_vm = MagicMock()
+    mock_vm.name = "runnerforge-12"
+    mock_vm.labels = {
+        "runner": "runnerforge",
+        "repo": "rumankazi/runnerforge",
+        "job_id": "1",
+        "run_id": "2",
+        "run_attempt": "2",
+        "installation_id": "123",
+        "queued_trace_id": "12da",
+        "queued_span_id": "129asd",
+    }
+    mock_client.list.return_value = [mock_vm]
+    monkeypatch.setattr(
+        "runnerforge.compute_client.compute_v1.InstancesClient", lambda: mock_client
+    )
+
+    with caplog.at_level(logging.INFO):
+        result = asyncio.run(
+            get_vm_labels_by_job(job_id="1", run_id="2", run_attempt="2")
+        )
+
+    assert result is not None
+    mock_client.list.assert_called_once()
+
+    # Observability contract: empty-result case still logs (with match_count=0)
+    log = next((r for r in caplog.records if "VM lookup by job_id" in r.message), None)
+    assert log is not None
+    assert log.job_id == "1"
+    assert log.run_id == "2"
 
 
 def test_list_runnerforge_vms(monkeypatch, caplog):

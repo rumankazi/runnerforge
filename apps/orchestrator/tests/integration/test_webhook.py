@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import logging
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
 import httpx
@@ -127,19 +128,103 @@ def test_webhook_rejects_invalid_signature_without_calling_github(fixtures_dir, 
 
 
 @respx.mock
-def test_webhook_in_progress_event_does_not_call_github(fixtures_dir, caplog):
-    # Use a copy of queued payload with action="completed" + conclusion="success"
+def test_webhook_in_progress_event_does_not_call_github(
+    fixtures_dir, monkeypatch, caplog
+):
     payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
     payload["action"] = "in_progress"
     payload["workflow_job"]["conclusion"] = "success"
     body = json.dumps(payload).encode()
+
+    # in_progress now looks up the VM to retrieve the queued trace context;
+    # mock that so we don't hit GCE in this test.
+    get_labels_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr("runnerforge.handlers.get_vm_labels_by_job", get_labels_mock)
+
     with caplog.at_level(logging.INFO):
         response = client.post(
             "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
         )
 
     assert response.status_code == 200
-    assert any("picked up by a runner" in r.message for r in caplog.records)
+    assert any(
+        "Time for runner to be picked up by github" in r.message for r in caplog.records
+    )
+
+
+@respx.mock
+def test_webhook_in_progress_event_adds_span_link_when_queued_trace_present(
+    fixtures_dir, monkeypatch, caplog
+):
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload["action"] = "in_progress"
+    payload["workflow_job"]["conclusion"] = "success"
+    payload["workflow_job"]["started_at"] = str(
+        datetime(2026, 5, 31, 10, 0, 30, tzinfo=timezone.utc)
+    )
+    payload["workflow_job"]["created_at"] = str(
+        datetime(2026, 5, 31, 10, 0, 00, tzinfo=timezone.utc)
+    )
+    body = json.dumps(payload).encode()
+
+    # Return labels with valid trace context — exercises the SpanContext + add_link path
+    get_labels_mock = AsyncMock(
+        return_value={
+            "runner": "runnerforge",
+            "job_id": "77678867086",
+            "run_id": "26389905440",
+            "run_attempt": "3",
+            "repo": "rumankazi_runnerforge",
+            "installation_id": "135399152",
+            "queued_trace_id": "0123456789abcdef0123456789abcdef",  # 32 hex chars
+            "queued_span_id": "0123456789abcdef",  # 16 hex chars
+        }
+    )
+    monkeypatch.setattr("runnerforge.handlers.get_vm_labels_by_job", get_labels_mock)
+
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+        )
+
+    assert response.status_code == 200
+    get_labels_mock.assert_awaited_once()
+    # The time-to-runner metric still fires regardless of span-link presence
+    log = next(
+        (
+            r
+            for r in caplog.records
+            if "Time for runner to be picked up by github" in r.message
+        ),
+        None,
+    )
+    assert log is not None
+    assert log.time_to_runner_seconds == 30.0
+
+
+@respx.mock
+def test_webhook_in_progress_skips_time_log_when_started_at_missing(
+    fixtures_dir, monkeypatch, caplog
+):
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload["action"] = "in_progress"
+    payload["workflow_job"]["conclusion"] = "success"
+    payload["workflow_job"]["started_at"] = None  # in_progress without started_at
+    body = json.dumps(payload).encode()
+
+    monkeypatch.setattr(
+        "runnerforge.handlers.get_vm_labels_by_job", AsyncMock(return_value=None)
+    )
+
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+        )
+
+    assert response.status_code == 200
+    assert not any(
+        "Time for runner to be picked up by github" in r.message for r in caplog.records
+    )
 
 
 @respx.mock

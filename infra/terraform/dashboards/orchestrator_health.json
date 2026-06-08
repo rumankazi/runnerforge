@@ -1,10 +1,10 @@
 {
   "displayName": "RunnerForge",
   "mosaicLayout": {
-    "columns": 12,
+    "columns": 48,
     "tiles": [
       {
-        "height": 4,
+        "height": 16,
         "widget": {
           "title": "Cloud Run Revision - Request Count for runnerforge-orchestrator [SUM]",
           "xyChart": {
@@ -36,10 +36,10 @@
             }
           }
         },
-        "width": 6
+        "width": 24
       },
       {
-        "height": 4,
+        "height": 16,
         "widget": {
           "title": "Cloud Run Revision - Instance Count [SUM]",
           "xyChart": {
@@ -68,11 +68,11 @@
             }
           }
         },
-        "width": 6,
-        "xPos": 6
+        "width": 24,
+        "xPos": 24
       },
       {
-        "height": 4,
+        "height": 16,
         "widget": {
           "title": "Orphan VMs count",
           "xyChart": {
@@ -101,11 +101,11 @@
             }
           }
         },
-        "width": 6,
-        "yPos": 4
+        "width": 24,
+        "yPos": 16
       },
       {
-        "height": 4,
+        "height": 16,
         "widget": {
           "title": "VM Creation Count",
           "xyChart": {
@@ -134,12 +134,12 @@
             }
           }
         },
-        "width": 6,
-        "xPos": 6,
-        "yPos": 4
+        "width": 24,
+        "xPos": 24,
+        "yPos": 16
       },
       {
-        "height": 4,
+        "height": 16,
         "widget": {
           "title": "Job picked up by runner count",
           "xyChart": {
@@ -167,11 +167,11 @@
             }
           }
         },
-        "width": 6,
-        "yPos": 8
+        "width": 24,
+        "yPos": 32
       },
       {
-        "height": 4,
+        "height": 16,
         "widget": {
           "title": "VM Deletion Count",
           "xyChart": {
@@ -199,12 +199,12 @@
             }
           }
         },
-        "width": 6,
-        "xPos": 6,
-        "yPos": 8
+        "width": 24,
+        "xPos": 24,
+        "yPos": 32
       },
       {
-        "height": 4,
+        "height": 16,
         "widget": {
           "title": "Span /webhook duration",
           "xyChart": {
@@ -232,8 +232,129 @@
             }
           }
         },
-        "width": 6,
-        "yPos": 12
+        "width": 24,
+        "yPos": 48
+      },
+      {
+        "height": 16,
+        "widget": {
+          "title": "Span /sweep duration",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "plotType": "HEATMAP",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {}
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        },
+        "width": 24,
+        "xPos": 24,
+        "yPos": 64
+      },
+      {
+        "height": 16,
+        "widget": {
+          "title": "Span /webhook (event: queued)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "breakdowns": [
+                  {
+                    "aggregationFunction": {
+                      "type": "none"
+                    },
+                    "column": "serviceOrWorkload",
+                    "sortOrder": "SORT_ORDER_NONE"
+                  }
+                ],
+                "plotType": "HEATMAP",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {}
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        },
+        "width": 24,
+        "yPos": 64
+      },
+      {
+        "height": 16,
+        "widget": {
+          "title": "Sapn /webhook (event: in_progress)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "breakdowns": [
+                  {
+                    "aggregationFunction": {
+                      "type": "none"
+                    },
+                    "column": "serviceOrWorkload",
+                    "sortOrder": "SORT_ORDER_NONE"
+                  }
+                ],
+                "plotType": "HEATMAP",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {}
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        },
+        "width": 24,
+        "xPos": 24,
+        "yPos": 48
+      },
+      {
+        "height": 16,
+        "widget": {
+          "title": "Span /webhook (event: completed)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "breakdowns": [
+                  {
+                    "aggregationFunction": {
+                      "type": "none"
+                    },
+                    "column": "serviceOrWorkload",
+                    "sortOrder": "SORT_ORDER_NONE"
+                  }
+                ],
+                "plotType": "HEATMAP",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {}
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        },
+        "width": 24,
+        "yPos": 80
       }
     ]
   }

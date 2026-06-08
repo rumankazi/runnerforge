@@ -5,12 +5,12 @@ resource "google_service_account" "scheduler" {
   description  = "Identity for Cloud Scheduler jobs that invoke the orchestrator (e.g., /sweep). The orchestrator validates the OIDC token's email claim against this SA."
 }
 
-# The /sweep cron job — runs every 60 minutes
+# The /sweep cron job — runs every day at 00:12
 resource "google_cloud_scheduler_job" "sweep" {
   name             = "runnerforge-sweep"
   region           = "europe-west4"
   description      = "Triggers POST /sweep on the orchestrator to clean up orphan runner VMs"
-  schedule         = "12 */1 * * *"
+  schedule         = "12 * */1 * *"
   time_zone        = "Etc/UTC"
   attempt_deadline = "60s"
 
