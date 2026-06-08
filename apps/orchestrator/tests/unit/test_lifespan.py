@@ -1,7 +1,6 @@
 from unittest.mock import AsyncMock, MagicMock
 
 from fastapi.testclient import TestClient
-from google.cloud import compute_v1
 from httpx import AsyncClient, Timeout
 from runnerforge import compute_client, github_client
 from runnerforge.main import app
@@ -34,11 +33,17 @@ async def test_init_http_client_creates_async_client_with_correct_timeout(monkey
     await github_client._http_client.aclose()
 
 
-async def test_init_compute_client_creates_instances_client(monkeypatch):
+async def test_init_compute_client_assigns_constructor_result(monkeypatch):
+    sentinel = MagicMock()
+    monkeypatch.setattr(
+        "runnerforge.compute_client.compute_v1.InstancesClient",
+        lambda: sentinel,
+    )
     monkeypatch.setattr(compute_client, "_compute_client", None)
+
     compute_client.init_compute_client()
-    assert isinstance(compute_client._compute_client, compute_v1.InstancesClient)
-    compute_client._compute_client.transport.close()
+
+    assert compute_client._compute_client is sentinel
 
 
 def test_lifespan_initializes_and_closes_clients(monkeypatch):

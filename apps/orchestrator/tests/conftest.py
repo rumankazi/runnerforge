@@ -1,6 +1,7 @@
 import os
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
@@ -47,7 +48,12 @@ from runnerforge import (  # noqa: E402, RUF100, this is on purpose as clients c
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True, loop_scope="session")
-async def _shared_clients():  # async def + a more descriptive name
+async def _shared_clients():
+    mp = pytest.MonkeyPatch()
+    mp.setattr(
+        "runnerforge.compute_client.compute_v1.InstancesClient",
+        lambda: MagicMock(),
+    )
     await github_client.init_http_client()
     compute_client.init_compute_client()
     yield
