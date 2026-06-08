@@ -12,12 +12,11 @@ resource "google_cloud_run_v2_service" "orchestrator" {
 
     scaling {
       min_instance_count = 0  # scale to zero when idle (cost: $0).
-      max_instance_count = 10 # Generous burst headroom for webhook spikes
+      max_instance_count = 50 # Generous burst headroom for webhook spikes
     }
 
     # serialize requests per instance. Orchestrator makes external HTTP calls:
-    # concurrency = 1 prevents head-of-line blocking and simplifies reasoning #TODO: come back to this later in phase 2 hardening
-    max_instance_request_concurrency = 1
+    max_instance_request_concurrency = 10
 
     containers {
       image = "europe-west4-docker.pkg.dev/runnerforge/orchestrator/orchestrator:${var.image_tag}"
