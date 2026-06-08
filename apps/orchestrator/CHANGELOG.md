@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.4.1...orchestrator-v0.5.0) (2026-06-08)
+
+
+### Features
+
+* **otel:** otel tracer wired up + tests ([#70](https://github.com/rumankazi/runnerforge/issues/70)) ([77acb3d](https://github.com/rumankazi/runnerforge/commit/77acb3dbc3154a7b48eee69efcd9ddcce83d52e1))
+
 ## [0.4.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.4.0...orchestrator-v0.4.1) (2026-06-07)
 
 
