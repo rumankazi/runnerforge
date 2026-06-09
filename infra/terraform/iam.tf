@@ -11,7 +11,6 @@ resource "google_service_account" "orchestrator" {
 
 # ------- Helper: default compute SA email (needed for act-as) -----
 
-data "google_compute_default_service_account" "default" {}
 
 # ------- Project-level role bindings -----
 
