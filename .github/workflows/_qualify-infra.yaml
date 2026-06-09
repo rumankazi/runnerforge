@@ -7,6 +7,8 @@ env:
   WIF_PROVIDER: projects/8547588670/locations/global/workloadIdentityPools/github/providers/github
   CI_TERRAFORM_PLAN_SA: ci-terraform-plan@runnerforge.iam.gserviceaccount.com
   TFACTION_JOB_TYPE: terraform
+  TFACTION_IS_APPLY: "false"
+  TFACTION_WORKING_DIR: infra/terraform
 
 jobs:
   qualify-infra:
