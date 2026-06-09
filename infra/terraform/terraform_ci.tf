@@ -79,11 +79,11 @@ resource "google_service_account_iam_member" "ci_terraform_apply_wif" {
 # --- Outputs ---
 
 output "ci_terraform_plan_sa_email" {
-  value = google_service_account.ci_terraform_plan.email
+  value       = google_service_account.ci_terraform_plan.email
   description = "SA email impersonated by _qualify-infra.yaml workflow"
 }
 
 output "ci_terraform_apply_sa_email" {
-  value = google_service_account.ci_terraform_apply.email
+  value       = google_service_account.ci_terraform_apply.email
   description = "SA email impersonated by apply-terraform.yaml workflow"
 }
