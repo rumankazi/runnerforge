@@ -19,20 +19,76 @@
   },
   "patch": {
     "autoApprove": true,
+    "automerge": true,
     "addLabels": ["patch", "{{depName}}"]
   },
   "packageRules": [
     {
-      "groupName": "all minor dependencies",
-      "groupSlug": "all-minor",
-      "matchPackageNames": ["*"],
-      "matchUpdateTypes": "minor"
+      "matchFileNames": ["apps/orchestrator/**", "apps/web/**", "infra/packer/**"],
+      "matchUpdateTypes": ["patch"],
+      "semanticCommitType": "fix"
     },
     {
-      "groupName": "all patch dependencies",
-      "groupSlug": "all-patch",
-      "matchPackageNames": ["*"],
-      "matchUpdateTypes": "patch"
+      "matchFileNames": ["apps/orchestrator/**", "apps/web/**", "infra/packer/**"],
+      "matchUpdateTypes": ["minor"],
+      "semanticCommitType": "feat"
+    },
+    {
+      "matchFileNames": ["apps/orchestrator/**", "apps/web/**", "infra/packer/**"],
+      "matchUpdateTypes": ["major"],
+      "semanticCommitType": "feat",
+      "commitBody": "BREAKING CHANGE: major dependency upgrade may affect runtime behavior"
+    },
+    {
+      "matchFileNames": ["apps/orchestrator/**"],
+      "matchDepTypes": ["dependency-groups"],
+      "semanticCommitType": "chore",
+      "commitBody": ""
+    },
+    {
+      "matchFileNames": ["apps/web/**"],
+      "matchDepTypes": ["devDependencies"],
+      "semanticCommitType": "chore",
+      "commitBody": ""
+    },
+    {
+      "matchFileNames": ["apps/orchestrator/uv.lock"],
+      "matchUpdateTypes": ["lockFileMaintenance"],
+      "semanticCommitType": "fix"
+    },
+    {
+      "groupName": "orchestrator deps (minor)",
+      "matchFileNames": ["apps/orchestrator/**"],
+      "matchUpdateTypes": ["minor"]
+    },
+    {
+      "groupName": "orchestrator deps (patch)",
+      "matchFileNames": ["apps/orchestrator/**"],
+      "matchUpdateTypes": ["patch"]
+    },
+    {
+      "groupName": "web deps (minor)",
+      "matchFileNames": ["apps/web/**"],
+      "matchUpdateTypes": ["minor"]
+    },
+    {
+      "groupName": "web deps (patch)",
+      "matchFileNames": ["apps/web/**"],
+      "matchUpdateTypes": ["patch"]
+    },
+    {
+      "groupName": "runner-image deps (minor)",
+      "matchFileNames": ["infra/packer/**"],
+      "matchUpdateTypes": ["minor"]
+    },
+    {
+      "groupName": "runner-image deps (patch)",
+      "matchFileNames": ["infra/packer/**"],
+      "matchUpdateTypes": ["patch"]
+    },
+    {
+      "groupName": "ci tooling deps",
+      "matchManagers": ["github-actions"]
     }
   ],
   "customManagers": [

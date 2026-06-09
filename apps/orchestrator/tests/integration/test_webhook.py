@@ -338,8 +338,6 @@ async def test_concurrent_webhooks_keep_per_request_context_isolated(
     body_b = json.dumps(payload_b).encode()
 
     # respx mocks: one access_tokens route, two registration-token routes (per repo)
-    # See test_webhook_queued_event_triggers_github_auth_chain for the pattern
-    # TODO — set up respx.post(...).mock(...) for the three URLs
     respx.post("https://api.github.com/app/installations/135399152/access_tokens").mock(
         return_value=httpx.Response(
             200,

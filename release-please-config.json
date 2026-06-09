@@ -7,7 +7,8 @@
   "packages": {
     "apps/orchestrator": {
       "release-type": "python",
-      "package-name": "orchestrator"
+      "package-name": "orchestrator",
+      "bump-minor-pre-major": true
     },
     "apps/web": {
       "release-type": "node",
@@ -15,7 +16,8 @@
     },
     "infra/packer": {
       "release-type": "simple",
-      "package-name": "runner-image"
+      "package-name": "runner-image",
+      "bump-minor-pre-major": true
     }
   }
 }
