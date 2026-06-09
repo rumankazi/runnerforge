@@ -60,6 +60,7 @@ jobs:
       id-token: write
       pull-requests: write
       contents: read
+    secrets: inherit
     if: ${{ fromJSON(needs.preflight.outputs.changes).infra }}
     uses: ./.github/workflows/_qualify-infra.yaml
 
