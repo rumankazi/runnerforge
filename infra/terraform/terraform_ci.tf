@@ -73,7 +73,7 @@ resource "google_storage_bucket_iam_member" "ci_terraform_apply_state_admin" {
 resource "google_service_account_iam_member" "ci_terraform_apply_wif" {
   service_account_id = google_service_account.ci_terraform_apply.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github_pool.workload_identity_pool_id}/attribute.workflow_path/rumankazi/runnerforge/.github/workflows/apply-terraform.yaml"
+  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github_pool.workload_identity_pool_id}/attribute.workflow_path/rumankazi/runnerforge/.github/workflows/deploy-infra.yaml"
 }
 
 # --- Outputs ---
