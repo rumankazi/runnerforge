@@ -3,10 +3,9 @@
 <p align="center">Self-hosted runners on GCP for GitHub Actions.</p>
 
 <p align="center">
-  <a href="https://runnerforge-orchestrator-gsqedgmwha-ez.a.run.app/health"><b>Live orchestrator</b></a> ·
-  <a href="https://runnerforge.vercel.app"><b>Live docs</b></a> ·
-  <a href="apps/web/content/docs/design/architecture.mdx"><b>Architecture</b></a> ·
-  <a href="apps/web/content/docs/design/decisions.mdx"><b>ADRs</b></a>
+  <a href="https://runnerforge.vercel.app"><b>Documentation</b></a> ·
+  <a href="https://runnerforge.vercel.app/docs/design/architecture"><b>Architecture</b></a> ·
+  <a href="https://runnerforge.vercel.app/docs/design/decisions"><b>ADRs</b></a>
 </p>
 
 <p align="center">
@@ -93,6 +92,6 @@ Independently, `drift-detection.yaml` runs daily at 08:17 UTC against deployed G
 
 ## Further reading
 
-- **Design**: [architecture](apps/web/content/docs/design/architecture.mdx) · [decisions (ADRs)](apps/web/content/docs/design/decisions.mdx) · [security](apps/web/content/docs/design/security.mdx) · [observability](apps/web/content/docs/design/observability.mdx) · [trust model](apps/web/content/docs/design/trust.mdx) · [webhook flow](apps/web/content/docs/design/webhook-flow.mdx)
-- **Operations**: [runbooks](apps/web/content/docs/guides/runbooks/) (webhook availability, terraform drift, terraform stale lock)
-- **Development**: phase-by-phase implementation history in [docs/development/](apps/web/content/docs/development/)
+- **Design**: [architecture](https://runnerforge.vercel.app/docs/design/architecture) · [decisions (ADRs)](https://runnerforge.vercel.app/docs/design/decisions) · [security](https://runnerforge.vercel.app/docs/design/security) · [observability](https://runnerforge.vercel.app/docs/design/observability) · [trust model](https://runnerforge.vercel.app/docs/design/trust) · [webhook flow](https://runnerforge.vercel.app/docs/design/webhook-flow)
+- **Operations**: [runbooks](https://runnerforge.vercel.app/docs/guides/runbooks) (webhook availability, terraform drift, terraform stale lock)
+- **Development**: phase-by-phase implementation history in [docs/development/](https://runnerforge.vercel.app/docs/development)
