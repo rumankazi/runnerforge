@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.6.1...orchestrator-v0.7.0) (2026-06-09)
+
+
+### Features
+
+* add opa policies and conftests ([#88](https://github.com/rumankazi/runnerforge/issues/88)) ([1f92904](https://github.com/rumankazi/runnerforge/commit/1f929046eeb2168dc3f9236d4c5dda5b42e84424))
+
 ## [0.6.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.6.0...orchestrator-v0.6.1) (2026-06-09)
 
 
