@@ -230,3 +230,53 @@ Structured logging only for Phases 1–3. Add Firestore in Phase 4 when building
 - **Trade-off**: a fraction of CPU/cost goes to handling events we discard. At our volume, sub-penny per day; acceptable.
 - **Trade-off**: cold-start latency on the first real runnerforge event after an idle period (3-5s + handler time). Still well under the GitHub webhook 10s budget; orchestrator p99 has comfortable headroom.
 - **Future micro-optimization**: a byte-scan for `b"runnerforge"` on the raw request body before Pydantic parse would shave 5-15ms per irrelevant event. Not worth implementing until volume of irrelevant events justifies it — Cloud Run startup dominates the cost, not Pydantic.
+
+<Record type="adr" id="009" status="accepted" />
+
+## Self-observed VM provisioning with NAT-based egress
+
+### Context
+
+- Burst test (2026-06-09): 18 jobs across 6 workflow runs in a ~20s window. The orchestrator handled all 18 webhooks correctly and logged `Submitted VM creation` for each.
+- But ~10 of 18 VMs failed silently during GCE provisioning with `QUOTA_EXCEEDED` on `IN_USE_ADDRESSES` (default external-IP quota is 8/region in europe-west4; each VM was claiming one via `ONE_TO_ONE_NAT`).
+- The orchestrator was unaware: the fire-and-forget pattern submits an insert, gets an operation handle, logs the submission, and walks away. The operation's actual outcome (DONE / failure / quota-exceeded) is never checked.
+- Diagnosis required cross-system log correlation: orchestrator logs + GCE audit logs + GitHub workflow status. Operational visibility was poor.
+
+Two coupled problems surfaced: a GCE-side quota constraint AND missing self-observability in the orchestrator.
+
+### Options considered
+
+**For visibility into VM creation outcomes**:
+
+- **Sweep-only detection** (status quo, extended): hourly poll of GCE state to find failed operations and orphan VMs. Cheap; detection latency up to 60 min — slower than the GitHub 10-min job timeout.
+- **Synchronous polling in webhook handler**: `await operation.result()` inside the handler. Blocks the webhook for 30-60s, blowing GitHub's 10s webhook delivery budget. Rejected.
+- **Background polling with sync client + `asyncio.to_thread`**: each poll occupies an OS thread for 30-60s. The default ThreadPoolExecutor caps at ~5 workers on 1 vCPU. At concurrency=10 the pool starves. Rejected.
+- **Background polling with async compute client + FastAPI `BackgroundTasks`** (chosen): coroutine-based polling on the event loop. Each task is ~5-50KB of state (vs 8MB per thread). Webhook returns immediately; the watcher runs alongside, polling GCE and emitting structured outcome events.
+- **Cloud Tasks / Pub-Sub worker queue**: the "right cloud-native" pattern for async work, but vast overkill at one-operator scale. Reserved for any future SaaS-scale move.
+- **Retry / self-healing in the orchestrator**: explicitly rejected. Retry doesn't help with the failure mode we actually see (quota doesn't free up within the GitHub 10-min job timeout). Retry only helps with rare random transients (~0.1% of GCE provisions); the engineering cost (state tracking, retry counters, backoff, tests) far exceeds the benefit at our scale.
+
+**For the underlying quota constraint**:
+
+- **Per-VM external IPs** (status quo): each VM claims one external IP via `access_configs ONE_TO_ONE_NAT`. Bounded by region's `IN_USE_ADDRESSES` quota.
+- **Cloud NAT egress** (chosen): one shared NAT gateway provides outbound connectivity for all runner VMs. VMs become private-only. Self-hosted GH runners only need outbound (poll GitHub for jobs); inbound connectivity is unnecessary. Removes the quota constraint entirely.
+- **Quota increase request only**: temporary fix; doesn't change the architecture and still leaves us bounded by whatever new ceiling we negotiate.
+
+### Decision
+
+- Migrate `_compute_client` from `compute_v1.InstancesClient` (sync, bridged via `asyncio.to_thread`) to `compute_v1.InstancesAsyncClient` (native asyncio). Drops the thread-bridge in `compute_client.py`.
+- Webhook handler schedules a `BackgroundTasks` watcher per VM creation: `await operation.result(timeout=120)`. On terminal state, the watcher logs a structured outcome event (`vm_creation_succeeded` or `vm_creation_failed` with `error_class`/`error_message`).
+- New log-based metric `vm_creation_outcome_count` labeled by `outcome={success,failure,timeout}` → alert on failure rate > 5%.
+- Sweep stays as a backup safety net for edge cases (deploy-time rolling restart, OOM, manual termination — all of which can interrupt in-flight background tasks).
+- Provision Cloud NAT in `infra/terraform/`: `google_compute_router` + `google_compute_router_nat` in europe-west4. Remove `access_configs` from VM `network_interfaces` in `compute_client.py`. All VM egress (GitHub API, Artifact Registry) routes through the NAT gateway.
+
+### Consequences
+
+- **Pro — operational visibility**: every VM creation outcome is captured in structured logs. Failure rate becomes a metric, alertable, queryable. Root-cause analysis no longer requires cross-system log correlation.
+- **Pro — detection latency**: drops from up to 60 minutes (sweep) to ~60 seconds (background polling). Stays well inside the GitHub 10-minute job timeout.
+- **Pro — quota removed**: Cloud NAT eliminates `IN_USE_ADDRESSES` as a constraint on VM provisioning. The burst that caused this incident would succeed in full under the new architecture.
+- **Pro — coroutine economics**: async client + `BackgroundTasks` scales easily. At concurrency=10, total background-task memory cost is ~500KB. Thread-based polling would have cost ~80MB and saturated the executor.
+- **Pro — Cloud NAT cost is trivial**: ~$1.40/month per gateway + a small per-GB processing fee. Negligible at our scale.
+- **Trade-off — VMs lose inbound connectivity**: acceptable because self-hosted GH runners are outbound-only. We have no use case for inbound.
+- **Trade-off — edge-case visibility loss**: background tasks interrupted by deploy / OOM / manual termination won't emit their outcome event. Sweep remains the catcher for these rare cases. Acceptable.
+- **Trade-off — request concurrency ceiling unchanged**: container memory (512 MB) still caps in-flight webhook requests around ~25 (each holds ~10-20 MB of state). Background tasks are cheap; webhook requests are not. Raising `max_instance_request_concurrency` beyond ~30 doesn't deliver real capacity gain — the bottleneck is downstream APIs (GitHub installation token rate limit, GCE INSTANCES quota), not our threading model.
+- **Trade-off — no auto-recovery**: we observe but don't retry. If GCE rejects a VM creation, the corresponding GitHub job times out at the 10-minute mark. Acceptable because the failure modes we see (quota, code bugs) wouldn't benefit from retry. If we ever see meaningful transient-failure patterns, revisit.
