@@ -1,0 +1,244 @@
+---
+title: Cloud Monitoring charts — a practical guide
+description: How to read, configure, and create charts in Cloud Monitoring. Covers log-based metrics, alignment vs grouping, percentiles, and dashboard recipes.
+---
+
+This guide is the missing manual for the parts of Cloud Monitoring that confused us when we first set up RunnerForge dashboards. It covers what each statistic means, how alignment and grouping interact, when to use which chart type, and the common gotchas.
+
+## Log-based metrics — two kinds
+
+A **log-based metric** counts or measures something derived from log entries matching a filter. Cloud Logging supports two kinds:
+
+| Type | Records per event | Best for |
+|---|---|---|
+| **Counter** | "this happened" (no value) | Counting occurrences — VM creations, errors, requests |
+| **Distribution** | A numeric value (e.g., a duration field) | Statistical summary — latency, size, time-to-event |
+
+**Example**: `create_vm_requests_submitted` is a counter (counts log entries containing `"Submitted VM creation"`). `time_to_runner_seconds` is a distribution (records the numeric value of `jsonPayload.time_to_runner_seconds` for each `"Time for runner to be picked up by github"` log entry).
+
+The metric type determines which alignment functions are valid for that metric on charts.
+
+### Non-retroactivity (important gotcha)
+
+**Log-based metrics aren't retroactive.** They count only log entries written AFTER the metric was created. Entries from before are visible in the log viewer but invisible to the metric.
+
+The fix: create your metric first, then trigger or wait for events. If you ever see "log viewer shows N events but my chart shows N-1," this is almost always why.
+
+## The two stages every chart goes through
+
+```
+Raw events → [ALIGNMENT] → time-bucketed series → [GROUPING] → one line on chart
+```
+
+**Alignment** (per-series): "Within each individual time series, what's the summary of values in each time bucket?"
+
+**Grouping** (cross-series): "If multiple time series exist, how do I combine them into one line?"
+
+They're often confused because both let you pick functions like Mean, Sum, Max. But they answer different questions and run at different stages.
+
+### Single-series case (typical for us)
+
+If your metric has one time series (one Cloud Run service, one revision active), **grouping is effectively a no-op** — there's nothing to combine. Alignment is what determines the line's meaning. Grouping `Mean by None` works as the conventional default.
+
+### Multi-series case
+
+Multiple series arise when:
+- You have label-based dimensions (e.g., per-revision, per-region)
+- Multiple deployments are active simultaneously (canary ramp with two revisions)
+
+Then grouping actually changes the line. For example, with revision-A at p95=70s and revision-B at p95=200s during a 50/50 canary:
+
+| Grouping choice | Plots | When to use |
+|---|---|---|
+| `MEAN` | 135s (averaged) | Almost never for SLO purposes — averages hide bad revisions |
+| `MAX` | 200s | SLO alerts — surfaces the worst experience anywhere |
+| `SUM` | 270s (nonsense for percentiles) | Only valid for counts and rates |
+
+For SLO monitoring across multiple series: use `MAX`.
+
+## Alignment functions — quick reference
+
+| Function | Applies to | What it computes | When to use |
+|---|---|---|---|
+| `ALIGN_DELTA` | Counter | Count of events in each time bucket | "How many?" |
+| `ALIGN_RATE` | Counter | Events per second (count / bucket duration) | "At what rate?" |
+| `ALIGN_MEAN` | Distribution / Gauge | Average of values in each bucket | "Typical value" |
+| `ALIGN_PERCENTILE_50` | Distribution | Median value | "Typical user experience" |
+| `ALIGN_PERCENTILE_95` | Distribution | 95th percentile | **SLO line — tail experience** |
+| `ALIGN_PERCENTILE_99` | Distribution | 99th percentile | "Very edge" tail |
+| `ALIGN_MAX` | Distribution / Gauge | Maximum value seen | "Worst observed" |
+| `ALIGN_MIN` | Distribution / Gauge | Minimum value seen | "Best observed" (rarely useful) |
+
+Using `ALIGN_DELTA` on a distribution metric collapses it to "count of events" (treats it like a counter). Don't do this accidentally — your chart will look like a counter even though the metric stores values.
+
+## Statistics — what each one means
+
+For a sorted list of 100 observations:
+
+| Statistic | Definition | Property |
+|---|---|---|
+| **Mean** | Sum of all values ÷ count | Volatile — one outlier drags it up |
+| **Median (p50)** | The value at position 50 | Robust to outliers |
+| **p95** | The value at position 95 | "95% of users had AT MOST this experience" — the SLO statistic |
+| **p99** | The value at position 99 | Captures the worst 1% — for "is anyone having a really bad time?" |
+| **Max** | The value at position 100 (worst single observation) | Defined entirely by the outlier |
+| **Standard deviation** | How spread out values are around the mean | Consistency signal |
+
+### Critical clarification — p95 is a threshold, not an average
+
+A common misread: "p95 = average of the slowest 5%." **It's not.** p95 is a single value: the one at the 95th position of the sorted list. Outliers above position 95 don't affect it.
+
+Example: 100 registrations sorted ascending. Position 95 has value 90s. Position 100 has value 600s. **p95 = 90s, period.** The 600s outlier doesn't move p95.
+
+This is the desired property: p95 tells you the threshold below which 95% of experiences sit, immune to freak events. To learn about the freaks, look at `max` separately.
+
+### Why percentiles beat mean for user-experience signals
+
+Concrete example: 99 registrations at 30s, 1 at 600s.
+
+- **Mean**: `(99 × 30 + 600) / 100 = 35.7s` — the 600s outlier is hidden
+- **p99**: `600s` — surfaces the problem
+
+Mean lies about tail experience. Percentiles tell the truth. SREs care about the worst experience because that's what generates support tickets.
+
+## Chart types
+
+| Type | Best for | When it shines |
+|---|---|---|
+| **Line chart** | Most cases | Comparing trends, SLO threshold visibility, multi-line summary |
+| **Heatmap** | Distribution metrics with high event volume | Revealing multi-modal distributions, density patterns hidden in percentiles |
+| **Stacked bar** | Categorical breakdowns over time | "Events by status_code per minute" |
+| **Scorecard** | Single number readout | Current p95, total this month |
+| **Gauge** | Bounded current value | "% of SLO budget remaining" |
+
+### Heatmap detail
+
+A heatmap is a 2D histogram over time:
+- **X-axis**: time buckets
+- **Y-axis**: value buckets (log scale typically)
+- **Cell color/intensity**: count of events in that (time, value) cell
+
+A vertical column tells you "what was the spread of values during this time bucket." Bright cluster at one Y value = predictable. Tall column = wide variance. Multiple bright bands = bimodal distribution.
+
+**Heatmaps require dense data** (~50+ events per time bucket) to be readable. With sparse data (1-3 events per bucket), the heatmap is just a scatter plot of pixels — go back to line chart + percentiles instead.
+
+## Decision recipes
+
+### "How many events?" (counts)
+
+| Setting | Value |
+|---|---|
+| Metric type | Counter |
+| Alignment | `ALIGN_DELTA` |
+| Grouping | `SUM` |
+| Chart type | Line chart |
+
+Plots integer counts per time bucket. Easy to eyeball against log viewer.
+
+### "At what rate?" (events per second)
+
+| Setting | Value |
+|---|---|
+| Metric type | Counter |
+| Alignment | `ALIGN_RATE` |
+| Grouping | `SUM` |
+| Chart type | Line chart |
+
+Plots rate per second. Bucket size affects the calculation: `count / bucket_seconds`. Same data as Delta but normalized.
+
+### "Typical user experience" (median)
+
+| Setting | Value |
+|---|---|
+| Metric type | Distribution |
+| Alignment | `ALIGN_PERCENTILE_50` |
+| Grouping | `MEAN` (one series) or `MAX` (multi-series for SLO) |
+| Chart type | Line chart |
+
+### "Tail experience" (p95 SLO line)
+
+| Setting | Value |
+|---|---|
+| Metric type | Distribution |
+| Alignment | `ALIGN_PERCENTILE_95` (or `_99`) |
+| Grouping | `MEAN` (one series) or `MAX` (multi-series for SLO) |
+| Chart type | Line chart |
+| Extra | Add threshold line at SLO target |
+
+### "Funnel" (compare counts across pipeline stages)
+
+For "how many requested → registered → completed" patterns:
+
+- Three counter metrics, one per stage (e.g., `create_vm_requests_submitted`, `runner_registrations`, `vm_deletions`)
+- One line chart with all three metrics
+- All using `ALIGN_DELTA` + `SUM` for consistent comparison
+
+Healthy state: three lines track each other (offset by job duration). Divergence highlights where the pipeline is failing.
+
+## How to create — step by step
+
+### Counter log-based metric
+
+1. Cloud Logging → Logs-based Metrics → Create metric
+2. Type: **Counter**
+3. Filter: paste your log filter, for example:
+   ```
+   resource.type="cloud_run_revision"
+   resource.labels.service_name="runnerforge-orchestrator"
+   jsonPayload.message="Submitted VM creation"
+   ```
+4. Name + description
+5. (Optional) Labels — if you want per-dimension breakdowns. Leave empty for now.
+6. Create
+
+The metric appears in Metrics Explorer under `logging/user/<your_metric_name>`.
+
+### Distribution log-based metric
+
+Same as Counter, except:
+
+- Type: **Distribution**
+- **Field name**: the JSON path to the numeric value to record, e.g., `jsonPayload.time_to_runner_seconds`
+- **Histogram buckets**: usually leave default unless you have strong opinions about bucket boundaries
+
+The metric records the actual numeric value for each matching log entry, enabling percentile / mean / max queries later.
+
+### Chart from a metric
+
+1. Metrics Explorer → Select Metric → find your `logging/user/<name>`
+2. Set **Alignment function** based on what you want to measure (see recipes above)
+3. Set **Grouping** — for single-series metrics, `Mean by None` is the safe default
+4. Switch widget type if needed (`Line chart` is default; `Heatmap` for dense distributions)
+5. Configure title, add to dashboard
+6. Optional: add threshold line for SLO target
+
+## Common pitfalls
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| "I see 3 logs but chart shows 2" | Metric created after one of the logs (non-retroactive) | Recreate metric earlier OR accept the gap; future events count correctly |
+| "Y-axis shows 0.01/s, but I expected 3" | Default aligner is `ALIGN_RATE`; you wanted `ALIGN_DELTA` | Switch alignment to Delta |
+| "Setting Grouping to Count shows 1" | "Count" in Grouping means "count of distinct time series", not events | Use Sum or Mean for grouping; alignment already counted the events |
+| "Mean line is HIGHER than p95 line" | Mean alignment used on distribution misconfigured to `Delta` (counts events, not duration) | Use `ALIGN_MEAN` or `ALIGN_PERCENTILE_50` for the "typical" line |
+| "Heatmap looks like sparse confetti" | Not enough events per time bucket — heatmap needs density | Switch to line chart with p50 + p95 until volume grows |
+| "Filter matches in log viewer but metric doesn't count" | Typo in filter, smart-quote differences, or non-retroactive cutoff | Compare exact text; check metric creation timestamp |
+| "Chart shows dotted line segments" | Visual gap-connector for sparse data — chart bridging two distant points | These are not measurements; ignore them, focus on solid segments |
+
+## Quick rule of thumb
+
+| Question you want answered | Alignment | Grouping |
+|---|---|---|
+| "How many?" | `Delta` | `Sum` |
+| "Per second?" | `Rate` | `Sum` |
+| "Typical user experience?" | `Percentile 50` | `Mean` (or `Max` multi-series) |
+| "Tail experience? (SLO)" | `Percentile 95` or `99` | `Mean` (or `Max` multi-series) |
+| "Average value?" (not for UX) | `Mean` | `Mean` |
+| "Worst seen?" | `Max` | `Max` |
+
+For SLO charts: add a threshold line at the target. The chart at a glance answers "are we within SLO?"
+
+## Where to go next
+
+- For metric definitions in code: see `infra/terraform/dashboards/` — the dashboards we ship are codified in Terraform and applied via `deploy-infra.yaml`.
+- For SLO concepts: see [Observability](../design/observability.mdx).
+- For specific alerts and what they mean: see [Runbooks](./runbooks/).
