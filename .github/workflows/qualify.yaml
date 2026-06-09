@@ -2,8 +2,10 @@ name: Qualify
 
 on:
   pull_request:
-  push:
-    branches: [main]
+  # No `push: branches: [main]` trigger — each app's deploy-* workflow
+  # runs its own post-merge checks. A qualify run on the merge commit
+  # would race with deploy-infra's plan-preview job for the terraform
+  # state lock (both call _qualify-infra.yaml which runs `terraform plan`).
 
 permissions:
   contents: read
