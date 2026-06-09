@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/rumankazi/runnerforge/compare/web-v1.0.3...web-v1.1.0) (2026-06-09)
+
+
+### Features
+
+* add ADR and split codeql ([#92](https://github.com/rumankazi/runnerforge/issues/92)) ([58fc22f](https://github.com/rumankazi/runnerforge/commit/58fc22f7586a0bc31ac538e07476bc629e1c22cc))
+
 ## [1.0.3](https://github.com/rumankazi/runnerforge/compare/web-v1.0.2...web-v1.0.3) (2026-06-07)
 
 
