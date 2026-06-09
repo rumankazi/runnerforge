@@ -1,5 +1,8 @@
 resource "google_iam_workload_identity_pool" "github_pool" {
   workload_identity_pool_id = "github"
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "google_iam_workload_identity_pool_provider" "github_pool_provider" {
@@ -24,12 +27,19 @@ resource "google_iam_workload_identity_pool_provider" "github_pool_provider" {
     "attribute.workflow_path"    = "assertion.job_workflow_ref.split('@')[0]"
   }
 
+  lifecycle {
+    prevent_destroy = true
+  }
+
 }
 
 resource "google_service_account" "ci_build" {
   account_id   = "ci-build"
   display_name = "RunnerForge CI Build"
   description  = "Impersonated by GitHub Actions for orchestrator image build + Cloud Run deploy"
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "google_service_account_iam_member" "ci_build_wif" {
