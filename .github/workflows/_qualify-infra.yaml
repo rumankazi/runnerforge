@@ -51,6 +51,8 @@ jobs:
           # Scope the token to only what tfaction actually does.
           # Caps the blast radius even if the App installation is later granted more perms.
           permission-pull-requests: write
+          permission-contents: write
+          permission-actions: read
 
       - name: Set up
         uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
