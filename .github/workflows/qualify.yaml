@@ -16,33 +16,7 @@ concurrency:
 
 jobs:
   preflight:
-    name: Preflight
-    runs-on: ubuntu-latest
-    outputs:
-      changes: ${{ steps.detect.outputs.changes }}
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - id: detect
-        uses: ./.github/actions/detect-changes
-        with:
-          filters: |
-            orchestrator:
-              - apps/orchestrator/**
-              - .github/workflows/_qualify-orchestrator.yaml
-            web:
-              - apps/web/**
-              - .github/workflows/_qualify-web.yaml
-            infra:
-              - infra/terraform/**
-              - infra/policies/**
-              - .github/workflows/_qualify-infra.yaml
-          force-all-on: |
-            - .github/workflows/qualify.yaml
-            - .github/actions/detect-changes/**
+    uses: ./.github/workflows/preflight.yaml
 
   orchestrator:
     name: Orchestrator
