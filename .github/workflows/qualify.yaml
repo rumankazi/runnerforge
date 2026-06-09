@@ -36,6 +36,7 @@ jobs:
               - .github/workflows/_qualify-web.yaml
             infra:
               - infra/terraform/**
+              - infra/policies/**
               - .github/workflows/_qualify-infra.yaml
           force-all-on: |
             - .github/workflows/qualify.yaml
