@@ -13,10 +13,13 @@ resource "google_iam_workload_identity_pool_provider" "github_pool_provider" {
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
   }
+
+  # Two-clause condition: identity must originate from a workflow IN this repo.
+  # Per-workflow restrictions (e.g., "only apply-terraform.yaml can use the apply SA")
+  # are enforced at the per-SA wif binding level via `attribute.workflow_path`.
   attribute_condition = join(" && ", [
     "assertion.repository_owner == 'rumankazi'",
-    "assertion.repository == 'rumankazi/runnerforge'",
-    "assertion.job_workflow_ref.startsWith('rumankazi/runnerforge/.github/workflows/deploy-')"
+    "assertion.repository == 'rumankazi/runnerforge'"
   ])
 
   attribute_mapping = {

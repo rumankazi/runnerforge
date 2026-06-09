@@ -107,6 +107,8 @@ resource "google_cloud_run_v2_service" "orchestrator" {
     ignore_changes = [
       traffic,
       template[0].containers[0].image,
+      client,        # set by gcloud on every CD deploy, ignored
+      client_version # set by gcloud on every CD deploy, ignored
     ]
   }
 }
