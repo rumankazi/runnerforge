@@ -29,7 +29,6 @@ jobs:
     secrets:
       RELEASE_BOT_APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
       RELEASE_BOT_PRIVATE_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
-
     permissions:
       contents: read
       id-token: write
@@ -40,6 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: plan-preview
     environment: prod-infra
+    if: needs.plan-preview.outputs.has_changes == 'true'
     permissions:
       contents: read
       id-token: write
@@ -71,7 +71,9 @@ jobs:
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
           # Scope the token to only what tfaction actually does.
           # Caps the blast radius even if the App installation is later granted more perms.
+          permission-contents: write
           permission-pull-requests: write
+          permission-actions: read
 
       - name: Set up
         uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
