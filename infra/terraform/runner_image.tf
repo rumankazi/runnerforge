@@ -5,6 +5,9 @@ resource "google_service_account" "ci_runner_image_build" {
   account_id   = "ci-runner-image-build"
   display_name = "RunnerForge Runner Image Builder"
   description  = "Impersonated by Github Actions for runner image build + publish image + view logs from VM"
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Allows principalSet (here the workflow) to impersonate SA ci-runner-image-build
@@ -44,6 +47,9 @@ resource "google_service_account" "ci_vm_logger" {
   account_id   = "ci-vm-logger"
   display_name = "RunnerForge Runner Image VM Logger"
   description  = "Attaches to packer build and smoke test VM to provide log writing permissions to ops agent inside the running VM"
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Allow SA ci-runner-image to use SA (actAs) ci-vm-logger to attach to the packer build and smoke test VM created by ci-runner-image.

@@ -4,6 +4,9 @@ resource "google_service_account" "orchestrator" {
   account_id   = "runnerforge-orchestrator"
   display_name = "RunnerForge orchestrator (Cloud Run)"
   description  = "Identity of the orchestrator Cloud Run service. Creates/deletes runner VMs and reads Github App secrets"
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # ------- Helper: default compute SA email (needed for act-as) -----

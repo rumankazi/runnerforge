@@ -103,6 +103,7 @@ resource "google_cloud_run_v2_service" "orchestrator" {
   # Without ignoring these, `terraform apply` would revert each post-CD deploy
   # back to `var.image_tag` (which is now a bootstrap value, not the live truth).
   lifecycle {
+    prevent_destroy = true
     ignore_changes = [
       traffic,
       template[0].containers[0].image,

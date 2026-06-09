@@ -2,6 +2,9 @@ resource "google_service_account" "runnerforge_runner_vm" {
   account_id   = "runnerforge-runner-vm"
   display_name = "RunnerForge Runner VM"
   description  = "Attaches to the VMs created by orchestrator with narrow permissions"
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "google_project_iam_member" "runnerforge_runner_vm_log_write" {

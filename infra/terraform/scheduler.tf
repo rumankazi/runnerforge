@@ -3,6 +3,9 @@ resource "google_service_account" "scheduler" {
   account_id   = "runnerforge-scheduler"
   display_name = "RunnerForge Cloud Scheduler"
   description  = "Identity for Cloud Scheduler jobs that invoke the orchestrator (e.g., /sweep). The orchestrator validates the OIDC token's email claim against this SA."
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # The /sweep cron job — runs every day at 00:12

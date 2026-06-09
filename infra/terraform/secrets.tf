@@ -5,6 +5,9 @@ resource "google_secret_manager_secret" "github_webhook_secret" {
 
     }
   }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "google_secret_manager_secret" "github_app_private_key" {
@@ -13,5 +16,8 @@ resource "google_secret_manager_secret" "github_app_private_key" {
     auto {
 
     }
+  }
+  lifecycle {
+    prevent_destroy = true
   }
 }
