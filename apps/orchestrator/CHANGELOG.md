@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.6.0...orchestrator-v0.6.1) (2026-06-09)
+
+
+### Bug Fixes
+
+* renovate config ([#80](https://github.com/rumankazi/runnerforge/issues/80)) ([350f565](https://github.com/rumankazi/runnerforge/commit/350f565fcf489ac0ad88dc4bdbacd5b4516b2aa8))
+
 ## [0.6.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.5.1...orchestrator-v0.6.0) (2026-06-08)
 
 
