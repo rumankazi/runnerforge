@@ -32,9 +32,9 @@ resource "google_project_iam_member" "ci_terraform_plan_iam_security" {
   member  = "serviceAccount:${google_service_account.ci_terraform_plan.email}"
 }
 
-resource "google_storage_bucket_iam_member" "ci_terraform_plan_state_viewer" {
+resource "google_storage_bucket_iam_member" "ci_terraform_plan_state_user" {
   bucket = google_storage_bucket.terraform_state.name
-  role   = "roles/storage.objectViewer"
+  role   = "roles/storage.objectUser"
   member = "serviceAccount:${google_service_account.ci_terraform_plan.email}"
 }
 
