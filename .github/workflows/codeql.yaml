@@ -16,16 +16,16 @@ permissions:
   packages: read
 
 jobs:
-  analyze:
-    name: CodeQL ${{ matrix.language }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - language: python
-          - language: javascript-typescript
+  preflight:
+    uses: ./.github/workflows/preflight.yaml
 
+  analyze-python:
+    name: CodeQL python
+    needs: preflight
+    # On PR/push: only if orchestrator paths changed.
+    # On weekly schedule: always run (security baseline).
+    if: github.event_name == 'schedule' || fromJSON(needs.preflight.outputs.changes).orchestrator
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -33,9 +33,28 @@ jobs:
 
       - uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
         with:
-          languages: ${{ matrix.language }}
+          languages: python
           build-mode: none
 
       - uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
         with:
-          category: "/language:${{ matrix.language }}"
+          category: "/language:python"
+
+  analyze-javascript:
+    name: CodeQL javascript-typescript
+    needs: preflight
+    if: github.event_name == 'schedule' || fromJSON(needs.preflight.outputs.changes).web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          languages: javascript-typescript
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          category: "/language:javascript-typescript"
