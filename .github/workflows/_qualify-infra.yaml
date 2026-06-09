@@ -3,31 +3,66 @@ name: Qualify Infra
 on:
   workflow_call:
 
-permissions:
-  contents: read
-
-defaults:
-  run:
-    working-directory: infra/terraform
+env:
+  WIF_PROVIDER: projects/8547588670/locations/global/workloadIdentityPools/github/providers/github
+  CI_TERRAFORM_PLAN_SA: ci-terraform-plan@runnerforge.iam.gserviceaccount.com
+  TFACTION_JOB_TYPE: terraform
+  TFACTION_IS_APPLY: "false"
+  TFACTION_WORKING_DIR: infra/terraform
 
 jobs:
   qualify-infra:
     name: ☁️
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
-      - name: Setup terraform
-        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.CI_TERRAFORM_PLAN_SA }}
 
-      - name: Format check
-        run: terraform fmt -check -recursive
+      - uses: aquaproj/aqua-installer@11dd79b4e498d471a9385aa9fb7f62bb5f52a73c # v4.0.4
+        with:
+          aqua_version: v2.60.0
 
-      - name: Initialize providers
-        run: terraform init -backend=false # without loading GCS backend
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          # Scope the token to only what release-please actually does.
+          # Caps the blast radius even if the App installation is later granted more perms.
+          permission-contents: write
+          permission-pull-requests: write
 
-      - name: Validate
-        run: terraform validate
+      - name: Set up
+        uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
+        with:
+          action: setup
+          github_token: ${{ steps.app-token.outputs.token }}
+
+      - name: Init
+        uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
+        with:
+          action: terraform-init
+          github_token: ${{ steps.app-token.outputs.token }}
+
+      - name: Lint
+        uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
+        with:
+          action: test
+          github_token: ${{ steps.app-token.outputs.token }}
+
+      - name: Plan
+        uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
+        with:
+          action: plan
+          github_token: ${{ steps.app-token.outputs.token }}

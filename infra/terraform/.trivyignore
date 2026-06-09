@@ -1,0 +1,12 @@
+# GCP-0066 (LOW): Storage bucket should use customer-managed encryption key
+# Deferred — Google-managed encryption is sufficient at our scale. CMEK adds
+# key management overhead and lockout risk that doesn't pay off until we have
+# compliance requirements that mandate it. Revisit if SOC2/etc. ever applies.
+GCP-0066
+
+# GCP-0077 (MEDIUM): Storage bucket access logging not enabled
+# Deferred — would require provisioning an audit log destination bucket which
+# itself triggers the same finding (recursive). Forensic value is real but
+# not yet load-bearing at single-operator scale. Revisit if we ever have
+# multiple humans with state access.
+GCP-0077

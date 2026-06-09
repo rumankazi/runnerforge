@@ -1,0 +1,8 @@
+plan_workflow_name: _qualify-infra.yaml
+target_groups:
+  - working_directory: infra/terraform
+available_providers:
+  - name: registry.terraform.io/hashicorp/google
+tflint:
+  enabled: true
+  fix: true # enables `tflint --fix`
