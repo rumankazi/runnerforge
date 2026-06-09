@@ -198,3 +198,35 @@ Structured logging only for Phases 1–3. Add Firestore in Phase 4 when building
 - **Trade-off**: GCP-side setup is more involved (pool, provider, condition, bindings) than dropping a JSON key in GH Secrets. One-time cost.
 - **Trade-off**: locked into GitHub Actions as the OIDC issuer. Moving CI providers means re-doing the WIF pool/provider/conditions for the new issuer.
 - **Trade-off**: WIF auth assumes a green path through several layers (token issuance, attribute condition match, IAM binding, target API enabled). When it fails, the error often points at one layer while the cause is in another (we hit this with cloudresourcemanager.googleapis.com being disabled).
+
+<Record type="adr" id="008" status="accepted" />
+
+## Scale-to-zero orchestrator with skip-fast on non-runnerforge webhooks
+
+### Context
+
+- The orchestrator is a GitHub App that subscribes to the `workflow_job` event. GitHub Apps deliver **all** subscribed events to a single webhook URL — no event-level filtering by label, no per-org/per-repo routing.
+- `workflow_job` fires for **every** job in any repo where the App is installed, including jobs that target GitHub-hosted runners (no `runnerforge` label). The orchestrator's label-check happens inside the handler — by the time we know we don't care, Cloud Run has already woken up.
+- This produces a steady trickle of irrelevant wakeups during developer work, each costing a ~3-5s cold start when the service had scaled to zero.
+
+### Options considered
+
+- **Scale-to-zero + skip-fast** (chosen) — `min_instance_count=0`, HMAC verify, parse, label check, return 200 immediately for irrelevant events. Cold start on first wakeup per idle period; warm window (~15min) covers subsequent calls.
+- **Always-warm** — `min_instance_count=1`, no cold start ever. ~$5/mo flat for compute time mostly spent doing nothing.
+- **External pre-filter** — Cloud Function or API Gateway in front of Cloud Run, doing a cheap "is this a runnerforge job?" check before forwarding. Extra service to maintain; the actual orchestrator still needs to wake up for real work; same end result.
+- **GitHub App event filtering** — would solve this cleanly. Doesn't exist.
+
+### Decision
+
+- Scale-to-zero with skip-fast. Accept the cold-start cost on irrelevant wakeups in exchange for $0 compute during idle periods (nights, weekends, between developer bursts).
+- Real runnerforge events benefit from the side effect: an irrelevant wakeup pre-warms the instance, so a real event arriving moments later lands on a hot container.
+- The label-check sequence in the webhook handler is: HMAC verify → JSON parse → Pydantic parse → label check → return 200 if no match. Returns to GitHub within ~1s wall-clock on a warm instance, well under the 10s webhook timeout even after a cold start (~3-5s startup + ~1s processing = ~5s p99).
+
+### Consequences
+
+- **Pro**: $0 compute when dormant. For a developer-driven workload that clusters during work hours and goes idle overnight/weekends, this is meaningfully cheaper than always-warm.
+- **Pro**: irrelevant wakeups effectively pre-warm the instance for clustered work — first real event after the first irrelevant one runs on a warm container.
+- **Pro**: simpler architecture than the pre-filter alternative. No extra service to deploy, monitor, or upgrade.
+- **Trade-off**: a fraction of CPU/cost goes to handling events we discard. At our volume, sub-penny per day; acceptable.
+- **Trade-off**: cold-start latency on the first real runnerforge event after an idle period (3-5s + handler time). Still well under the GitHub webhook 10s budget; orchestrator p99 has comfortable headroom.
+- **Future micro-optimization**: a byte-scan for `b"runnerforge"` on the raw request body before Pydantic parse would shave 5-15ms per irrelevant event. Not worth implementing until volume of irrelevant events justifies it — Cloud Run startup dominates the cost, not Pydantic.
