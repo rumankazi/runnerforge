@@ -8,6 +8,11 @@
 
 # Infrastructure — Terraform, Packer (provisions GCP, IAM, secrets).
 /infra/                                 @rumankazi
+# Sensitive infrastructure — explicit review required
+/infra/terraform/iam.tf                 @rumankazi
+/infra/terraform/wif.tf                 @rumankazi
+/infra/terraform/state_bucket.tf        @rumankazi
+/infra/terraform/secrets.tf             @rumankazi
 
 # CI/CD configuration — workflows, composite actions, this file itself.
 /.github/                               @rumankazi
