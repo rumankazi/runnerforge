@@ -84,4 +84,6 @@ jobs:
         run: conftest verify -p infra/policies/
 
       - name: Conftest test (apply policies to plan)
-        run: conftest test "${{ steps.plan.outputs.plan_json }}" -p infra/policies/
+        env:
+          PLAN_JSON: ${{ steps.plan.outputs.plan_json}}
+        run: conftest test "$PLAN_JSON" -p infra/policies/
