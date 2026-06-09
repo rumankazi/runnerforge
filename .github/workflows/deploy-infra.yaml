@@ -26,7 +26,6 @@ env:
 jobs:
   plan-preview:
     uses: ./.github/workflows/_qualify-infra.yaml
-    secrets: inherit
     permissions:
       contents: read
       id-token: write
