@@ -5,3 +5,4 @@ packages:
   - name: hashicorp/terraform@v1.15.5
   - name: aquasecurity/trivy@v0.71.0
   - name: terraform-linters/tflint@v0.62.1
+  - name: open-policy-agent/conftest@v0.68.2

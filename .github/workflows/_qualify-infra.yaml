@@ -78,3 +78,10 @@ jobs:
         with:
           action: plan
           github_token: ${{ steps.app-token.outputs.token }}
+
+      - name: Conftest verify (policy unit tests)
+        continue-on-error: true
+        run: conftest verify -p infra/policies/
+
+      - name: Conftest test (apply policies to plan)
+        run: conftest test "${{ steps.plan.outputs.plan_json }}" -p infra/policies/
