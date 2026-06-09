@@ -1,0 +1,53 @@
+---
+title: Terraform Stale State Lock
+---
+
+## Symptom
+
+`deploy-infra.yaml` (apply) or `_qualify-infra.yaml` (plan) fails with:
+
+```
+Error: Error acquiring the state lock
+
+Error message: writing "gs://runnerforge-terraform-state/orchestrator/default.tflock" failed:
+googleapi: Error 412: At least one of the pre-conditions you specified did not hold.
+Lock Info:
+  ID:        1781021496015378
+  Path:      gs://runnerforge-terraform-state/orchestrator/default.tflock
+  Operation: OperationTypePlan
+  ...
+```
+
+## What happened
+
+Terraform's GCS backend acquires a state lock via a `.tflock` object before plan/apply, releases on exit. If a previous run **crashed or was force-cancelled mid-execution** (worker died, GH Actions timeout, manual cancel during apply), the lock object remains and blocks subsequent runs.
+
+`-lock-timeout=5m` (set in `tfaction-root.yaml`) already handles legitimate concurrent operations by waiting. A failure after that timeout means the lock is genuinely stale.
+
+## First step — confirm it's actually stale
+
+Before force-unlocking, verify no other operation is in progress:
+
+1. Check **GitHub Actions** for any currently-running `deploy-infra` or `Qualify` workflow that includes the infra job.
+2. Confirm no team member is running `terraform apply` locally (single-operator project, so usually just you).
+3. Look at the lock's `Created` timestamp in the error — if it's hours old with no in-flight runs, it's stale.
+
+## Recovery
+
+From a local terminal authenticated to GCP (`gcloud auth application-default login` if needed):
+
+```bash
+cd infra/terraform
+terraform force-unlock <lock-id>
+```
+
+`<lock-id>` is in the error message (e.g., `1781021496015378`). You'll be prompted to confirm.
+
+After force-unlock, re-run the failed workflow:
+
+- For `deploy-infra` failure → trigger via Actions UI → Deploy Infra → workflow_dispatch
+- For `_qualify-infra` failure on a PR → push a no-op commit to the PR branch (or close + reopen the PR)
+
+## When NOT to force-unlock
+
+If GitHub Actions shows an in-flight `deploy-infra` or qualify run, **wait for it to finish**. Force-unlocking during a legitimate operation can corrupt state. The `-lock-timeout=5m` is your safety net here.
