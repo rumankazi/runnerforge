@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: suzuki-shunsuke/tfaction@latest
+      - uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
         id: pick-out
         with:
           action: pick-out-drift-issues
@@ -52,29 +52,29 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: suzuki-shunsuke/tfaction@latest
+      - uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
         with:
           action: set-drift-env
           issue: ${{toJSON(matrix.issue)}}
 
-      - uses: suzuki-shunsuke/tfaction@latest
+      - uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
         with:
           action: setup
 
       - name: terraform init
-        uses: suzuki-shunsuke/tfaction@latest
+        uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
         with:
           action: terraform-init
 
-      - uses: suzuki-shunsuke/tfaction@latest
+      - uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
         with:
           action: test
 
-      - uses: suzuki-shunsuke/tfaction@latest
+      - uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
         with:
           action: plan
 
-      - uses: suzuki-shunsuke/tfaction@latest
+      - uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
         if: always()
         with:
           action: update-drift-issue
