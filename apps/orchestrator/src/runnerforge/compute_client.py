@@ -225,7 +225,7 @@ async def create_vm(
 
 async def wait_for_vm_creation(
     handle: OperationHandle,
-    timeout: float = 120.0,
+    timeout: float = 300.0,  # 5 minutes (under 10 minutes limit from github timeout)
 ) -> OperationOutcome:
     """Poll a GCE create-instance operation until DONE or timeout.
 
