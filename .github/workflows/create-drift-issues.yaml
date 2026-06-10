@@ -1,0 +1,22 @@
+name: Create drift issues
+on:
+  workflow_dispatch:
+    inputs: {}
+  schedule:
+    # daily
+    - cron: "0 0 * * *"
+jobs:
+  create-drift-issues:
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
+        with:
+          action: create-drift-issues
