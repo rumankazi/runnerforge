@@ -121,3 +121,92 @@ resource "google_monitoring_alert_policy" "cold_start_p95" {
 
   notification_channels = [google_monitoring_notification_channel.email.name]
 }
+
+# Sweep is the orphan-VM safety net — Cloud Scheduler runs /sweep hourly.
+# If no Sweep-completed log fires for two hours straight, the scheduler is
+# broken or the /sweep handler is degraded; either way orphan VMs start
+# accumulating silently. Detects the outage before the next billing cycle.
+resource "google_monitoring_alert_policy" "sweep_liveness" {
+  display_name = "Sweep has not completed in 2h"
+  combiner     = "OR"
+  severity     = "ERROR"
+
+  conditions {
+    display_name = "Absent sweep_checked_count for 7200s"
+    condition_absent {
+      filter   = "metric.type=\"logging.googleapis.com/user/sweep_checked_count\" resource.type=\"cloud_run_revision\""
+      duration = "7200s"
+
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_COUNT"
+      }
+
+      trigger {
+        count = 1
+      }
+    }
+  }
+
+  notification_channels = [google_monitoring_notification_channel.email.name]
+}
+
+# Webhook 4xx rejections above the expected scanner baseline. /webhook is a
+# public endpoint and attracts background probe traffic, so some rate of 4xx
+# is normal. Sustained high volume signals HMAC rotation desync or GitHub
+# payload-schema drift — both real availability incidents the SLO doesn't
+# catch by design. Threshold (50/10m = 5/min) is conservative; tighten once
+# we have weeks of observed baseline.
+resource "google_monitoring_alert_policy" "webhook_rejection_rate" {
+  display_name = "Webhook rejections > 5/min (10m)"
+  combiner     = "OR"
+  severity     = "WARNING"
+
+  conditions {
+    display_name = "Sustained webhook rejection rate"
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/webhook_rejection_count\" resource.type=\"cloud_run_revision\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 50
+      duration        = "600s"
+
+      aggregations {
+        alignment_period     = "600s"
+        per_series_aligner   = "ALIGN_DELTA"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  notification_channels = [google_monitoring_notification_channel.email.name]
+}
+
+# Cloud Run instance count approaching max_instances=50 (80% threshold).
+# Gives time to consider raising the cap before requests start failing
+# because no more instances can spin up. Saturation at the instance level is
+# the upstream signal; per-instance request concurrency (capped at 10)
+# saturates first but Cloud Run will still scale out — instance_count
+# approaching max is the actual ceiling.
+resource "google_monitoring_alert_policy" "instance_saturation" {
+  display_name = "Cloud Run instance count > 40 (80% of max=50)"
+  combiner     = "OR"
+  severity     = "WARNING"
+
+  conditions {
+    display_name = "Sustained instance count near cap"
+    condition_threshold {
+      filter          = "metric.type=\"run.googleapis.com/container/instance_count\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"${google_cloud_run_v2_service.orchestrator.name}\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 40
+      duration        = "600s"
+
+      aggregations {
+        alignment_period     = "60s"
+        per_series_aligner   = "ALIGN_MAX"
+        cross_series_reducer = "REDUCE_MAX"
+      }
+    }
+  }
+
+  notification_channels = [google_monitoring_notification_channel.email.name]
+}
