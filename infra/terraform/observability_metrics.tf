@@ -335,6 +335,36 @@ resource "google_logging_metric" "sweep_error_count" {
   }
 }
 
+# ---------------------------------------------------------------------------
+# Lost-webhook detection — anchor for the "queued events received vs. VMs
+# created" ratio. Counts every RunnerForge-labeled webhook the handler
+# accepts, sliced by event_type (queued, in_progress, completed). Sustained
+# divergence between queued-event count and vm_creation_count signals that
+# the orchestrator is silently dropping work GitHub thinks it delivered.
+# ---------------------------------------------------------------------------
+
+resource "google_logging_metric" "webhook_event_count" {
+  name   = "webhook_event_count"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Webhook event received"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+    labels {
+      key        = "event_type"
+      value_type = "STRING"
+    }
+  }
+
+  label_extractors = {
+    "event_type" = "EXTRACT(jsonPayload.event_type)"
+  }
+}
+
 # Cloud Monitoring SLOs and alert policies that reference a log-based metric
 # validate the metric exists at create time, but log-based metrics take up
 # to ~10 minutes to become queryable after creation. On a fresh apply, that
@@ -349,6 +379,7 @@ resource "time_sleep" "wait_for_log_metrics" {
     google_logging_metric.time_to_runner_seconds,
     google_logging_metric.webhook_request_count,
     google_logging_metric.webhook_rejection_count,
+    google_logging_metric.webhook_event_count,
     google_logging_metric.runner_vm_count,
     google_logging_metric.sweep_checked_count,
     google_logging_metric.sweep_deleted_count,

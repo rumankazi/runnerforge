@@ -140,6 +140,11 @@ async def webhook(
         runner_id=event.workflow_job.runner_id,
         installation_id=event.installation.id,
     )
+    # Anchor for the "lost webhook" ratio alert: counts every RunnerForge
+    # webhook the handler actually accepts, sliced by event_type. When the
+    # ratio of vm_creation_count over queued-events drops, the orchestrator
+    # is silently dropping work GitHub thinks it delivered.
+    logger.info("Webhook event received", extra={"event_type": event.action})
 
     match event.action:
         case "queued":
