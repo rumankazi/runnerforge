@@ -566,7 +566,5 @@ def test_wait_for_vm_creation_keeps_polling_after_transient_get_error(
     assert zone_ops_mock.get.call_count == 2
 
     # Warning logged for the transient error
-    warn = next(
-        (r for r in caplog.records if "Transient error" in r.message), None
-    )
+    warn = next((r for r in caplog.records if "Transient error" in r.message), None)
     assert warn is not None

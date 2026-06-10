@@ -88,6 +88,7 @@ def test_webhook_queued_event_triggers_github_auth_chain(
     # Background polling was scheduled and ran (TestClient flushes BackgroundTasks
     # after the response). It received the OperationHandle we returned from create_vm.
     wait_mock.assert_awaited_once()
+    assert wait_mock.await_args is not None
     assert wait_mock.await_args.args[0].name == "op-test-12345"
     assert wait_mock.await_args.args[0].zone == "europe-west4-a"
 
@@ -102,9 +103,7 @@ def test_webhook_queued_event_does_not_schedule_polling_when_vm_already_exists(
 
     body = (fixtures_dir / "queued_job_payload.json").read_bytes()
 
-    respx.post(
-        "https://api.github.com/app/installations/135399152/access_tokens"
-    ).mock(
+    respx.post("https://api.github.com/app/installations/135399152/access_tokens").mock(
         return_value=httpx.Response(
             200,
             json={
