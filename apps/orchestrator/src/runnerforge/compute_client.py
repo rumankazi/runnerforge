@@ -1,8 +1,10 @@
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
+from typing import Literal
 
-from google.api_core.exceptions import AlreadyExists, NotFound
+from google.api_core.exceptions import AlreadyExists, GoogleAPIError, NotFound
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud import compute_v1
 from opentelemetry import trace
@@ -25,6 +27,16 @@ class OperationHandle:
 
     name: str
     zone: str
+
+
+@dataclass(frozen=True, slots=True)
+class OperationOutcome:
+    outcome: Literal["success", "failure", "timeout"]
+    op_name: str
+    zone: str
+    duration_ms: int
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 _compute_client: compute_v1.InstancesClient | None = None
@@ -64,7 +76,7 @@ async def create_vm(
     zone: str = GCP_ZONE,
     project_id: str = GCP_PROJECT_ID,
 ) -> OperationHandle | None:
-    """Submits a VM creation request. Returns the operation ID (does not wait for VM to boot)."""
+    """Submits a VM creation request. Returns the operation handle (does not wait for VM to boot)."""
     assert _compute_client is not None
     with tracer.start_as_current_span("compute.create_vm") as span:
         span.set_attribute("instance_name", instance_name)
@@ -150,6 +162,107 @@ async def create_vm(
             },
         )
         return OperationHandle(name=operation.name, zone=zone)
+
+
+async def wait_for_vm_creation(
+    handle: OperationHandle,
+    timeout: float = 120.0,
+) -> OperationOutcome:
+    """Poll a GCE create-instance operation until DONE or timeout.
+
+    Emits a structured 'vm.create.outcome' log event on the terminal state.
+    Each poll is a ~50ms thread hop via asyncio.to_thread; between polls the
+    event loop is free for other coroutines. Transient errors during a single
+    poll are logged and the loop continues until the deadline.
+    """
+    assert _zone_ops_client is not None
+    started = time.monotonic()
+    deadline = started + timeout
+
+    with tracer.start_as_current_span("compute.wait_for_vm_creation") as span:
+        span.set_attribute("op_name", handle.name)
+        span.set_attribute("zone", handle.zone)
+        span.set_attribute("timeout_s", timeout)
+
+        while time.monotonic() < deadline:
+            try:
+                op = await asyncio.to_thread(
+                    _zone_ops_client.get,
+                    project=GCP_PROJECT_ID,
+                    zone=handle.zone,
+                    operation=handle.name,
+                )
+            except GoogleAPIError as e:
+                # Transient — log and keep polling until the deadline catches us.
+                logger.warning(
+                    "Transient error polling operation",
+                    extra={"op_name": handle.name, "error": str(e)},
+                )
+                await asyncio.sleep(1.0)
+                continue
+
+            if op.status == compute_v1.Operation.Status.DONE:
+                duration_ms = int((time.monotonic() - started) * 1000)
+                if op.error and op.error.errors:
+                    first = op.error.errors[0]
+                    outcome = OperationOutcome(
+                        outcome="failure",
+                        op_name=handle.name,
+                        zone=handle.zone,
+                        duration_ms=duration_ms,
+                        error_code=first.code,
+                        error_message=first.message,
+                    )
+                    logger.warning(
+                        "vm.create.outcome",
+                        extra={
+                            "outcome": outcome.outcome,
+                            "op_name": outcome.op_name,
+                            "zone": outcome.zone,
+                            "duration_ms": outcome.duration_ms,
+                            "error_code": outcome.error_code,
+                            "error_message": outcome.error_message,
+                        },
+                    )
+                else:
+                    outcome = OperationOutcome(
+                        outcome="success",
+                        op_name=handle.name,
+                        zone=handle.zone,
+                        duration_ms=duration_ms,
+                    )
+                    logger.info(
+                        "vm.create.outcome",
+                        extra={
+                            "outcome": outcome.outcome,
+                            "op_name": outcome.op_name,
+                            "zone": outcome.zone,
+                            "duration_ms": outcome.duration_ms,
+                        },
+                    )
+                span.set_attribute("outcome", outcome.outcome)
+                return outcome
+
+            await asyncio.sleep(1.0)
+
+        duration_ms = int((time.monotonic() - started) * 1000)
+        outcome = OperationOutcome(
+            outcome="timeout",
+            op_name=handle.name,
+            zone=handle.zone,
+            duration_ms=duration_ms,
+        )
+        logger.warning(
+            "vm.create.outcome",
+            extra={
+                "outcome": outcome.outcome,
+                "op_name": outcome.op_name,
+                "zone": outcome.zone,
+                "duration_ms": outcome.duration_ms,
+            },
+        )
+        span.set_attribute("outcome", outcome.outcome)
+        return outcome
 
 
 async def find_vms_by_job_id(
