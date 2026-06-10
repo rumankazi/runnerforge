@@ -61,10 +61,12 @@ def test_create_vm_builds_correct_instance(monkeypatch, caplog):
     assert len(request.instance_resource.disks) == 2  # boot and data disks
     assert request.instance_resource.disks[0].boot is True
     assert request.instance_resource.disks[1].boot is False
-    # Boot disk pins to the resolved image name, not the family alias.
+    # Boot disk pins to the project-qualified path of the resolved image,
+    # not the bare image name (GCE rejects the bare name as malformed URL)
+    # and not the family alias.
     assert (
         request.instance_resource.disks[0].initialize_params.source_image
-        == "runnerforge-runner-image-0-1-0"
+        == "projects/test-project/global/images/runnerforge-runner-image-0-1-0"
     )
     metadata_items = {
         item.key: item.value for item in request.instance_resource.metadata.items
