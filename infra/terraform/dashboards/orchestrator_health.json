@@ -1,12 +1,15 @@
 {
-  "displayName": "RunnerForge",
+  "displayName": "RunnerForge — Orchestrator Health",
   "mosaicLayout": {
     "columns": 48,
     "tiles": [
       {
+        "yPos": 0,
+        "xPos": 0,
+        "width": 24,
         "height": 16,
         "widget": {
-          "title": "Cloud Run Revision - Request Count for runnerforge-orchestrator [SUM]",
+          "title": "Request rate by response_code_class",
           "xyChart": {
             "chartOptions": {
               "mode": "COLOR"
@@ -35,271 +38,22 @@
               "scale": "LINEAR"
             }
           }
-        },
-        "width": 24
+        }
       },
       {
-        "height": 16,
-        "widget": {
-          "title": "Cloud Run Revision - Instance [count]]",
-          "xyChart": {
-            "chartOptions": {
-              "mode": "COLOR"
-            },
-            "dataSets": [
-              {
-                "minAlignmentPeriod": "60s",
-                "plotType": "LINE",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {
-                  "timeSeriesFilter": {
-                    "aggregation": {
-                      "alignmentPeriod": "60s",
-                      "crossSeriesReducer": "REDUCE_MEAN",
-                      "perSeriesAligner": "ALIGN_COUNT"
-                    },
-                    "filter": "metric.type=\"run.googleapis.com/container/instance_count\" resource.type=\"cloud_run_revision\""
-                  }
-                }
-              }
-            ],
-            "yAxis": {
-              "scale": "LINEAR"
-            }
-          }
-        },
-        "width": 24,
-        "xPos": 24
-      },
-      {
-        "height": 16,
-        "widget": {
-          "title": "Orphan VMs [count]",
-          "xyChart": {
-            "chartOptions": {
-              "mode": "COLOR"
-            },
-            "dataSets": [
-              {
-                "minAlignmentPeriod": "60s",
-                "plotType": "LINE",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {
-                  "timeSeriesFilter": {
-                    "aggregation": {
-                      "alignmentPeriod": "60s",
-                      "crossSeriesReducer": "REDUCE_COUNT",
-                      "perSeriesAligner": "ALIGN_DELTA"
-                    },
-                    "filter": "metric.type=\"logging.googleapis.com/user/runner_vm_count\" resource.type=\"cloud_run_revision\""
-                  }
-                }
-              }
-            ],
-            "yAxis": {
-              "scale": "LINEAR"
-            }
-          }
-        },
-        "width": 24,
+        "yPos": 0,
         "xPos": 24,
-        "yPos": 32
-      },
-      {
-        "height": 16,
-        "widget": {
-          "title": "VM Deletion Count",
-          "xyChart": {
-            "chartOptions": {
-              "mode": "COLOR"
-            },
-            "dataSets": [
-              {
-                "minAlignmentPeriod": "60s",
-                "plotType": "LINE",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {
-                  "timeSeriesFilter": {
-                    "aggregation": {
-                      "alignmentPeriod": "60s",
-                      "perSeriesAligner": "ALIGN_MEAN"
-                    },
-                    "filter": "metric.type=\"logging.googleapis.com/user/vm_deletion_count\" resource.type=\"cloud_run_revision\""
-                  }
-                }
-              }
-            ],
-            "yAxis": {
-              "scale": "LINEAR"
-            }
-          }
-        },
         "width": 24,
-        "yPos": 32
-      },
-      {
         "height": 16,
         "widget": {
-          "title": "Span /webhook duration",
+          "title": "Request latency p50/p95/p99",
           "xyChart": {
             "chartOptions": {
               "mode": "COLOR"
             },
             "dataSets": [
               {
-                "breakdowns": [
-                  {
-                    "aggregationFunction": {
-                      "type": "none"
-                    },
-                    "column": "serviceOrWorkload",
-                    "sortOrder": "SORT_ORDER_NONE"
-                  }
-                ],
-                "plotType": "HEATMAP",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {}
-              }
-            ],
-            "yAxis": {
-              "scale": "LINEAR"
-            }
-          }
-        },
-        "width": 24,
-        "yPos": 48
-      },
-      {
-        "height": 16,
-        "widget": {
-          "title": "Span /sweep duration",
-          "xyChart": {
-            "chartOptions": {
-              "mode": "COLOR"
-            },
-            "dataSets": [
-              {
-                "plotType": "HEATMAP",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {}
-              }
-            ],
-            "yAxis": {
-              "scale": "LINEAR"
-            }
-          }
-        },
-        "width": 24,
-        "xPos": 24,
-        "yPos": 64
-      },
-      {
-        "height": 16,
-        "widget": {
-          "title": "Span /webhook (event: queued)",
-          "xyChart": {
-            "chartOptions": {
-              "mode": "COLOR"
-            },
-            "dataSets": [
-              {
-                "breakdowns": [
-                  {
-                    "aggregationFunction": {
-                      "type": "none"
-                    },
-                    "column": "serviceOrWorkload",
-                    "sortOrder": "SORT_ORDER_NONE"
-                  }
-                ],
-                "plotType": "HEATMAP",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {}
-              }
-            ],
-            "yAxis": {
-              "scale": "LINEAR"
-            }
-          }
-        },
-        "width": 24,
-        "yPos": 64
-      },
-      {
-        "height": 16,
-        "widget": {
-          "title": "Sapn /webhook (event: in_progress)",
-          "xyChart": {
-            "chartOptions": {
-              "mode": "COLOR"
-            },
-            "dataSets": [
-              {
-                "breakdowns": [
-                  {
-                    "aggregationFunction": {
-                      "type": "none"
-                    },
-                    "column": "serviceOrWorkload",
-                    "sortOrder": "SORT_ORDER_NONE"
-                  }
-                ],
-                "plotType": "HEATMAP",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {}
-              }
-            ],
-            "yAxis": {
-              "scale": "LINEAR"
-            }
-          }
-        },
-        "width": 24,
-        "xPos": 24,
-        "yPos": 48
-      },
-      {
-        "height": 16,
-        "widget": {
-          "title": "Span /webhook (event: completed)",
-          "xyChart": {
-            "chartOptions": {
-              "mode": "COLOR"
-            },
-            "dataSets": [
-              {
-                "breakdowns": [
-                  {
-                    "aggregationFunction": {
-                      "type": "none"
-                    },
-                    "column": "serviceOrWorkload",
-                    "sortOrder": "SORT_ORDER_NONE"
-                  }
-                ],
-                "plotType": "HEATMAP",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {}
-              }
-            ],
-            "yAxis": {
-              "scale": "LINEAR"
-            }
-          }
-        },
-        "width": 24,
-        "yPos": 80
-      },
-      {
-        "height": 16,
-        "widget": {
-          "title": "Time to Register to Github",
-          "xyChart": {
-            "chartOptions": {
-              "mode": "COLOR"
-            },
-            "dataSets": [
-              {
+                "legendTemplate": "p50",
                 "minAlignmentPeriod": "60s",
                 "plotType": "LINE",
                 "targetAxis": "Y1",
@@ -310,10 +64,174 @@
                       "crossSeriesReducer": "REDUCE_MEAN",
                       "perSeriesAligner": "ALIGN_PERCENTILE_50"
                     },
-                    "filter": "metric.type=\"logging.googleapis.com/user/time_to_runner_seconds\" resource.type=\"cloud_run_revision\""
+                    "filter": "metric.type=\"run.googleapis.com/request_latencies\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\""
                   }
                 }
               },
+              {
+                "legendTemplate": "p95",
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95"
+                    },
+                    "filter": "metric.type=\"run.googleapis.com/request_latencies\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\""
+                  }
+                }
+              },
+              {
+                "legendTemplate": "p99",
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_99"
+                    },
+                    "filter": "metric.type=\"run.googleapis.com/request_latencies\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "label": "ms",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "yPos": 16,
+        "xPos": 0,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Active instances by revision",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "60s",
+                "plotType": "STACKED_AREA",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_SUM",
+                      "groupByFields": [
+                        "resource.label.\"revision_name\""
+                      ],
+                      "perSeriesAligner": "ALIGN_MEAN"
+                    },
+                    "filter": "metric.type=\"run.googleapis.com/container/instance_count\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "yPos": 16,
+        "xPos": 24,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Cold-start latency p95 by revision",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MAX",
+                      "groupByFields": [
+                        "resource.label.\"revision_name\""
+                      ],
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95"
+                    },
+                    "filter": "metric.type=\"run.googleapis.com/container/startup_latencies\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "label": "ms",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "yPos": 32,
+        "xPos": 0,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "VM creation outcomes by outcome",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_SUM",
+                      "groupByFields": [
+                        "metric.label.\"outcome\""
+                      ],
+                      "perSeriesAligner": "ALIGN_RATE"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/vm_creation_outcome_count\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "yPos": 32,
+        "xPos": 24,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Time-to-Register p95",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
               {
                 "minAlignmentPeriod": "60s",
                 "plotType": "LINE",
@@ -328,190 +246,14 @@
                     "filter": "metric.type=\"logging.googleapis.com/user/time_to_runner_seconds\" resource.type=\"cloud_run_revision\""
                   }
                 }
-              },
-              {
-                "minAlignmentPeriod": "60s",
-                "plotType": "LINE",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {
-                  "timeSeriesFilter": {
-                    "aggregation": {
-                      "alignmentPeriod": "60s",
-                      "crossSeriesReducer": "REDUCE_MEAN",
-                      "perSeriesAligner": "ALIGN_PERCENTILE_05"
-                    },
-                    "filter": "metric.type=\"logging.googleapis.com/user/time_to_runner_seconds\" resource.type=\"cloud_run_revision\""
-                  }
-                }
-              }
-            ],
-            "timeshiftDuration": "43200s",
-            "yAxis": {
-              "scale": "LINEAR"
-            }
-          }
-        },
-        "width": 24,
-        "xPos": 24,
-        "yPos": 16
-      },
-      {
-        "height": 16,
-        "widget": {
-          "title": "Deleted Orphaned Runners",
-          "xyChart": {
-            "chartOptions": {
-              "mode": "COLOR"
-            },
-            "dataSets": [
-              {
-                "minAlignmentPeriod": "60s",
-                "plotType": "LINE",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {
-                  "timeSeriesFilter": {
-                    "aggregation": {
-                      "alignmentPeriod": "60s",
-                      "crossSeriesReducer": "REDUCE_MEAN",
-                      "perSeriesAligner": "ALIGN_DELTA"
-                    },
-                    "filter": "metric.type=\"logging.googleapis.com/user/deleted_orphaned_runners\" resource.type=\"cloud_run_revision\""
-                  }
-                }
               }
             ],
             "yAxis": {
+              "label": "s",
               "scale": "LINEAR"
             }
           }
-        },
-        "width": 24,
-        "yPos": 96
-      },
-      {
-        "height": 16,
-        "widget": {
-          "title": "Sweep Metrics",
-          "xyChart": {
-            "chartOptions": {
-              "mode": "COLOR"
-            },
-            "dataSets": [
-              {
-                "minAlignmentPeriod": "60s",
-                "plotType": "LINE",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {
-                  "timeSeriesFilter": {
-                    "aggregation": {
-                      "alignmentPeriod": "60s",
-                      "crossSeriesReducer": "REDUCE_MEAN",
-                      "perSeriesAligner": "ALIGN_DELTA"
-                    },
-                    "filter": "metric.type=\"logging.googleapis.com/user/sweep_skipped_vms\" resource.type=\"cloud_run_revision\""
-                  }
-                }
-              },
-              {
-                "minAlignmentPeriod": "60s",
-                "plotType": "LINE",
-                "targetAxis": "Y2",
-                "timeSeriesQuery": {
-                  "timeSeriesFilterRatio": {
-                    "denominator": {
-                      "aggregation": {
-                        "crossSeriesReducer": "REDUCE_COUNT",
-                        "perSeriesAligner": "ALIGN_DELTA"
-                      },
-                      "filter": "metric.type=\"logging.googleapis.com/user/sweep_check_vms\" resource.type=\"cloud_run_revision\""
-                    },
-                    "numerator": {
-                      "aggregation": {
-                        "alignmentPeriod": "60s",
-                        "crossSeriesReducer": "REDUCE_COUNT",
-                        "perSeriesAligner": "ALIGN_DELTA"
-                      },
-                      "filter": "metric.type=\"logging.googleapis.com/user/sweep_deleted_vms\" resource.type=\"cloud_run_revision\""
-                    }
-                  }
-                }
-              },
-              {
-                "minAlignmentPeriod": "60s",
-                "plotType": "LINE",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {
-                  "timeSeriesFilter": {
-                    "aggregation": {
-                      "alignmentPeriod": "60s",
-                      "crossSeriesReducer": "REDUCE_MEAN",
-                      "perSeriesAligner": "ALIGN_DELTA"
-                    },
-                    "filter": "metric.type=\"logging.googleapis.com/user/sweep_deleted_vms\" resource.type=\"cloud_run_revision\""
-                  }
-                }
-              }
-            ],
-            "timeshiftDuration": "43200s",
-            "y2Axis": {
-              "scale": "LINEAR"
-            },
-            "yAxis": {
-              "scale": "LINEAR"
-            }
-          }
-        },
-        "width": 24,
-        "xPos": 24,
-        "yPos": 80
-      },
-      {
-        "height": 16,
-        "widget": {
-          "title": "VM Requests Submitted",
-          "xyChart": {
-            "chartOptions": {
-              "mode": "COLOR"
-            },
-            "dataSets": [
-              {
-                "minAlignmentPeriod": "60s",
-                "plotType": "LINE",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {
-                  "timeSeriesFilter": {
-                    "aggregation": {
-                      "alignmentPeriod": "60s",
-                      "crossSeriesReducer": "REDUCE_SUM",
-                      "perSeriesAligner": "ALIGN_DELTA"
-                    },
-                    "filter": "metric.type=\"logging.googleapis.com/user/create_vm_requests_submitted\" resource.type=\"cloud_run_revision\""
-                  }
-                }
-              },
-              {
-                "minAlignmentPeriod": "60s",
-                "plotType": "LINE",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {
-                  "timeSeriesFilter": {
-                    "aggregation": {
-                      "alignmentPeriod": "60s",
-                      "crossSeriesReducer": "REDUCE_SUM",
-                      "perSeriesAligner": "ALIGN_DELTA"
-                    },
-                    "filter": "metric.type=\"logging.googleapis.com/user/successful_registered_runners\" resource.type=\"cloud_run_revision\""
-                  }
-                }
-              }
-            ],
-            "yAxis": {
-              "scale": "LINEAR"
-            }
-          }
-        },
-        "width": 24,
-        "yPos": 16
+        }
       }
     ]
   }

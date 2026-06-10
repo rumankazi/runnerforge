@@ -25,6 +25,11 @@ resource "google_monitoring_slo" "availability" {
 # value <= 300 as "good". Threshold 0.995 means 99.5% of registrations
 # must land under 5 minutes for the SLO to hold over a 5-minute window.
 resource "google_monitoring_slo" "time_to_register" {
+  # Wait for the log-based metric to become queryable. The SLO API rejects
+  # references to metrics that exist in TF state but haven't yet propagated
+  # to the metric registry (~10min worst case).
+  depends_on = [time_sleep.wait_for_log_metrics]
+
   service         = google_monitoring_service.orchestrator.service_id
   slo_id          = "time-to-register"
   display_name    = "Time-to-Register 99.5% under 300s (calendar month)"

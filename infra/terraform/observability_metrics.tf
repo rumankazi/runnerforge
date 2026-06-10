@@ -334,3 +334,26 @@ resource "google_logging_metric" "sweep_error_count" {
     }
   }
 }
+
+# Cloud Monitoring SLOs and alert policies that reference a log-based metric
+# validate the metric exists at create time, but log-based metrics take up
+# to ~10 minutes to become queryable after creation. On a fresh apply, that
+# lag races the dependent resources and the API returns
+# "Cannot find metric(s) that match type = ...". Block dependent resources
+# behind this sleep so the metric registry has time to catch up.
+resource "time_sleep" "wait_for_log_metrics" {
+  depends_on = [
+    google_logging_metric.vm_creation_count,
+    google_logging_metric.vm_creation_outcome_count,
+    google_logging_metric.vm_deletion_count,
+    google_logging_metric.time_to_runner_seconds,
+    google_logging_metric.webhook_request_count,
+    google_logging_metric.webhook_rejection_count,
+    google_logging_metric.runner_vm_count,
+    google_logging_metric.sweep_checked_count,
+    google_logging_metric.sweep_deleted_count,
+    google_logging_metric.sweep_error_count,
+  ]
+
+  create_duration = "120s"
+}
