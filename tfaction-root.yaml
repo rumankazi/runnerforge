@@ -6,3 +6,11 @@ available_providers:
 tflint:
   enabled: true
   fix: true # enables `tflint --fix`
+drift_detection:
+  enabled: true
+  # Repository where issues are created. Defaults to the repository where tfaction runs.
+  issue_repo_owner: rumankazi
+  issue_repo_name: runnerforge
+  # Maximum number of drift issues processed per scheduled job run. Default is 1.
+  num_of_issues: 1
+  minimum_detection_interval: 1

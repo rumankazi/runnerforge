@@ -16,103 +16,66 @@ env:
   CI_TERRAFORM_PLAN_SA: ci-terraform-plan@runnerforge.iam.gserviceaccount.com
 
 jobs:
-  pick-drift-issues:
-    timeout-minutes: 20
+  pick-out:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
+    outputs:
+      issues: ${{ steps.pick-out.outputs.issues }}
+      has_issues: ${{ steps.pick-out.outputs.has_issues }}
     permissions:
       contents: read
-      issues: write
+      issues: read
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        id: app-token
-        with:
-          client-id: ${{ secrets.RELEASE_BOT_APP_ID }}
-          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
-          permission-issues: write
-          permission-contents: read
-          permission-actions: read
-
-      - uses: aquaproj/aqua-installer@11dd79b4e498d471a9385aa9fb7f62bb5f52a73c # v4.0.4
-        with:
-          aqua_version: v2.60.0
-
-      - uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
-        # https://suzuki-shunsuke.github.io/tfaction/docs/unreleased/drift-detection
-        with:
-          # issues:write
-          action: create-drift-issues
-
-      - uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
-        # https://suzuki-shunsuke.github.io/tfaction/docs/unreleased/drift-detection
-        id: pick-out-drift-issues
+      - uses: suzuki-shunsuke/tfaction@latest
+        id: pick-out
         with:
           action: pick-out-drift-issues
-          github_token: ${{ steps.app-token.outputs.token }}
 
-  detect-drift:
-    name: ☁️
-    runs-on: ubuntu-latest
-    needs: pick-drift-issues
-    if: fromJSON(needs.pick-out-drift-issues.outputs.has_issues)
+  detect:
+    timeout-minutes: 20
+    name: "detect (${{ matrix.issue.target }})"
+    runs-on: ${{ matrix.issue.runs_on }}
+    needs: pick-out
     permissions:
+      issues: write
       contents: read
-      id-token: write       # WIF auth
-      issues: write         # tfaction creates/updates drift issues
-    env:
-      TFACTION_JOB_TYPE: terraform
-      TFACTION_IS_APPLY: "false"
-      TFACTION_WORKING_DIR: infra/terraform
+    if: fromJSON(needs.pick-out.outputs.has_issues)
+    strategy:
+      fail-fast: false
+      matrix:
+        issue: ${{fromJSON(needs.pick-out.outputs.issues)}}
     steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+      - uses: suzuki-shunsuke/tfaction@latest
         with:
-          workload_identity_provider: ${{ env.WIF_PROVIDER }}
-          service_account: ${{ env.CI_TERRAFORM_PLAN_SA }}
+          action: set-drift-env
+          issue: ${{toJSON(matrix.issue)}}
 
-      - uses: aquaproj/aqua-installer@11dd79b4e498d471a9385aa9fb7f62bb5f52a73c # v4.0.4
-        with:
-          aqua_version: v2.60.0
-
-      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        id: app-token
-        with:
-          client-id: ${{ secrets.RELEASE_BOT_APP_ID }}
-          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
-          permission-issues: write
-          permission-contents: read
-          permission-actions: read
-
-      - name: Set up
-        uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
+      - uses: suzuki-shunsuke/tfaction@latest
         with:
           action: setup
-          github_token: ${{ steps.app-token.outputs.token }}
 
-      - name: Init
-        uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
+      - name: terraform init
+        uses: suzuki-shunsuke/tfaction@latest
         with:
           action: terraform-init
-          github_token: ${{ steps.app-token.outputs.token }}
 
-      - name: Plan
-        id: plan
-        uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
+      - uses: suzuki-shunsuke/tfaction@latest
+        with:
+          action: test
+
+      - uses: suzuki-shunsuke/tfaction@latest
         with:
           action: plan
-          github_token: ${{ steps.app-token.outputs.token }}
 
-      # Always run — handles close-on-clean + reopen-on-failure
-      - name: Update drift issue state
+      - uses: suzuki-shunsuke/tfaction@latest
         if: always()
-        uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
         with:
           action: update-drift-issue
-          github_token: ${{ steps.app-token.outputs.token }}
+          status: ${{job.status}}
