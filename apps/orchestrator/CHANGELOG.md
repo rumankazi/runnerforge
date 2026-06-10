@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.7.0...orchestrator-v0.8.0) (2026-06-10)
+
+
+### Features
+
+* **infra:** add Cloud NAT router + gateway for runner VM egress ([#99](https://github.com/rumankazi/runnerforge/issues/99)) ([4390cf7](https://github.com/rumankazi/runnerforge/commit/4390cf704874e1978c51906cd6d7599585ebb9ce))
+
 ## [0.7.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.6.1...orchestrator-v0.7.0) (2026-06-09)
 
 
