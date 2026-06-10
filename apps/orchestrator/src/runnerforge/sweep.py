@@ -39,7 +39,7 @@ async def run_sweep() -> SweepResult:
             if age > timedelta(hours=HARD_LIMIT_HOURS):
                 # Job probably stuck or zombie - kill regardless of status
 
-                await delete_vm(instance_name=vm.name)
+                await delete_vm(instance_name=vm.name, reason="sweep")
                 deleted += 1
                 logger.info(
                     "Sweep decision",
@@ -61,7 +61,7 @@ async def run_sweep() -> SweepResult:
             )
 
             if job_status is None or job_status.status == "completed":
-                await delete_vm(instance_name=vm.name)
+                await delete_vm(instance_name=vm.name, reason="sweep")
                 deleted += 1
                 logger.info(
                     "Sweep decision",

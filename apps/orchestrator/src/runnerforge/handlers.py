@@ -135,7 +135,7 @@ async def handle_completed(event: WorkflowJobEvent):
             return
         span.set_attribute("runner_name", runner_name)
 
-        operation_id = await delete_vm(runner_name)
+        operation_id = await delete_vm(runner_name, reason="webhook")
         logger.info(
             "VM deletion submitted",
             extra={"runner_name": runner_name, "operation_id": operation_id},

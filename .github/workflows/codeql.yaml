@@ -9,11 +9,7 @@ on:
     # Weekly Mondays at 14:32 UTC — offset to avoid sync with other scheduled jobs.
     - cron: '32 14 * * 1'
 
-permissions:
-  actions: read
-  contents: read
-  security-events: write
-  packages: read
+permissions: {}
 
 jobs:
   preflight:
@@ -26,6 +22,11 @@ jobs:
     # On weekly schedule: always run (security baseline).
     if: github.event_name == 'schedule' || fromJSON(needs.preflight.outputs.changes).orchestrator
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+      packages: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -45,6 +46,11 @@ jobs:
     needs: preflight
     if: github.event_name == 'schedule' || fromJSON(needs.preflight.outputs.changes).web
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+      packages: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
