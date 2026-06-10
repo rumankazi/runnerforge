@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     await github_client.init_http_client()
     compute_client.init_compute_client()
+    compute_client.init_runner_image()
     logger.info("Clients initialized")
     yield
     await github_client.close_http_client()
