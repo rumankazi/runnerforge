@@ -86,9 +86,6 @@ async def create_vm(
         instance.network_interfaces = [
             compute_v1.NetworkInterface(
                 network="global/networks/default",
-                access_configs=[
-                    compute_v1.AccessConfig(name="External NAT", type_="ONE_TO_ONE_NAT")
-                ],
             )
         ]
 
