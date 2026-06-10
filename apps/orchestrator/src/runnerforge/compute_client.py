@@ -122,9 +122,16 @@ async def create_vm(
 ) -> OperationHandle | None:
     """Submits a VM creation request. Returns the operation handle (does not wait for VM to boot)."""
     assert _compute_client is not None
-    # Pinned to resolved image name when init_runner_image succeeded; falls back to
-    # family alias when it didn't (e.g. local dev without GCP creds).
-    source_image = _RUNNER_IMAGE_NAME or _BOOT_IMAGE_FAMILY
+    # GCE source_image requires either a project-qualified image path or a
+    # family alias — a bare image name is rejected as a malformed URL. When
+    # init_runner_image resolved a specific image, qualify its short name
+    # into the canonical projects/<project>/global/images/<name> form;
+    # otherwise fall back to the family alias (which is already qualified).
+    source_image = (
+        f"projects/{project_id}/global/images/{_RUNNER_IMAGE_NAME}"
+        if _RUNNER_IMAGE_NAME
+        else _BOOT_IMAGE_FAMILY
+    )
     with tracer.start_as_current_span("compute.create_vm") as span:
         span.set_attribute("instance_name", instance_name)
         span.set_attribute("machine_type", machine_type)
