@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.9.0...orchestrator-v0.10.0) (2026-06-10)
+
+
+### Features
+
+* **orchestrator:** poll VM creation outcomes via BackgroundTasks ([#108](https://github.com/rumankazi/runnerforge/issues/108)) ([9df1288](https://github.com/rumankazi/runnerforge/commit/9df1288070210abcaab23ce680f2ae76c20195d0))
+
 ## [0.9.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.8.0...orchestrator-v0.9.0) (2026-06-10)
 
 
