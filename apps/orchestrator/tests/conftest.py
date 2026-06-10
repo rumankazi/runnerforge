@@ -54,6 +54,10 @@ async def _shared_clients():
         "runnerforge.compute_client.compute_v1.InstancesClient",
         lambda: MagicMock(),
     )
+    mp.setattr(
+        "runnerforge.compute_client.compute_v1.ZoneOperationsClient",
+        lambda: MagicMock(),
+    )
     await github_client.init_http_client()
     compute_client.init_compute_client()
     yield

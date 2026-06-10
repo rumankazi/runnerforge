@@ -17,13 +17,15 @@ _DATA_DISK_SIZE_GB = 50
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 _compute_client: compute_v1.InstancesClient | None = None
+_zone_ops_client: compute_v1.ZoneOperationsClient | None = None
 
 
 # Not async since these are not async methods (sync operations)
 def init_compute_client():
-    global _compute_client
+    global _compute_client, _zone_ops_client
     try:
         _compute_client = compute_v1.InstancesClient()
+        _zone_ops_client = compute_v1.ZoneOperationsClient()
     except DefaultCredentialsError:
         logger.warning(
             "compute client init skipped - no GCP credentials available; "
@@ -32,10 +34,14 @@ def init_compute_client():
 
 
 def close_compute_client():
-    global _compute_client
+    global _compute_client, _zone_ops_client
     if _compute_client is not None:
         _compute_client.transport.close()
         _compute_client = None
+
+    if _zone_ops_client is not None:
+        _zone_ops_client.transport.close()
+        _zone_ops_client = None
 
 
 async def create_vm(
