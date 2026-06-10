@@ -122,36 +122,18 @@ resource "google_monitoring_alert_policy" "cold_start_p95" {
   notification_channels = [google_monitoring_notification_channel.email.name]
 }
 
-# Sweep is the orphan-VM safety net — Cloud Scheduler runs /sweep DAILY at
-# 00:12 UTC (see scheduler.tf). A missed daily run means the scheduler is
-# broken or the /sweep handler is degraded, and orphan VMs start
-# accumulating. Duration of 26h tolerates the daily cadence + slack for
-# clock skew and the one configured retry — fires only when we've genuinely
-# missed the daily window.
-resource "google_monitoring_alert_policy" "sweep_liveness" {
-  display_name = "Sweep has not completed in 26h"
-  combiner     = "OR"
-  severity     = "ERROR"
-
-  conditions {
-    display_name = "Absent sweep_checked_count for 93600s"
-    condition_absent {
-      filter   = "metric.type=\"logging.googleapis.com/user/sweep_checked_count\" resource.type=\"cloud_run_revision\""
-      duration = "93600s"
-
-      aggregations {
-        alignment_period   = "3600s"
-        per_series_aligner = "ALIGN_COUNT"
-      }
-
-      trigger {
-        count = 1
-      }
-    }
-  }
-
-  notification_channels = [google_monitoring_notification_channel.email.name]
-}
+# NOTE: sweep_liveness alert intentionally NOT included. Cloud Monitoring
+# caps condition_absent.duration at 23h30m, but our sweep cadence is daily
+# (intentional, set in PR #75 for cost reasons). Any duration ≤ 23h30m
+# would false-fire every day between hour 23h30m and the next sweep at
+# 00:12 — a 30-min nightly email-spam window during normal operation.
+# Cloud Scheduler doesn't natively notify on missed runs either.
+# Mitigation today: the "Sweep & cleanup" section on the dashboard
+# (sweep_checked_count, sweep_deleted_count, sweep_error_count panels)
+# is the visibility layer for "did sweep fire and how did it go?".
+# Re-evaluate when we have a dead-man's-switch pattern that fits the
+# 23h30m cap (e.g., a hourly-written heartbeat metric paired with a
+# daily aggregate-count threshold alert).
 
 # Webhook 4xx rejections above the expected scanner baseline. /webhook is a
 # public endpoint and attracts background probe traffic, so some rate of 4xx
