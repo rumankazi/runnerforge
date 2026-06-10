@@ -235,6 +235,8 @@ Structured logging only for Phases 1–3. Add Firestore in Phase 4 when building
 
 ## Self-observed VM provisioning with NAT-based egress
 
+> **Revised 2026-06-09**: original draft assumed `compute_v1.InstancesAsyncClient` existed; it does not (Compute is REST; GAPIC does not emit async clients for REST services). Mechanism updated to burst-polling with the sync client + a dedicated `ZoneOperationsClient`. The decision (observability + Cloud NAT) and consequences are unchanged.
+
 ### Context
 
 - Burst test (2026-06-09): 18 jobs across 6 workflow runs in a ~20s window. The orchestrator handled all 18 webhooks correctly and logged `Submitted VM creation` for each.
@@ -250,8 +252,8 @@ Two coupled problems surfaced: a GCE-side quota constraint AND missing self-obse
 
 - **Sweep-only detection** (status quo, extended): hourly poll of GCE state to find failed operations and orphan VMs. Cheap; detection latency up to 60 min — slower than the GitHub 10-min job timeout.
 - **Synchronous polling in webhook handler**: `await operation.result()` inside the handler. Blocks the webhook for 30-60s, blowing GitHub's 10s webhook delivery budget. Rejected.
-- **Background polling with sync client + `asyncio.to_thread`**: each poll occupies an OS thread for 30-60s. The default ThreadPoolExecutor caps at ~5 workers on 1 vCPU. At concurrency=10 the pool starves. Rejected.
-- **Background polling with async compute client + FastAPI `BackgroundTasks`** (chosen): coroutine-based polling on the event loop. Each task is ~5-50KB of state (vs 8MB per thread). Webhook returns immediately; the watcher runs alongside, polling GCE and emitting structured outcome events.
+- **Single-thread blocking poll via `asyncio.to_thread(operation.result, timeout=120)`**: one OS thread occupied for 30–60s per VM. The default ThreadPoolExecutor caps at ~5 workers on 1 vCPU. At concurrency=10 the pool starves. Rejected.
+- **Burst-polling with sync client + FastAPI `BackgroundTasks`** (chosen): the watcher coroutine loops over `await asyncio.to_thread(_zone_ops_client.get, ...)` + `asyncio.sleep(1)`. Each thread hop is ~50ms; the executor is free between polls. Webhook returns immediately; the watcher emits a single structured outcome event on terminal state. Originally we planned to migrate to `InstancesAsyncClient` and drop the `to_thread` wrappers entirely — verified during PR B design that no such async client exists in `google-cloud-compute` (Compute is REST; GAPIC skips async generation for REST services), so the burst-poll pattern is the asyncio-friendly ceiling available without leaving the SDK.
 - **Cloud Tasks / Pub-Sub worker queue**: the "right cloud-native" pattern for async work, but vast overkill at one-operator scale. Reserved for any future SaaS-scale move.
 - **Retry / self-healing in the orchestrator**: explicitly rejected. Retry doesn't help with the failure mode we actually see (quota doesn't free up within the GitHub 10-min job timeout). Retry only helps with rare random transients (~0.1% of GCE provisions); the engineering cost (state tracking, retry counters, backoff, tests) far exceeds the benefit at our scale.
 
@@ -263,8 +265,9 @@ Two coupled problems surfaced: a GCE-side quota constraint AND missing self-obse
 
 ### Decision
 
-- Migrate `_compute_client` from `compute_v1.InstancesClient` (sync, bridged via `asyncio.to_thread`) to `compute_v1.InstancesAsyncClient` (native asyncio). Drops the thread-bridge in `compute_client.py`.
-- Webhook handler schedules a `BackgroundTasks` watcher per VM creation: `await operation.result(timeout=120)`. On terminal state, the watcher logs a structured outcome event (`vm_creation_succeeded` or `vm_creation_failed` with `error_class`/`error_message`).
+- Keep `_compute_client: compute_v1.InstancesClient` as-is (sync, bridged via `asyncio.to_thread`). Add a second lifespan-managed client `_zone_ops_client: compute_v1.ZoneOperationsClient` for operation polling.
+- Webhook handler schedules a `BackgroundTasks` watcher per VM creation. The watcher snapshots `LogContext` before yielding and re-installs it at task start (Starlette's PEP 567 ContextVar inheritance is implementation-detail; explicit propagation is the contract). It then loops `await asyncio.to_thread(_zone_ops_client.get, ...)` + `asyncio.sleep(1)` until `Operation.Status.DONE` or a 120s timeout. On terminal state, emits one structured `vm.create.outcome` event with `outcome`, `op_name`, `duration_ms`, `error_code`, `error_message`.
+- Cloud NAT IP allocation: `nat_ip_allocate_option = "AUTO_ONLY"`. We have no allowlisted egress destinations (public github.com, Docker Hub, public Artifact Registry — none restrict client IPs). A reserved static NAT IP would only matter if we onboarded a self-hosted GitHub Enterprise Server or another allowlist-gated destination. Swap to `MANUAL_ONLY` + `google_compute_address` is a ~5-line TF change if that ever lands.
 - New log-based metric `vm_creation_outcome_count` labeled by `outcome={success,failure,timeout}` → alert on failure rate > 5%.
 - Sweep stays as a backup safety net for edge cases (deploy-time rolling restart, OOM, manual termination — all of which can interrupt in-flight background tasks).
 - Provision Cloud NAT in `infra/terraform/`: `google_compute_router` + `google_compute_router_nat` in europe-west4. Remove `access_configs` from VM `network_interfaces` in `compute_client.py`. All VM egress (GitHub API, Artifact Registry) routes through the NAT gateway.
@@ -274,7 +277,7 @@ Two coupled problems surfaced: a GCE-side quota constraint AND missing self-obse
 - **Pro — operational visibility**: every VM creation outcome is captured in structured logs. Failure rate becomes a metric, alertable, queryable. Root-cause analysis no longer requires cross-system log correlation.
 - **Pro — detection latency**: drops from up to 60 minutes (sweep) to ~60 seconds (background polling). Stays well inside the GitHub 10-minute job timeout.
 - **Pro — quota removed**: Cloud NAT eliminates `IN_USE_ADDRESSES` as a constraint on VM provisioning. The burst that caused this incident would succeed in full under the new architecture.
-- **Pro — coroutine economics**: async client + `BackgroundTasks` scales easily. At concurrency=10, total background-task memory cost is ~500KB. Thread-based polling would have cost ~80MB and saturated the executor.
+- **Pro — coroutine economics**: burst-polling keeps the ThreadPoolExecutor free between polls (each `.get()` hop is ~50ms). At concurrency=10 with 30s mean watcher lifetime, peak thread occupancy is well under the ~5-worker default. A naïve `to_thread(operation.result, timeout=120)` would have parked all 5 workers for the full poll window — the rejected alternative.
 - **Pro — Cloud NAT cost is trivial**: ~$1.40/month per gateway + a small per-GB processing fee. Negligible at our scale.
 - **Trade-off — VMs lose inbound connectivity**: acceptable because self-hosted GH runners are outbound-only. We have no use case for inbound.
 - **Trade-off — edge-case visibility loss**: background tasks interrupted by deploy / OOM / manual termination won't emit their outcome event. Sweep remains the catcher for these rare cases. Acceptable.

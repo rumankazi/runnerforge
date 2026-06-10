@@ -55,8 +55,8 @@
                   "timeSeriesFilter": {
                     "aggregation": {
                       "alignmentPeriod": "60s",
-                      "crossSeriesReducer": "REDUCE_COUNT",
-                      "perSeriesAligner": "ALIGN_MEAN"
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_COUNT"
                     },
                     "filter": "metric.type=\"run.googleapis.com/container/instance_count\" resource.type=\"cloud_run_revision\""
                   }
@@ -102,41 +102,8 @@
           }
         },
         "width": 24,
-        "yPos": 32
-      },
-      {
-        "height": 16,
-        "widget": {
-          "title": "VM Creation Count",
-          "xyChart": {
-            "chartOptions": {
-              "mode": "STATS"
-            },
-            "dataSets": [
-              {
-                "minAlignmentPeriod": "60s",
-                "plotType": "LINE",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {
-                  "timeSeriesFilter": {
-                    "aggregation": {
-                      "alignmentPeriod": "60s",
-                      "crossSeriesReducer": "REDUCE_COUNT",
-                      "perSeriesAligner": "ALIGN_COUNT"
-                    },
-                    "filter": "metric.type=\"logging.googleapis.com/user/vm_creation_count\" resource.type=\"cloud_run_revision\""
-                  }
-                }
-              }
-            ],
-            "yAxis": {
-              "scale": "LINEAR"
-            }
-          }
-        },
-        "width": 24,
         "xPos": 24,
-        "yPos": 16
+        "yPos": 32
       },
       {
         "height": 16,
@@ -168,7 +135,6 @@
           }
         },
         "width": 24,
-        "xPos": 24,
         "yPos": 32
       },
       {
@@ -225,7 +191,7 @@
         },
         "width": 24,
         "xPos": 24,
-        "yPos": 80
+        "yPos": 64
       },
       {
         "height": 16,
@@ -290,7 +256,7 @@
         },
         "width": 24,
         "xPos": 24,
-        "yPos": 64
+        "yPos": 48
       },
       {
         "height": 16,
@@ -330,7 +296,7 @@
           "title": "Time to Register to Github",
           "xyChart": {
             "chartOptions": {
-              "mode": "STATS"
+              "mode": "COLOR"
             },
             "dataSets": [
               {
@@ -342,7 +308,37 @@
                     "aggregation": {
                       "alignmentPeriod": "60s",
                       "crossSeriesReducer": "REDUCE_MEAN",
-                      "perSeriesAligner": "ALIGN_DELTA"
+                      "perSeriesAligner": "ALIGN_PERCENTILE_50"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/time_to_runner_seconds\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              },
+              {
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/time_to_runner_seconds\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              },
+              {
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_05"
                     },
                     "filter": "metric.type=\"logging.googleapis.com/user/time_to_runner_seconds\" resource.type=\"cloud_run_revision\""
                   }
@@ -357,7 +353,7 @@
         },
         "width": 24,
         "xPos": 24,
-        "yPos": 48
+        "yPos": 16
       },
       {
         "height": 16,
@@ -467,12 +463,12 @@
         },
         "width": 24,
         "xPos": 24,
-        "yPos": 96
+        "yPos": 80
       },
       {
         "height": 16,
         "widget": {
-          "title": "VMs picked up by Github[MEAN]",
+          "title": "VM Requests Submitted",
           "xyChart": {
             "chartOptions": {
               "mode": "COLOR"
@@ -486,10 +482,25 @@
                   "timeSeriesFilter": {
                     "aggregation": {
                       "alignmentPeriod": "60s",
-                      "crossSeriesReducer": "REDUCE_MEAN",
-                      "perSeriesAligner": "ALIGN_RATE"
+                      "crossSeriesReducer": "REDUCE_SUM",
+                      "perSeriesAligner": "ALIGN_DELTA"
                     },
-                    "filter": "metric.type=\"logging.googleapis.com/user/job_picked_count\" resource.type=\"cloud_run_revision\""
+                    "filter": "metric.type=\"logging.googleapis.com/user/create_vm_requests_submitted\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              },
+              {
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_SUM",
+                      "perSeriesAligner": "ALIGN_DELTA"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/successful_registered_runners\" resource.type=\"cloud_run_revision\""
                   }
                 }
               }
