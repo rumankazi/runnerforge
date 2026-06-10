@@ -26,7 +26,7 @@ def test_create_vm_builds_correct_instance(monkeypatch, caplog):
         mock_client,
     )
     with caplog.at_level(logging.INFO):
-        op_id = asyncio.run(
+        op_handle = asyncio.run(
             create_vm(
                 instance_name="test-create-vm",
                 machine_type="e2-micro",
@@ -39,7 +39,9 @@ def test_create_vm_builds_correct_instance(monkeypatch, caplog):
             )
         )
 
-    assert op_id == "op-abc-123"
+    assert op_handle is not None
+    assert op_handle.name == "op-abc-123"
+    assert op_handle.zone == "europe-west4-a"
     mock_client.insert.assert_called_once()
     request = mock_client.insert.call_args.kwargs["request"]
     assert request.project == "test-project"  # from conftest env
@@ -365,7 +367,7 @@ def test_vm_already_exists_returns_instance_name(monkeypatch, caplog):
             )
         )
 
-    assert response == "x"
+    assert response is None
     assert any("VM already exists" in r.message for r in caplog.records)
     assert all(record.levelno == logging.WARNING for record in caplog.records)
 

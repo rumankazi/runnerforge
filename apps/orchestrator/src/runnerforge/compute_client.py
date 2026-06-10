@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from dataclasses import dataclass
 
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.auth.exceptions import DefaultCredentialsError
@@ -16,6 +17,16 @@ _DATA_DISK_SIZE_GB = 50
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class OperationHandle:
+    """What `create_vm` returns so polling code can query the GCE operation later."""
+
+    name: str
+    zone: str
+
+
 _compute_client: compute_v1.InstancesClient | None = None
 _zone_ops_client: compute_v1.ZoneOperationsClient | None = None
 
@@ -52,7 +63,7 @@ async def create_vm(
     data_disk_size_gb: int = _DATA_DISK_SIZE_GB,
     zone: str = GCP_ZONE,
     project_id: str = GCP_PROJECT_ID,
-) -> str:
+) -> OperationHandle | None:
     """Submits a VM creation request. Returns the operation ID (does not wait for VM to boot)."""
     assert _compute_client is not None
     with tracer.start_as_current_span("compute.create_vm") as span:
@@ -128,7 +139,7 @@ async def create_vm(
                 "VM already exists",
                 extra={"instance_name": instance_name, "error": str(e)},
             )
-            return instance_name
+            return None
 
         logger.info(
             "Submitted VM creation",
@@ -138,7 +149,7 @@ async def create_vm(
                 "operation_id": operation.name,
             },
         )
-        return operation.name
+        return OperationHandle(name=operation.name, zone=zone)
 
 
 async def find_vms_by_job_id(

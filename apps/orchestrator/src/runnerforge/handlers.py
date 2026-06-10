@@ -2,7 +2,12 @@ import logging
 
 from opentelemetry import trace
 
-from runnerforge.compute_client import create_vm, delete_vm, get_vm_labels_by_job
+from runnerforge.compute_client import (
+    OperationHandle,
+    create_vm,
+    delete_vm,
+    get_vm_labels_by_job,
+)
 from runnerforge.config import STARTUP_SCRIPT
 from runnerforge.github_client import get_installation_token, get_registration_token
 from runnerforge.models import RunnerForgeVmLabels, WorkflowJobEvent
@@ -17,7 +22,7 @@ def machine_type_for_labels(labels: list[str]) -> str:
     return "e2-medium"
 
 
-async def handle_queued(event: WorkflowJobEvent) -> str:
+async def handle_queued(event: WorkflowJobEvent) -> OperationHandle | None:
     with tracer.start_as_current_span("webhook.handle_queued") as span:
         span_context = span.get_span_context()
         queued_trace_id = format(span_context.trace_id, "032x")
@@ -64,13 +69,13 @@ async def handle_queued(event: WorkflowJobEvent) -> str:
             queued_trace_id=queued_trace_id,
             queued_span_id=queued_span_id,
         )
-        operation_name = await create_vm(
+        operation = await create_vm(
             instance_name=vm_name,
             machine_type=machine_type_for_labels(event.workflow_job.labels),
             labels=labels.model_dump(),
             metadata=metadata,
         )
-        return operation_name
+        return operation
 
 
 async def handle_in_progress(event: WorkflowJobEvent):
