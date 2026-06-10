@@ -16,9 +16,48 @@ env:
   CI_TERRAFORM_PLAN_SA: ci-terraform-plan@runnerforge.iam.gserviceaccount.com
 
 jobs:
+  pick-drift-issues:
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          permission-issues: write
+          permission-contents: read
+          permission-actions: read
+
+      - uses: aquaproj/aqua-installer@11dd79b4e498d471a9385aa9fb7f62bb5f52a73c # v4.0.4
+        with:
+          aqua_version: v2.60.0
+
+      - uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
+        # https://suzuki-shunsuke.github.io/tfaction/docs/unreleased/drift-detection
+        with:
+          # issues:write
+          action: create-drift-issues
+
+      - uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
+        # https://suzuki-shunsuke.github.io/tfaction/docs/unreleased/drift-detection
+        id: pick-out-drift-issues
+        with:
+          action: pick-out-drift-issues
+          github_token: ${{ steps.app-token.outputs.token }}
+
   detect-drift:
     name: ☁️
     runs-on: ubuntu-latest
+    needs: pick-drift-issues
+    if: fromJSON(needs.pick-out-drift-issues.outputs.has_issues)
     permissions:
       contents: read
       id-token: write       # WIF auth
@@ -68,14 +107,6 @@ jobs:
         uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
         with:
           action: plan
-          github_token: ${{ steps.app-token.outputs.token }}
-
-# Open or update drift issue ONLY when drift detected
-      - name: Open drift issue
-        if: steps.plan.outputs.changed == 'true'
-        uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
-        with:
-          action: get-or-create-drift-issue
           github_token: ${{ steps.app-token.outputs.token }}
 
       # Always run — handles close-on-clean + reopen-on-failure
