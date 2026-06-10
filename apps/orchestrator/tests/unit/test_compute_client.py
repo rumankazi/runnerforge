@@ -366,9 +366,7 @@ def test_delete_vm_returns_none_when_vm_already_gone(monkeypatch, caplog):
     with caplog.at_level(logging.INFO):
         result = asyncio.run(delete_vm(instance_name="ghost-vm", reason="sweep"))
     assert result is None
-    log = next(
-        (r for r in caplog.records if "VM already deleted" in r.message), None
-    )
+    log = next((r for r in caplog.records if "VM already deleted" in r.message), None)
     assert log is not None
     assert log.reason == "sweep"
 
