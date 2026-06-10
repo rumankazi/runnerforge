@@ -155,6 +155,27 @@ def update_context(**kwargs):
     _context_var.set(replace(_context_var.get(), **kwargs))
 
 
+def get_context() -> LogContext:
+    """Snapshot the current LogContext.
+
+    Use when scheduling work that runs outside the current async call chain
+    (e.g. FastAPI BackgroundTasks). Pair with `with_log_context`.
+    """
+    return _context_var.get()
+
+
+async def with_log_context(snapshot: LogContext, fn, /, *args, **kwargs):
+    """Install a LogContext snapshot then await the given coroutine function.
+
+    Use for work scheduled via FastAPI BackgroundTasks — Starlette's PEP 567
+    ContextVar inheritance is "implementation detail" per the docs, so we
+    propagate explicitly to keep request_id/job_id/repo correlation intact
+    in logs emitted by the background task.
+    """
+    _context_var.set(snapshot)
+    return await fn(*args, **kwargs)
+
+
 class ContextFilter(logging.Filter):
     def filter(self, record):
         for name, value in asdict(_context_var.get()).items():

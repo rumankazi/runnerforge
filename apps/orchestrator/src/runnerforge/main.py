@@ -5,10 +5,11 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from opentelemetry import trace
 
 from runnerforge import compute_client, github_client
+from runnerforge.compute_client import wait_for_vm_creation
 from runnerforge.config import (
     EXPECTED_AUDIENCE,
     EXPECTED_SCHEDULER_SA_EMAIL,
@@ -17,8 +18,10 @@ from runnerforge.config import (
 )
 from runnerforge.handlers import handle_completed, handle_in_progress, handle_queued
 from runnerforge.logger import (
+    get_context,
     setup_logging,
     update_context,
+    with_log_context,
 )
 from runnerforge.models import WorkflowJobEvent
 from runnerforge.security import verify_github_signature, verify_oidc_token
@@ -86,7 +89,11 @@ async def health():
     description="Validates HMAC signature, parses the event, dispatches to handlers.",
     tags=["webhooks"],
 )
-async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()]):
+async def webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_hub_signature_256: Annotated[str, Header()],
+):
     body = await request.body()
 
     # HMAC validation
@@ -135,7 +142,14 @@ async def webhook(request: Request, x_hub_signature_256: Annotated[str, Header()
 
     match event.action:
         case "queued":
-            await handle_queued(event)
+            handle = await handle_queued(event)
+            if handle is not None:
+                # Snapshot context now; background task re-installs it before polling
+                # so log correlation (request_id/job_id/repo) survives across the
+                # post-response boundary.
+                background_tasks.add_task(
+                    with_log_context, get_context(), wait_for_vm_creation, handle
+                )
         case "in_progress":
             await handle_in_progress(event)
         case "completed":

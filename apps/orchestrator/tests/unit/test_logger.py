@@ -213,3 +213,61 @@ def test_color_formatter_emits_ansi_when_color_disabled():
     output = _capture(fmt)
     assert "\033[" not in output  # INFO is green
     assert "INFO" in output  # plain text should still be there
+
+
+# -----------------------------------------------------------------------------
+# get_context / with_log_context — BackgroundTasks propagation helpers
+# -----------------------------------------------------------------------------
+
+
+def test_get_context_returns_current_log_context_snapshot():
+    from runnerforge.logger import LogContext, get_context
+
+    update_context(request_id="req-snap-1", job_id=42, repo="owner/repo")
+
+    snapshot = get_context()
+
+    assert isinstance(snapshot, LogContext)
+    assert snapshot.request_id == "req-snap-1"
+    assert snapshot.job_id == 42
+    assert snapshot.repo == "owner/repo"
+
+
+async def test_with_log_context_installs_snapshot_before_awaiting():
+    """A coroutine launched via with_log_context should observe the snapshotted
+    LogContext, even if the current context has since been overwritten."""
+    from runnerforge.logger import LogContext, _context_var, with_log_context
+
+    snapshot = LogContext(request_id="req-orig", job_id=1, repo="orig/repo")
+
+    # Mutate the live context to a different value — the snapshot should win
+    _context_var.set(LogContext(request_id="req-stale", job_id=999, repo="stale/repo"))
+
+    captured = {}
+
+    async def record_context():
+        live = _context_var.get()
+        captured["request_id"] = live.request_id
+        captured["job_id"] = live.job_id
+        captured["repo"] = live.repo
+
+    await with_log_context(snapshot, record_context)
+
+    assert captured == {
+        "request_id": "req-orig",
+        "job_id": 1,
+        "repo": "orig/repo",
+    }
+
+
+async def test_with_log_context_forwards_args_and_kwargs_and_returns_result():
+    """The helper should pass through positional + keyword arguments and bubble
+    the awaited function's return value back to the caller."""
+    from runnerforge.logger import LogContext, with_log_context
+
+    async def echo(a, b, *, c):
+        return (a, b, c)
+
+    result = await with_log_context(LogContext(), echo, 1, 2, c=3)
+
+    assert result == (1, 2, 3)

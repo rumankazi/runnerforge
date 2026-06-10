@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from google.api_core.exceptions import AlreadyExists, GoogleAPIError
@@ -26,7 +26,7 @@ def test_create_vm_builds_correct_instance(monkeypatch, caplog):
         mock_client,
     )
     with caplog.at_level(logging.INFO):
-        op_id = asyncio.run(
+        op_handle = asyncio.run(
             create_vm(
                 instance_name="test-create-vm",
                 machine_type="e2-micro",
@@ -39,7 +39,9 @@ def test_create_vm_builds_correct_instance(monkeypatch, caplog):
             )
         )
 
-    assert op_id == "op-abc-123"
+    assert op_handle is not None
+    assert op_handle.name == "op-abc-123"
+    assert op_handle.zone == "europe-west4-a"
     mock_client.insert.assert_called_once()
     request = mock_client.insert.call_args.kwargs["request"]
     assert request.project == "test-project"  # from conftest env
@@ -365,7 +367,7 @@ def test_vm_already_exists_returns_instance_name(monkeypatch, caplog):
             )
         )
 
-    assert response == "x"
+    assert response is None
     assert any("VM already exists" in r.message for r in caplog.records)
     assert all(record.levelno == logging.WARNING for record in caplog.records)
 
@@ -415,3 +417,154 @@ def test_init_compute_client_logs_warning_when_no_credentials(monkeypatch, caplo
         r.levelno == logging.WARNING and "compute client init skipped" in r.message
         for r in caplog.records
     )
+
+
+# -----------------------------------------------------------------------------
+# wait_for_vm_creation
+# -----------------------------------------------------------------------------
+
+
+def _done_op(error_code: str | None = None, error_message: str | None = None):
+    """Build a MagicMock GCE Operation in DONE state, optionally with an error."""
+    from google.cloud import compute_v1
+
+    op = MagicMock()
+    op.status = compute_v1.Operation.Status.DONE
+    if error_code is None:
+        op.error = None
+    else:
+        err = MagicMock()
+        err.code = error_code
+        err.message = error_message or ""
+        op.error.errors = [err]
+    return op
+
+
+def _running_op():
+    """Build a MagicMock GCE Operation in RUNNING state."""
+    from google.cloud import compute_v1
+
+    op = MagicMock()
+    op.status = compute_v1.Operation.Status.RUNNING
+    op.error = None
+    return op
+
+
+def test_wait_for_vm_creation_returns_success_when_op_done_no_error(
+    monkeypatch, caplog
+):
+    from runnerforge.compute_client import OperationHandle, wait_for_vm_creation
+
+    zone_ops_mock = MagicMock()
+    zone_ops_mock.get.return_value = _done_op()
+    monkeypatch.setattr("runnerforge.compute_client._zone_ops_client", zone_ops_mock)
+
+    handle = OperationHandle(name="op-123", zone="europe-west4-a")
+
+    with caplog.at_level(logging.INFO):
+        outcome = asyncio.run(wait_for_vm_creation(handle, timeout=10.0))
+
+    assert outcome.outcome == "success"
+    assert outcome.op_name == "op-123"
+    assert outcome.zone == "europe-west4-a"
+    assert outcome.error_code is None
+    assert outcome.error_message is None
+    assert outcome.duration_ms >= 0
+
+    log = next((r for r in caplog.records if r.message == "vm.create.outcome"), None)
+    assert log is not None
+    assert log.levelno == logging.INFO
+    assert log.outcome == "success"
+
+
+def test_wait_for_vm_creation_returns_failure_on_op_error(monkeypatch, caplog):
+    from runnerforge.compute_client import OperationHandle, wait_for_vm_creation
+
+    zone_ops_mock = MagicMock()
+    zone_ops_mock.get.return_value = _done_op(
+        error_code="QUOTA_EXCEEDED", error_message="SSD_TOTAL_GB cap hit"
+    )
+    monkeypatch.setattr("runnerforge.compute_client._zone_ops_client", zone_ops_mock)
+
+    handle = OperationHandle(name="op-456", zone="europe-west4-a")
+
+    with caplog.at_level(logging.WARNING):
+        outcome = asyncio.run(wait_for_vm_creation(handle, timeout=10.0))
+
+    assert outcome.outcome == "failure"
+    assert outcome.error_code == "QUOTA_EXCEEDED"
+    assert outcome.error_message == "SSD_TOTAL_GB cap hit"
+
+    log = next((r for r in caplog.records if r.message == "vm.create.outcome"), None)
+    assert log is not None
+    assert log.levelno == logging.WARNING
+    assert log.outcome == "failure"
+    assert log.error_code == "QUOTA_EXCEEDED"
+
+
+def test_wait_for_vm_creation_polls_until_done(monkeypatch):
+    from runnerforge.compute_client import OperationHandle, wait_for_vm_creation
+
+    # Two RUNNING, then DONE
+    zone_ops_mock = MagicMock()
+    zone_ops_mock.get.side_effect = [_running_op(), _running_op(), _done_op()]
+    monkeypatch.setattr("runnerforge.compute_client._zone_ops_client", zone_ops_mock)
+    # Zero out the inter-poll sleep so tests run instantly
+    monkeypatch.setattr("runnerforge.compute_client.asyncio.sleep", AsyncMock())
+
+    handle = OperationHandle(name="op-789", zone="europe-west4-a")
+
+    outcome = asyncio.run(wait_for_vm_creation(handle, timeout=10.0))
+
+    assert outcome.outcome == "success"
+    assert zone_ops_mock.get.call_count == 3
+
+
+def test_wait_for_vm_creation_times_out_when_op_stays_running(monkeypatch, caplog):
+    from runnerforge.compute_client import OperationHandle, wait_for_vm_creation
+
+    zone_ops_mock = MagicMock()
+    zone_ops_mock.get.return_value = _running_op()
+    monkeypatch.setattr("runnerforge.compute_client._zone_ops_client", zone_ops_mock)
+    monkeypatch.setattr("runnerforge.compute_client.asyncio.sleep", AsyncMock())
+
+    handle = OperationHandle(name="op-timeout", zone="europe-west4-a")
+
+    # Tiny timeout — the monotonic clock will pass the deadline immediately
+    with caplog.at_level(logging.WARNING):
+        outcome = asyncio.run(wait_for_vm_creation(handle, timeout=0.0001))
+
+    assert outcome.outcome == "timeout"
+    assert outcome.error_code is None
+
+    log = next((r for r in caplog.records if r.message == "vm.create.outcome"), None)
+    assert log is not None
+    assert log.levelno == logging.WARNING
+    assert log.outcome == "timeout"
+
+
+def test_wait_for_vm_creation_keeps_polling_after_transient_get_error(
+    monkeypatch, caplog
+):
+    from runnerforge.compute_client import OperationHandle, wait_for_vm_creation
+
+    # First call raises, second returns DONE-success
+    zone_ops_mock = MagicMock()
+    zone_ops_mock.get.side_effect = [
+        GoogleAPIError("transient network glitch"),
+        _done_op(),
+    ]
+    monkeypatch.setattr("runnerforge.compute_client._zone_ops_client", zone_ops_mock)
+    monkeypatch.setattr("runnerforge.compute_client.asyncio.sleep", AsyncMock())
+
+    handle = OperationHandle(name="op-flake", zone="europe-west4-a")
+
+    with caplog.at_level(logging.WARNING):
+        outcome = asyncio.run(wait_for_vm_creation(handle, timeout=10.0))
+
+    assert outcome.outcome == "success"
+    assert zone_ops_mock.get.call_count == 2
+
+    # Warning logged for the transient error
+    warn = next((r for r in caplog.records if "Transient error" in r.message), None)
+    assert warn is not None

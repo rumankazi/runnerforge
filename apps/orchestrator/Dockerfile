@@ -1,6 +1,16 @@
 # ------- Stage 1: base — prod deps only, no project code -------
 FROM public.ecr.aws/docker/library/python:3.14-slim AS base
 
+# Pull latest OS-level security patches at build time. The python:3.14-slim
+# tag itself lags behind Debian's security repo by days when a CVE drops;
+# this layer keeps us current without waiting for the slim image rebuild.
+# Trivy gating is `ignore-unfixed: true` so we only fail on fixed CVEs,
+# and this step ensures fixed CVEs don't linger in our image.
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy uv binary from official image (no pip install needed)
