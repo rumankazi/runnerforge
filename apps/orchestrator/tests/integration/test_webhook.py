@@ -387,9 +387,7 @@ def test_webhook_without_runnerforge_label_skips_processing(fixtures_dir, caplog
     )
     # Observability contract: lost-webhook-ratio anchor must NOT fire on the
     # skip path — counting non-runnerforge traffic would poison the alert.
-    assert not any(
-        "Webhook event received" in r.message for r in caplog.records
-    )
+    assert not any("Webhook event received" in r.message for r in caplog.records)
 
 
 def test_webhook_with_malformed_json_body():
