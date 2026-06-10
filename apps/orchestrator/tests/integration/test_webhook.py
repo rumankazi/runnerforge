@@ -58,7 +58,12 @@ def test_webhook_queued_event_triggers_github_auth_chain(
     from runnerforge.compute_client import OperationHandle
 
     create_vm_mock = AsyncMock(
-        return_value=OperationHandle(name="op-test-12345", zone="europe-west4-a")
+        return_value=OperationHandle(
+            name="op-test-12345",
+            zone="europe-west4-a",
+            machine_type="e2-medium",
+            image_version="0.2.0",
+        )
     )
     monkeypatch.setattr("runnerforge.handlers.create_vm", create_vm_mock)
     # Mock wait_for_vm_creation so the background task is a no-op
@@ -444,7 +449,12 @@ async def test_concurrent_webhooks_keep_per_request_context_isolated(
     from runnerforge.compute_client import OperationHandle
 
     create_vm_mock = AsyncMock(
-        return_value=OperationHandle(name="op-test", zone="europe-west4-a")
+        return_value=OperationHandle(
+            name="op-test",
+            zone="europe-west4-a",
+            machine_type="e2-medium",
+            image_version="0.1.0",
+        )
     )
     monkeypatch.setattr("runnerforge.handlers.create_vm", create_vm_mock)
     # Mock wait_for_vm_creation so the background task is a no-op
