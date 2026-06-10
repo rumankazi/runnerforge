@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.10.0...orchestrator-v0.11.0) (2026-06-10)
+
+
+### Features
+
+* **orchestrator:** pin runner image at startup ([#111](https://github.com/rumankazi/runnerforge/issues/111)) ([5525034](https://github.com/rumankazi/runnerforge/commit/55250343fb45ebe8d710d3df0a8be8e247cc27a4))
+
 ## [0.10.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.9.0...orchestrator-v0.10.0) (2026-06-10)
 
 
