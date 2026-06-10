@@ -1,5 +1,5 @@
 {
-  "displayName": "RunnerForge — Orchestrator Health",
+  "displayName": "RunnerForge \u2014 Orchestrator Health",
   "mosaicLayout": {
     "columns": 48,
     "tiles": [
@@ -222,20 +222,20 @@
         }
       },
       {
-        "yPos": 36,
+        "yPos": 52,
         "xPos": 0,
         "width": 48,
         "height": 4,
         "widget": {
           "title": "Runner Fleet",
           "sectionHeader": {
-            "subtitle": "VM lifecycle: requested → registered → completed → deleted.",
+            "subtitle": "VM lifecycle: requested \u2192 registered \u2192 completed \u2192 deleted.",
             "dividerBelow": true
           }
         }
       },
       {
-        "yPos": 40,
+        "yPos": 56,
         "xPos": 0,
         "width": 24,
         "height": 16,
@@ -273,7 +273,7 @@
         }
       },
       {
-        "yPos": 40,
+        "yPos": 56,
         "xPos": 24,
         "width": 24,
         "height": 16,
@@ -311,7 +311,7 @@
         }
       },
       {
-        "yPos": 56,
+        "yPos": 72,
         "xPos": 0,
         "width": 24,
         "height": 16,
@@ -349,7 +349,7 @@
         }
       },
       {
-        "yPos": 56,
+        "yPos": 72,
         "xPos": 24,
         "width": 24,
         "height": 16,
@@ -384,9 +384,9 @@
         }
       },
       {
-        "yPos": 72,
+        "yPos": 88,
         "xPos": 0,
-        "width": 48,
+        "width": 24,
         "height": 16,
         "widget": {
           "title": "Time-to-Register p05/p50/p95",
@@ -452,7 +452,7 @@
         }
       },
       {
-        "yPos": 88,
+        "yPos": 104,
         "xPos": 0,
         "width": 48,
         "height": 4,
@@ -465,7 +465,7 @@
         }
       },
       {
-        "yPos": 92,
+        "yPos": 108,
         "xPos": 0,
         "width": 16,
         "height": 16,
@@ -500,7 +500,7 @@
         }
       },
       {
-        "yPos": 92,
+        "yPos": 108,
         "xPos": 16,
         "width": 16,
         "height": 16,
@@ -535,7 +535,7 @@
         }
       },
       {
-        "yPos": 92,
+        "yPos": 108,
         "xPos": 32,
         "width": 16,
         "height": 16,
@@ -564,6 +564,89 @@
             ],
             "yAxis": {
               "label": "errors",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "yPos": 36,
+        "xPos": 0,
+        "width": 48,
+        "height": 16,
+        "widget": {
+          "title": "Cold-start ratio (fraction of requests hitting a cold start)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "300s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilterRatio": {
+                    "numerator": {
+                      "filter": "metric.type=\"run.googleapis.com/container/startup_latencies\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\"",
+                      "aggregation": {
+                        "alignmentPeriod": "300s",
+                        "perSeriesAligner": "ALIGN_COUNT",
+                        "crossSeriesReducer": "REDUCE_SUM"
+                      }
+                    },
+                    "denominator": {
+                      "filter": "metric.type=\"run.googleapis.com/request_count\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\"",
+                      "aggregation": {
+                        "alignmentPeriod": "300s",
+                        "perSeriesAligner": "ALIGN_DELTA",
+                        "crossSeriesReducer": "REDUCE_SUM"
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "label": "fraction",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "yPos": 88,
+        "xPos": 24,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "VM creation by image_version",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_SUM",
+                      "groupByFields": [
+                        "metric.label.\"image_version\""
+                      ],
+                      "perSeriesAligner": "ALIGN_DELTA"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/vm_creation_count\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "label": "events/min",
               "scale": "LINEAR"
             }
           }
