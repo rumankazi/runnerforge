@@ -57,6 +57,11 @@ resource "google_monitoring_alert_policy" "time_to_register_burn_rate" {
 # is intuitive (failures + timeouts / all). DELTA counters need an
 # ALIGN_RATE aligner with a SUM reducer to collapse per-label streams.
 resource "google_monitoring_alert_policy" "vm_creation_failure_ratio" {
+  # Wait for the log-based metric to become queryable. The alert API
+  # rejects references to metrics that exist in TF state but haven't yet
+  # propagated to the metric registry (~10min worst case).
+  depends_on = [time_sleep.wait_for_log_metrics]
+
   display_name = "VM creation failure ratio > 5% (5m)"
   combiner     = "OR"
   severity     = "ERROR"
