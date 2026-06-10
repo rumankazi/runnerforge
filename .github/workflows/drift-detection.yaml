@@ -42,6 +42,7 @@ jobs:
     permissions:
       issues: write
       contents: read
+      id-token: write   # WIF token exchange for GCP auth
     if: fromJSON(needs.pick-out.outputs.has_issues)
     strategy:
       fail-fast: false
@@ -51,6 +52,11 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.CI_TERRAFORM_PLAN_SA }}
 
       - uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
         with:
