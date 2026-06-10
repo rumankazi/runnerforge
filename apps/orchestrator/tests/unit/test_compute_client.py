@@ -96,6 +96,7 @@ def test_delete_vm_deletes_instance(monkeypatch, caplog):
         op_id = asyncio.run(
             delete_vm(
                 instance_name="test-delete-vm",
+                reason="webhook",
             )
         )
 
@@ -114,6 +115,7 @@ def test_delete_vm_deletes_instance(monkeypatch, caplog):
     assert log.vm_name == "test-delete-vm"
     assert log.zone == "europe-west4-a"
     assert log.operation_id == "op-abc-123"
+    assert log.reason == "webhook"
 
 
 def test_find_vms_by_job_id(monkeypatch, caplog):
@@ -362,9 +364,13 @@ def test_delete_vm_returns_none_when_vm_already_gone(monkeypatch, caplog):
     mock_client.delete.side_effect = NotFound("not found")
     monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
     with caplog.at_level(logging.INFO):
-        result = asyncio.run(delete_vm(instance_name="ghost-vm"))
+        result = asyncio.run(delete_vm(instance_name="ghost-vm", reason="sweep"))
     assert result is None
-    assert any("VM already deleted" in r.message for r in caplog.records)
+    log = next(
+        (r for r in caplog.records if "VM already deleted" in r.message), None
+    )
+    assert log is not None
+    assert log.reason == "sweep"
 
 
 def test_vm_already_exists_returns_instance_name(monkeypatch, caplog):

@@ -60,7 +60,9 @@ def test_run_sweep_deletes_vm_with_completed_job(monkeypatch):
     assert result.skipped == 1
     assert result.checked == 2
     assert result.errors == []
-    delete_mock.assert_awaited_once_with(instance_name="runnerforge-vm-3h")
+    delete_mock.assert_awaited_once_with(
+        instance_name="runnerforge-vm-3h", reason="sweep"
+    )
     job_status_mock.assert_awaited_once()
     installation_token_mock.assert_awaited_once_with(100)  # int, not str
 
@@ -113,7 +115,9 @@ def test_run_sweep_deletes_vm_with_job_not_found(monkeypatch):
     assert result.skipped == 1
     assert result.checked == 2
     assert result.errors == []
-    delete_mock.assert_awaited_once_with(instance_name="runnerforge-vm-3h")
+    delete_mock.assert_awaited_once_with(
+        instance_name="runnerforge-vm-3h", reason="sweep"
+    )
     job_status_mock.assert_awaited_once()
     installation_token_mock.assert_awaited_once_with(100)  # int, not str
 
@@ -134,7 +138,9 @@ def test_run_sweep_deletes_vm_past_hard_limit(monkeypatch):
     assert result.skipped == 1
     assert result.checked == 2
     assert result.errors == []
-    delete_mock.assert_awaited_once_with(instance_name="runnerforge-vm-7h")
+    delete_mock.assert_awaited_once_with(
+        instance_name="runnerforge-vm-7h", reason="sweep"
+    )
     # Hard limit short-circuits the GitHub round-trip
     job_status_mock.assert_not_awaited()
 

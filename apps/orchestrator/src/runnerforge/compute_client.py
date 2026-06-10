@@ -396,7 +396,10 @@ async def get_vm_labels_by_job(
 
 
 async def delete_vm(
-    instance_name: str, zone: str = GCP_ZONE, project_id: str = GCP_PROJECT_ID
+    instance_name: str,
+    reason: Literal["webhook", "sweep"],
+    zone: str = GCP_ZONE,
+    project_id: str = GCP_PROJECT_ID,
 ) -> str | None:
     """Submits VM deletion. Returns operation ID. Does not wait for completion."""
     assert _compute_client is not None
@@ -404,6 +407,7 @@ async def delete_vm(
         span.set_attribute("instance_name", instance_name)
         span.set_attribute("project_id", project_id)
         span.set_attribute("zone", zone)
+        span.set_attribute("reason", reason)
         try:
             operation = await asyncio.to_thread(
                 _compute_client.delete,
@@ -414,7 +418,7 @@ async def delete_vm(
         except NotFound:
             logger.info(
                 "VM already deleted (idempotent no-op)",
-                extra={"vm_name": instance_name, "zone": zone},
+                extra={"vm_name": instance_name, "zone": zone, "reason": reason},
             )
             return None
         logger.info(
@@ -423,6 +427,7 @@ async def delete_vm(
                 "vm_name": instance_name,
                 "zone": zone,
                 "operation_id": operation.name,
+                "reason": reason,
             },
         )
         return operation.name
