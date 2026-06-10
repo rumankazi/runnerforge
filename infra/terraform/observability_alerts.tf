@@ -122,23 +122,25 @@ resource "google_monitoring_alert_policy" "cold_start_p95" {
   notification_channels = [google_monitoring_notification_channel.email.name]
 }
 
-# Sweep is the orphan-VM safety net — Cloud Scheduler runs /sweep hourly.
-# If no Sweep-completed log fires for two hours straight, the scheduler is
-# broken or the /sweep handler is degraded; either way orphan VMs start
-# accumulating silently. Detects the outage before the next billing cycle.
+# Sweep is the orphan-VM safety net — Cloud Scheduler runs /sweep DAILY at
+# 00:12 UTC (see scheduler.tf). A missed daily run means the scheduler is
+# broken or the /sweep handler is degraded, and orphan VMs start
+# accumulating. Duration of 26h tolerates the daily cadence + slack for
+# clock skew and the one configured retry — fires only when we've genuinely
+# missed the daily window.
 resource "google_monitoring_alert_policy" "sweep_liveness" {
-  display_name = "Sweep has not completed in 2h"
+  display_name = "Sweep has not completed in 26h"
   combiner     = "OR"
   severity     = "ERROR"
 
   conditions {
-    display_name = "Absent sweep_checked_count for 7200s"
+    display_name = "Absent sweep_checked_count for 93600s"
     condition_absent {
       filter   = "metric.type=\"logging.googleapis.com/user/sweep_checked_count\" resource.type=\"cloud_run_revision\""
-      duration = "7200s"
+      duration = "93600s"
 
       aggregations {
-        alignment_period   = "300s"
+        alignment_period   = "3600s"
         per_series_aligner = "ALIGN_COUNT"
       }
 
