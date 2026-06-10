@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.12.0...orchestrator-v0.13.0) (2026-06-10)
+
+
+### Features
+
+* **infra+orchestrator:** operational alerts + lost-webhook detection ([#120](https://github.com/rumankazi/runnerforge/issues/120)) ([0190f35](https://github.com/rumankazi/runnerforge/commit/0190f35c8ffaa3c1ac500ec866b1f7b9037311b0))
+
 ## [0.12.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.11.0...orchestrator-v0.12.0) (2026-06-10)
 
 
