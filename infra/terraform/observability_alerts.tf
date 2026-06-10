@@ -181,6 +181,46 @@ resource "google_monitoring_alert_policy" "webhook_rejection_rate" {
   notification_channels = [google_monitoring_notification_channel.email.name]
 }
 
+# Lost-webhook detection: ratio of VM-creation events over queued webhook
+# events. Should hover at ~1.0; sustained drop below 0.9 means we
+# acknowledged a queued webhook (200 to GitHub) but failed to spin up a
+# runner — workflow jobs hang in "queued" forever because GitHub doesn't
+# auto-retry. Highest-priority signal for this architecture.
+resource "google_monitoring_alert_policy" "lost_webhook_ratio" {
+  display_name = "Lost-webhook ratio < 0.9 (5m)"
+  combiner     = "OR"
+  severity     = "ERROR"
+
+  conditions {
+    display_name = "VM creations / queued webhooks < 0.9"
+    condition_threshold {
+      filter             = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.vm_creation_count.name}\" resource.type=\"cloud_run_revision\""
+      denominator_filter = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.webhook_event_count.name}\" resource.type=\"cloud_run_revision\" metric.label.event_type=\"queued\""
+      comparison         = "COMPARISON_LT"
+      threshold_value    = 0.9
+      duration           = "300s"
+      # Suppress the alert when no queued webhooks arrived — at our volume
+      # the orchestrator can sit idle for hours, and an empty denominator
+      # would otherwise trip the < 0.9 check on zero/zero.
+      evaluation_missing_data = "EVALUATION_MISSING_DATA_INACTIVE"
+
+      aggregations {
+        alignment_period     = "300s"
+        per_series_aligner   = "ALIGN_RATE"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+      denominator_aggregations {
+        alignment_period     = "300s"
+        per_series_aligner   = "ALIGN_RATE"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  notification_channels = [google_monitoring_notification_channel.email.name]
+  depends_on            = [time_sleep.wait_for_log_metrics]
+}
+
 # Cloud Run instance count approaching max_instances=50 (80% threshold).
 # Gives time to consider raising the cap before requests start failing
 # because no more instances can spin up. Saturation at the instance level is

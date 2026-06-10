@@ -89,6 +89,13 @@ def test_webhook_queued_event_triggers_github_auth_chain(
     # Observability contract: handler logs key progress events
     assert any("Registration token received" in r.message for r in caplog.records)
     assert any("Creating VM" in r.message for r in caplog.records)
+    # Observability contract: lost-webhook-ratio anchor — every accepted
+    # RunnerForge webhook emits this with event_type for metric extraction.
+    event_log = next(
+        (r for r in caplog.records if "Webhook event received" in r.message), None
+    )
+    assert event_log is not None
+    assert event_log.event_type == "queued"
 
     # Background polling was scheduled and ran (TestClient flushes BackgroundTasks
     # after the response). It received the OperationHandle we returned from create_vm.
@@ -377,6 +384,11 @@ def test_webhook_without_runnerforge_label_skips_processing(fixtures_dir, caplog
         r.levelno == logging.INFO
         and "skipping! not a runnerforge request" in r.message.lower()
         for r in caplog.records
+    )
+    # Observability contract: lost-webhook-ratio anchor must NOT fire on the
+    # skip path — counting non-runnerforge traffic would poison the alert.
+    assert not any(
+        "Webhook event received" in r.message for r in caplog.records
     )
 
 
