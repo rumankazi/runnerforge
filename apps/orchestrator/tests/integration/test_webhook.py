@@ -55,8 +55,20 @@ def test_webhook_queued_event_triggers_github_auth_chain(
     )
 
     # Mock create_vm so we don't hit real GCP
-    create_vm_mock = AsyncMock(return_value="op-test-12345")
+    from runnerforge.compute_client import OperationHandle
+
+    create_vm_mock = AsyncMock(
+        return_value=OperationHandle(
+            name="op-test-12345",
+            zone="europe-west4-a",
+            machine_type="e2-medium",
+            image_version="0.2.0",
+        )
+    )
     monkeypatch.setattr("runnerforge.handlers.create_vm", create_vm_mock)
+    # Mock wait_for_vm_creation so the background task is a no-op
+    wait_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.main.wait_for_vm_creation", wait_mock)
     with caplog.at_level(logging.INFO):
         response = client.post(
             "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
@@ -77,6 +89,64 @@ def test_webhook_queued_event_triggers_github_auth_chain(
     # Observability contract: handler logs key progress events
     assert any("Registration token received" in r.message for r in caplog.records)
     assert any("Creating VM" in r.message for r in caplog.records)
+
+    # Background polling was scheduled and ran (TestClient flushes BackgroundTasks
+    # after the response). It received the OperationHandle we returned from create_vm.
+    wait_mock.assert_awaited_once()
+    assert wait_mock.await_args is not None
+    assert wait_mock.await_args.args[0].name == "op-test-12345"
+    assert wait_mock.await_args.args[0].zone == "europe-west4-a"
+
+
+@respx.mock
+def test_webhook_queued_event_does_not_schedule_polling_when_vm_already_exists(
+    fixtures_dir, monkeypatch, caplog
+):
+    """When create_vm returns None (VM already exists), no background polling is
+    scheduled — there's no operation to observe."""
+    from runnerforge.compute_client import OperationHandle  # noqa: F401
+
+    body = (fixtures_dir / "queued_job_payload.json").read_bytes()
+
+    respx.post("https://api.github.com/app/installations/135399152/access_tokens").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "token": "ghs_installation_token",
+                "expires_at": "2026-05-30T11:00:00Z",
+                "permissions": {
+                    "actions": "read",
+                    "metadata": "read",
+                    "administration": "write",
+                },
+                "repository_selection": "selected",
+            },
+        )
+    )
+    respx.post(
+        "https://api.github.com/repos/rumankazi/runnerforge/actions/runners/registration-token"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "token": "ghs_registration_token",
+                "expires_at": "2026-05-30T11:00:00Z",
+            },
+        )
+    )
+
+    # create_vm returns None to simulate the AlreadyExists path
+    monkeypatch.setattr("runnerforge.handlers.create_vm", AsyncMock(return_value=None))
+    wait_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.main.wait_for_vm_creation", wait_mock)
+
+    response = client.post(
+        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+    )
+
+    assert response.status_code == 200
+    # No operation to poll → no background task fired
+    wait_mock.assert_not_awaited()
 
 
 @respx.mock
@@ -376,8 +446,19 @@ async def test_concurrent_webhooks_keep_per_request_context_isolated(
         )
     )
     # Stop short of real GCP
-    create_vm_mock = AsyncMock(return_value="op-test")
+    from runnerforge.compute_client import OperationHandle
+
+    create_vm_mock = AsyncMock(
+        return_value=OperationHandle(
+            name="op-test",
+            zone="europe-west4-a",
+            machine_type="e2-medium",
+            image_version="0.1.0",
+        )
+    )
     monkeypatch.setattr("runnerforge.handlers.create_vm", create_vm_mock)
+    # Mock wait_for_vm_creation so the background task is a no-op
+    monkeypatch.setattr("runnerforge.main.wait_for_vm_creation", AsyncMock())
 
     # Fire concurrently against an in-memory ASGI transport
     transport = httpx.ASGITransport(app=app)

@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.11.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.10.0...orchestrator-v0.11.0) (2026-06-10)
+
+
+### Features
+
+* **orchestrator:** pin runner image at startup ([#111](https://github.com/rumankazi/runnerforge/issues/111)) ([5525034](https://github.com/rumankazi/runnerforge/commit/55250343fb45ebe8d710d3df0a8be8e247cc27a4))
+
+## [0.10.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.9.0...orchestrator-v0.10.0) (2026-06-10)
+
+
+### Features
+
+* **orchestrator:** poll VM creation outcomes via BackgroundTasks ([#108](https://github.com/rumankazi/runnerforge/issues/108)) ([9df1288](https://github.com/rumankazi/runnerforge/commit/9df1288070210abcaab23ce680f2ae76c20195d0))
+
+## [0.9.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.8.0...orchestrator-v0.9.0) (2026-06-10)
+
+
+### Features
+
+* **orchestrator:** route VM egress through Cloud NAT ([#106](https://github.com/rumankazi/runnerforge/issues/106)) ([d306482](https://github.com/rumankazi/runnerforge/commit/d3064821505e9916f3830ea97b0c6567e8c6c1ff))
+
+## [0.8.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.7.0...orchestrator-v0.8.0) (2026-06-10)
+
+
+### Features
+
+* **infra:** add Cloud NAT router + gateway for runner VM egress ([#99](https://github.com/rumankazi/runnerforge/issues/99)) ([4390cf7](https://github.com/rumankazi/runnerforge/commit/4390cf704874e1978c51906cd6d7599585ebb9ce))
+
 ## [0.7.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.6.1...orchestrator-v0.7.0) (2026-06-09)
 
 

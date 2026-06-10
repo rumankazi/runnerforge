@@ -17,11 +17,13 @@ async def test_close_http_client_is_noop_when_already_none(monkeypatch):
 
 def test_close_compute_client_is_noop_when_already_none(monkeypatch):
     monkeypatch.setattr(compute_client, "_compute_client", None)
+    monkeypatch.setattr(compute_client, "_zone_ops_client", None)
 
-    # Should not raise; no client to close
+    # Should not raise; no clients to close
     compute_client.close_compute_client()
 
     assert compute_client._compute_client is None
+    assert compute_client._zone_ops_client is None
 
 
 async def test_init_http_client_creates_async_client_with_correct_timeout(monkeypatch):
@@ -34,16 +36,23 @@ async def test_init_http_client_creates_async_client_with_correct_timeout(monkey
 
 
 async def test_init_compute_client_assigns_constructor_result(monkeypatch):
-    sentinel = MagicMock()
+    instances_sentinel = MagicMock()
+    zone_ops_sentinel = MagicMock()
     monkeypatch.setattr(
         "runnerforge.compute_client.compute_v1.InstancesClient",
-        lambda: sentinel,
+        lambda: instances_sentinel,
+    )
+    monkeypatch.setattr(
+        "runnerforge.compute_client.compute_v1.ZoneOperationsClient",
+        lambda: zone_ops_sentinel,
     )
     monkeypatch.setattr(compute_client, "_compute_client", None)
+    monkeypatch.setattr(compute_client, "_zone_ops_client", None)
 
     compute_client.init_compute_client()
 
-    assert compute_client._compute_client is sentinel
+    assert compute_client._compute_client is instances_sentinel
+    assert compute_client._zone_ops_client is zone_ops_sentinel
 
 
 def test_lifespan_initializes_and_closes_clients(monkeypatch):
@@ -63,3 +72,17 @@ def test_lifespan_initializes_and_closes_clients(monkeypatch):
     # After exiting the context, shutdown has run
     close_http.assert_awaited_once()
     close_compute.assert_called_once()
+
+
+def test_close_compute_client_closes_both_transports(monkeypatch):
+    instances_mock = MagicMock()
+    zone_ops_mock = MagicMock()
+    monkeypatch.setattr(compute_client, "_compute_client", instances_mock)
+    monkeypatch.setattr(compute_client, "_zone_ops_client", zone_ops_mock)
+
+    compute_client.close_compute_client()
+
+    instances_mock.transport.close.assert_called_once()
+    zone_ops_mock.transport.close.assert_called_once()
+    assert compute_client._compute_client is None
+    assert compute_client._zone_ops_client is None
