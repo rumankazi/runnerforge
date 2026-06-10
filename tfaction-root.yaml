@@ -2,9 +2,8 @@ plan_workflow_name: qualify.yaml
 target_groups:
   - working_directory: infra/terraform
 available_providers:
-  - name:
-      - registry.terraform.io/hashicorp/google
-      - registry.terraform.io/hashicorp/time
+  - name: registry.terraform.io/hashicorp/google
+  - name: registry.terraform.io/hashicorp/time
 tflint:
   enabled: true
   fix: true # enables `tflint --fix`
