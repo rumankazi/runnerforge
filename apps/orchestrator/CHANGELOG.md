@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.8.0...orchestrator-v0.9.0) (2026-06-10)
+
+
+### Features
+
+* **orchestrator:** route VM egress through Cloud NAT ([#106](https://github.com/rumankazi/runnerforge/issues/106)) ([d306482](https://github.com/rumankazi/runnerforge/commit/d3064821505e9916f3830ea97b0c6567e8c6c1ff))
+
 ## [0.8.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.7.0...orchestrator-v0.8.0) (2026-06-10)
 
 
