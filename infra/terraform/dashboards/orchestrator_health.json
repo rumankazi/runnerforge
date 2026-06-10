@@ -6,6 +6,19 @@
       {
         "yPos": 0,
         "xPos": 0,
+        "width": 48,
+        "height": 4,
+        "widget": {
+          "title": "Orchestrator Health",
+          "sectionHeader": {
+            "subtitle": "Service-level health, scaling behavior, and request signals.",
+            "dividerBelow": true
+          }
+        }
+      },
+      {
+        "yPos": 4,
+        "xPos": 0,
         "width": 24,
         "height": 16,
         "widget": {
@@ -41,7 +54,7 @@
         }
       },
       {
-        "yPos": 0,
+        "yPos": 4,
         "xPos": 24,
         "width": 24,
         "height": 16,
@@ -109,7 +122,7 @@
         }
       },
       {
-        "yPos": 16,
+        "yPos": 20,
         "xPos": 0,
         "width": 24,
         "height": 16,
@@ -171,7 +184,7 @@
         }
       },
       {
-        "yPos": 16,
+        "yPos": 20,
         "xPos": 24,
         "width": 24,
         "height": 16,
@@ -209,8 +222,59 @@
         }
       },
       {
-        "yPos": 32,
+        "yPos": 36,
         "xPos": 0,
+        "width": 48,
+        "height": 4,
+        "widget": {
+          "title": "Runner Fleet",
+          "sectionHeader": {
+            "subtitle": "VM lifecycle: requested → registered → completed → deleted.",
+            "dividerBelow": true
+          }
+        }
+      },
+      {
+        "yPos": 40,
+        "xPos": 0,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "VM creation rate by machine_type",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_SUM",
+                      "groupByFields": [
+                        "metric.label.\"machine_type\""
+                      ],
+                      "perSeriesAligner": "ALIGN_DELTA"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/vm_creation_count\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "label": "events/min",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "yPos": 40,
+        "xPos": 24,
         "width": 24,
         "height": 16,
         "widget": {
@@ -247,9 +311,82 @@
         }
       },
       {
-        "yPos": 32,
+        "yPos": 56,
+        "xPos": 0,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "VM deletion rate by reason",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_SUM",
+                      "groupByFields": [
+                        "metric.label.\"reason\""
+                      ],
+                      "perSeriesAligner": "ALIGN_DELTA"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/vm_deletion_count\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "label": "events/min",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "yPos": 56,
         "xPos": 24,
         "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "Active runner VMs",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "300s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_MEAN"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/runner_vm_count\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "label": "VMs",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "yPos": 72,
+        "xPos": 0,
+        "width": 48,
         "height": 16,
         "widget": {
           "title": "Time-to-Register p05/p50/p95",
@@ -309,6 +446,124 @@
             ],
             "yAxis": {
               "label": "s",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "yPos": 88,
+        "xPos": 0,
+        "width": 48,
+        "height": 4,
+        "widget": {
+          "title": "Sweep & cleanup",
+          "sectionHeader": {
+            "subtitle": "Hourly orphan-VM safety net. Per-run distributions, ~12 samples/day.",
+            "dividerBelow": true
+          }
+        }
+      },
+      {
+        "yPos": 92,
+        "xPos": 0,
+        "width": 16,
+        "height": 16,
+        "widget": {
+          "title": "Sweep checked (VMs inspected per run)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "3600s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "3600s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_MEAN"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/sweep_checked_count\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "label": "VMs",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "yPos": 92,
+        "xPos": 16,
+        "width": 16,
+        "height": 16,
+        "widget": {
+          "title": "Sweep deleted (VMs removed per run)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "3600s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "3600s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_MEAN"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/sweep_deleted_count\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "label": "VMs",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "yPos": 92,
+        "xPos": 32,
+        "width": 16,
+        "height": 16,
+        "widget": {
+          "title": "Sweep errors per run",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "3600s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "3600s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_MEAN"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/sweep_error_count\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "label": "errors",
               "scale": "LINEAR"
             }
           }
