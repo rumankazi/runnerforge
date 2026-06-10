@@ -114,13 +114,14 @@
         "width": 24,
         "height": 16,
         "widget": {
-          "title": "Active instances by revision",
+          "title": "Active instances + cold-start p95 by revision",
           "xyChart": {
             "chartOptions": {
               "mode": "COLOR"
             },
             "dataSets": [
               {
+                "legendTemplate": "instances",
                 "minAlignmentPeriod": "60s",
                 "plotType": "STACKED_AREA",
                 "targetAxis": "Y1",
@@ -137,9 +138,33 @@
                     "filter": "metric.type=\"run.googleapis.com/container/instance_count\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\""
                   }
                 }
+              },
+              {
+                "legendTemplate": "cold-start p95",
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y2",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MAX",
+                      "groupByFields": [
+                        "resource.label.\"revision_name\""
+                      ],
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95"
+                    },
+                    "filter": "metric.type=\"run.googleapis.com/container/startup_latencies\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\""
+                  }
+                }
               }
             ],
             "yAxis": {
+              "label": "instances",
+              "scale": "LINEAR"
+            },
+            "y2Axis": {
+              "label": "cold-start ms",
               "scale": "LINEAR"
             }
           }
@@ -151,7 +176,7 @@
         "width": 24,
         "height": 16,
         "widget": {
-          "title": "Cold-start latency p95 by revision",
+          "title": "Memory utilization p95 by revision",
           "xyChart": {
             "chartOptions": {
               "mode": "COLOR"
@@ -171,13 +196,13 @@
                       ],
                       "perSeriesAligner": "ALIGN_PERCENTILE_95"
                     },
-                    "filter": "metric.type=\"run.googleapis.com/container/startup_latencies\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\""
+                    "filter": "metric.type=\"run.googleapis.com/container/memory/utilizations\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\""
                   }
                 }
               }
             ],
             "yAxis": {
-              "label": "ms",
+              "label": "fraction",
               "scale": "LINEAR"
             }
           }
@@ -189,7 +214,7 @@
         "width": 24,
         "height": 16,
         "widget": {
-          "title": "VM creation outcomes by outcome",
+          "title": "VM creation outcomes per minute by outcome",
           "xyChart": {
             "chartOptions": {
               "mode": "COLOR"
@@ -207,7 +232,7 @@
                       "groupByFields": [
                         "metric.label.\"outcome\""
                       ],
-                      "perSeriesAligner": "ALIGN_RATE"
+                      "perSeriesAligner": "ALIGN_DELTA"
                     },
                     "filter": "metric.type=\"logging.googleapis.com/user/vm_creation_outcome_count\" resource.type=\"cloud_run_revision\""
                   }
@@ -215,6 +240,7 @@
               }
             ],
             "yAxis": {
+              "label": "events/min",
               "scale": "LINEAR"
             }
           }
@@ -226,13 +252,46 @@
         "width": 24,
         "height": 16,
         "widget": {
-          "title": "Time-to-Register p95",
+          "title": "Time-to-Register p05/p50/p95",
           "xyChart": {
             "chartOptions": {
               "mode": "COLOR"
             },
             "dataSets": [
               {
+                "legendTemplate": "p05 (lower bound)",
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_05"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/time_to_runner_seconds\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              },
+              {
+                "legendTemplate": "p50 (typical)",
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_50"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/time_to_runner_seconds\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              },
+              {
+                "legendTemplate": "p95 (upper bound)",
                 "minAlignmentPeriod": "60s",
                 "plotType": "LINE",
                 "targetAxis": "Y1",
