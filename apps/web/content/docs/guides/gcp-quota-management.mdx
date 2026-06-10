@@ -1,0 +1,166 @@
+---
+title: GCP Quota Management
+---
+
+How to check current GCP quotas and request increases. Most quota bumps on an established billing project auto-approve within seconds.
+
+## Background — two quota APIs
+
+GCP exposes quotas through two generations of tooling. Both are still live; they surface partially-overlapping data.
+
+| API | Command prefix | Notes |
+|---|---|---|
+| **Legacy** | `gcloud compute regions describe <region>` | Familiar, but the metric names (`E2_CPUS`, `INSTANCES`) are legacy. Some entries are phantoms with no adjustable equivalent in the new system. |
+| **Cloud Quotas (current)** | `gcloud alpha quotas …` | Source of truth for what's adjustable today. Use this for any *request* flow. |
+
+When the legacy command shows a quota the new API doesn't expose as separately adjustable, trust the new API — the legacy display can be stale.
+
+## Check a single quota
+
+```bash
+gcloud alpha quotas info describe <QUOTA_ID> \
+  --service=<SERVICE> \
+  --project=runnerforge \
+  --format="json" | jq '.dimensionsInfos[] | select(.dimensions.region == "europe-west4")'
+```
+
+Common service IDs:
+- `compute.googleapis.com` — VMs, CPUs, IPs, disks, NAT
+- `run.googleapis.com` — Cloud Run services, revisions
+- `artifactregistry.googleapis.com` — repositories, image storage
+- `logging.googleapis.com` — log-based metrics, retention
+- `monitoring.googleapis.com` — dashboards, alert policies
+
+Example — check current `INSTANCES` limit in europe-west4:
+
+```bash
+gcloud alpha quotas info describe INSTANCES-per-project-region \
+  --service=compute.googleapis.com \
+  --project=runnerforge \
+  --format="json" \
+  | jq '.dimensionsInfos[] | select(.dimensions.region == "europe-west4") | .details.value'
+```
+
+## List all quotas for a service (find the right ID)
+
+```bash
+gcloud alpha quotas info list \
+  --service=compute.googleapis.com \
+  --project=runnerforge \
+  --format="value(quotaId)" \
+  | grep -i "<search term>"
+```
+
+Examples:
+
+```bash
+# Find all CPU-related quota IDs
+gcloud alpha quotas info list --service=compute.googleapis.com \
+  --project=runnerforge --format="value(quotaId)" | grep -i cpu
+
+# Find network-related quota IDs
+gcloud alpha quotas info list --service=compute.googleapis.com \
+  --project=runnerforge --format="value(quotaId)" | grep -iE "network|address|nat"
+```
+
+## Request an increase
+
+```bash
+gcloud alpha quotas preferences create \
+  --service=<SERVICE> \
+  --project=runnerforge \
+  --quota-id=<QUOTA_ID> \
+  --dimensions=region=<REGION> \
+  --preferred-value=<NEW_LIMIT> \
+  --justification="<reason>"
+```
+
+Example — bump `INSTANCES` to 200 in europe-west4:
+
+```bash
+gcloud alpha quotas preferences create \
+  --service=compute.googleapis.com \
+  --project=runnerforge \
+  --quota-id=INSTANCES-per-project-region \
+  --dimensions=region=europe-west4 \
+  --preferred-value=200 \
+  --justification="Self-hosted CI runner platform; default 24 caps concurrent jobs"
+```
+
+## Verify approval
+
+```bash
+gcloud alpha quotas preferences list --project=runnerforge
+```
+
+Look at the most recent entry:
+
+```yaml
+quotaConfig:
+  grantedValue: '200'
+  preferredValue: '200'
+  stateDetail: Quota request approved to 200
+```
+
+- `stateDetail` starts with `"approved"` → done. New limit live within seconds.
+- `stateDetail` mentions `"pending"` or `"in review"` → human review. Usually same-day; check email.
+- `stateDetail` mentions `"denied"` → re-file with a stronger justification or smaller delta.
+
+For modest bumps (≤8× current value), established billing projects typically auto-approve in under a minute.
+
+## Common metrics for RunnerForge
+
+| Quota ID | Default | What it controls | When to bump |
+|---|---|---|---|
+| `INSTANCES-per-project-region` | 24 | Concurrent VMs in region | Burst tests / Phase 3.4 scale-up |
+| `CPUS-per-project-region` | 200 | Total vCPUs across all VM families | When `INSTANCES × VM-size` exceeds it |
+| `IN-USE-ADDRESSES-per-project-region` | 8 | Public IPs in use (VMs + NAT + LB) | Pre-NAT only; irrelevant after Cloud NAT |
+| `N2D-CPUS-per-project-region` | 16 | N2D family vCPU cap | If pivoting runners off E2 to N2D |
+| `PREEMPTIBLE-CPUS-per-project-region` | 0 | Spot VM vCPUs | Phase 3.4 — spot runners |
+| `NETWORK-FIREWALL-POLICIES` | 10 | Firewall policies in region | Migration to custom VPC with explicit rules |
+| `SUBNETWORKS` | 100 | Subnets per VPC | Multi-region expansion |
+| `IMAGES` (project-level) | 100 | Custom GCE images | Runner image retention threshold |
+
+For Cloud Run-specific limits:
+
+| Quota ID | Default | What it controls |
+|---|---|---|
+| `services-per-region` | 1000 | Cloud Run services in region |
+| `revisions-per-service` | 1000 | Revisions per service |
+| `max-instance-count-per-service` | 1000 | Max concurrent instances per service |
+
+## When to bump what (RunnerForge-specific guidance)
+
+- **Hitting `IN_USE_ADDRESSES` pre-NAT**: don't bump — ship Cloud NAT instead. Saves quota long-term.
+- **Hitting `INSTANCES` after NAT**: bump to 200 or higher. The natural concurrent-runner ceiling.
+- **Hitting `CPUS`**: rare — only if you're running larger VM sizes by default. Bump alongside `INSTANCES` if so.
+- **Hitting `N2D_CPUS`**: bump when adopting the N2D family for any size class. 100 is a reasonable target.
+- **Hitting `PREEMPTIBLE_CPUS`**: bump as part of Phase 3.4 spot-VM rollout. 100 is a reasonable target.
+
+## Console route (fallback)
+
+If the gcloud commands fail (alpha API instability, permission edge case), use the GCP Console:
+
+1. Navigate to **IAM & Admin → Quotas & System Limits**
+2. Filter by metric name (e.g., `INSTANCES`) or service (e.g., `Compute Engine API`)
+3. Tick the row for the right region
+4. Click **Edit quotas**
+5. Enter new limit + justification, submit
+
+The Console uses the same Cloud Quotas backend, so approval timing is identical.
+
+## Quota adjuster (auto-bump on usage trends)
+
+GCP offers an automated quota-adjuster feature: it watches your usage and pre-emptively raises quotas before you hit ceilings. Enable per-quota at:
+
+```
+IAM & Admin → Quotas & System Limits → Configurations
+```
+
+Worth enabling for `INSTANCES` and `CPUS` once Phase 3.4 ships and usage starts trending upward — avoids the "burst → blocked → request → wait" loop.
+
+## See also
+
+- [Cloud Quotas API reference](https://cloud.google.com/docs/quotas/api-overview)
+- [Quota adjuster docs](https://cloud.google.com/docs/quotas/quota-adjuster)
+- [Compute Engine quotas](https://cloud.google.com/compute/quotas)
