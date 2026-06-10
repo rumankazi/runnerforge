@@ -66,14 +66,10 @@ jobs:
         with:
           aqua_version: v2.60.0
 
-      - name: Get or create a drift issue
-        uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
-        # CHECK: You can remove this step if you don't use drift detection
-        # https://suzuki-shunsuke.github.io/tfaction/docs/unreleased/drift-detection
-        with:
-          action: get-or-create-drift-issue
-          # issues:write - create a drift issue
-
+      # Mint the App token before any tfaction step needs a GitHub API call.
+      # Drift-issue management runs before init/apply, so the token must exist
+      # by then — otherwise the workflow fails with "Requires authentication"
+      # and the apply step gets skipped entirely.
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: token
         with:
@@ -84,6 +80,15 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-actions: read
+          permission-issues: write
+
+      - name: Get or create a drift issue
+        uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
+        # CHECK: You can remove this step if you don't use drift detection
+        # https://suzuki-shunsuke.github.io/tfaction/docs/unreleased/drift-detection
+        with:
+          action: get-or-create-drift-issue
+          github_token: ${{ steps.token.outputs.token }}
 
       - name: Set up
         uses: suzuki-shunsuke/tfaction@6ad59de70ee7e9c0a11c665c4439b5c148c74328 # v2.0.1
