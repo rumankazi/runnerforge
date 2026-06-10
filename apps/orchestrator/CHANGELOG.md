@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.12.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.11.0...orchestrator-v0.12.0) (2026-06-10)
+
+
+### Features
+
+* **orchestrator:** codify observability in Terraform ([#113](https://github.com/rumankazi/runnerforge/issues/113)) ([4d13d95](https://github.com/rumankazi/runnerforge/commit/4d13d95d4c10c6a38b818b928ead785e5bc1d000))
+
+
+### Bug Fixes
+
+* **orchestrator:** qualify resolved runner image as a project-scoped path ([#114](https://github.com/rumankazi/runnerforge/issues/114)) ([192d54a](https://github.com/rumankazi/runnerforge/commit/192d54a9aecc4d4368eedfb5e2e841744390af69))
+
 ## [0.11.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.10.0...orchestrator-v0.11.0) (2026-06-10)
 
 
