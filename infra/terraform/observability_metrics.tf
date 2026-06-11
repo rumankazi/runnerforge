@@ -41,11 +41,16 @@ resource "google_logging_metric" "vm_creation_count" {
       key        = "image_version"
       value_type = "STRING"
     }
+    labels {
+      key        = "spot"
+      value_type = "STRING"
+    }
   }
 
   label_extractors = {
     "machine_type"  = "EXTRACT(jsonPayload.machine_type)"
     "image_version" = "EXTRACT(jsonPayload.image_version)"
+    "spot"          = "EXTRACT(jsonPayload.spot)"
   }
 }
 
@@ -79,6 +84,10 @@ resource "google_logging_metric" "vm_creation_outcome_count" {
       key        = "error_code"
       value_type = "STRING"
     }
+    labels {
+      key        = "spot"
+      value_type = "STRING"
+    }
   }
 
   label_extractors = {
@@ -86,6 +95,7 @@ resource "google_logging_metric" "vm_creation_outcome_count" {
     "machine_type"  = "EXTRACT(jsonPayload.machine_type)"
     "image_version" = "EXTRACT(jsonPayload.image_version)"
     "error_code"    = "EXTRACT(jsonPayload.error_code)"
+    "spot"          = "EXTRACT(jsonPayload.spot)"
   }
 }
 
@@ -365,6 +375,98 @@ resource "google_logging_metric" "webhook_event_count" {
   }
 }
 
+# ---------------------------------------------------------------------------
+# Machine policy + spot — surfaces the orchestrator-side decisions and
+# the GCE-side spot-reclaim signal. `vm_preemption_count` reads the GCE
+# audit log (different resource type than the orchestrator logs above);
+# `machine_policy_reject_count` and `job_preempted_count` filter on the
+# structured orchestrator logs added in PR 1 and PR 3 respectively.
+# ---------------------------------------------------------------------------
+
+# Counts every `handle_queued` rejection of an incoming workflow's label set:
+# unknown tokens, conflicting machine selectors, invalid-machine-type (cache
+# miss). The `reason` label distinguishes the three cases. Non-zero baseline
+# = user-side typos / cost guardrail working as intended; spikes = either a
+# GCE machine-types-cache regression OR a bad batch of workflow YAML.
+resource "google_logging_metric" "machine_policy_reject_count" {
+  name   = "machine_policy_reject_count"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Machine policy rejected"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+    labels {
+      key        = "reason"
+      value_type = "STRING"
+    }
+  }
+
+  label_extractors = {
+    "reason" = "EXTRACT(jsonPayload.reason)"
+  }
+}
+
+# Counts the PR 3 cross-check outcomes — `handle_completed` confirmed via
+# the GCE audit log that a failed/cancelled job's runner was reclaimed by
+# the Spot scheduler. Subset of `vm_preemption_count` below: only fires for
+# preemptions that interrupted an active job (vs idle-VM preemption between
+# jobs). `conclusion` label slices "failure" (GH gave up) vs "cancelled"
+# (user/GH cancelled, often after seeing the runner hang).
+resource "google_logging_metric" "job_preempted_count" {
+  name   = "job_preempted_count"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Job ended due to spot preemption"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+    labels {
+      key        = "conclusion"
+      value_type = "STRING"
+    }
+  }
+
+  label_extractors = {
+    "conclusion" = "EXTRACT(jsonPayload.conclusion)"
+  }
+}
+
+# Counts every GCE-side preemption event on a RunnerForge VM. Reads the
+# Cloud Audit Log (so the resource filter targets `gce_instance`, not the
+# orchestrator's `cloud_run_revision`). Substring filter on the resource
+# name path catches all runner VMs (named `runnerforge-<run>-<job>-<attempt>`
+# and provisioned only by the orchestrator). Sliced by `zone` since runner
+# VMs are zone-bound and per-zone capacity pressure drives preemption rate.
+resource "google_logging_metric" "vm_preemption_count" {
+  name   = "vm_preemption_count"
+  filter = <<-EOT
+    resource.type="gce_instance"
+    protoPayload.methodName="compute.instances.preempted"
+    protoPayload.resourceName:"instances/runnerforge-"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+    labels {
+      key        = "zone"
+      value_type = "STRING"
+    }
+  }
+
+  label_extractors = {
+    "zone" = "EXTRACT(resource.labels.zone)"
+  }
+}
+
 # Cloud Monitoring SLOs and alert policies that reference a log-based metric
 # validate the metric exists at create time, but log-based metrics take up
 # to ~10 minutes to become queryable after creation. On a fresh apply, that
@@ -384,6 +486,9 @@ resource "time_sleep" "wait_for_log_metrics" {
     google_logging_metric.sweep_checked_count,
     google_logging_metric.sweep_deleted_count,
     google_logging_metric.sweep_error_count,
+    google_logging_metric.machine_policy_reject_count,
+    google_logging_metric.job_preempted_count,
+    google_logging_metric.vm_preemption_count,
   ]
 
   create_duration = "120s"
