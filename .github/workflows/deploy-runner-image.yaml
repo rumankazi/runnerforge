@@ -269,6 +269,36 @@ jobs:
           gcloud compute images delete "$SRC_IMAGE"
           echo "Cleaned up $SRC_IMAGE"
 
+      - name: Retention
+        continue-on-error: true
+        run: |
+          # Get the list of images to deprecate (skip 5 most recent)
+          to_deprecate=$(
+            gcloud compute images list \
+              --project=runnerforge \
+              --filter="family:runnerforge-runner AND status:READY" \
+              --sort-by="~creationTimestamp" \
+              --format="value(name)" |
+            tail -n +6
+          )
+
+          if [ -z "$to_deprecate" ]; then
+            echo "Nothing to deprecate (≤5 active images in family)"
+            exit 0
+          fi
+
+          echo "Would deprecate: $to_deprecate"
+
+          delete_on=$(date -u -d "+30 days" '+%Y-%m-%dT%H:%M:%SZ')
+          echo "Deprecating with delete-on=$delete_on:"
+          echo "$to_deprecate"
+
+          for image in $to_deprecate; do
+            gcloud compute images deprecate "$image" \
+              --project=runnerforge \
+              --state=DEPRECATED \
+              --delete-on="$delete_on"
+          done
 
   rollback:
     name: Remove Image
@@ -293,5 +323,9 @@ jobs:
           set -euo pipefail
           # Deprecate (don't delete) so the image survives for forensics.
           # The family auto-routes to the next-newest non-deprecated member.
-          gcloud compute images delete "$IMAGE_NAME"
-          echo "Deleted $IMAGE_NAME — family $IMAGE_FAMILY."
+          delete_on=$(date -u -d "+30 days" '+%Y-%m-%dT%H:%M:%SZ')
+          gcloud compute images deprecate "$IMAGE_NAME" \
+              --project=runnerforge \
+              --state=DEPRECATED \
+              --delete-on="$delete_on"
+          echo "Deprecated Image $IMAGE_NAME."
