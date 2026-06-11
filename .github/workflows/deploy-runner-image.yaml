@@ -266,7 +266,7 @@ jobs:
             --family="$IMAGE_FAMILY"
           echo "Promoted $SRC_IMAGE → $DST in family $IMAGE_FAMILY"
           echo "Cleaning up source image"
-          gcloud compute images delete "$SRC_IMAGE"
+          gcloud compute images delete "$SRC_IMAGE" --quiet
           echo "Cleaned up $SRC_IMAGE"
 
       - name: Retention
