@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.13.0...orchestrator-v0.14.0) (2026-06-11)
+
+
+### Features
+
+* **orchestrator:** labels processing and handling backend ([#130](https://github.com/rumankazi/runnerforge/issues/130)) ([43dc63f](https://github.com/rumankazi/runnerforge/commit/43dc63f500c769b51461d7a3bb3a1ceac859891f))
+* wire up spot vm creations ([#132](https://github.com/rumankazi/runnerforge/issues/132)) ([e9fb010](https://github.com/rumankazi/runnerforge/commit/e9fb010d8e12b30c06bca584687a8481f136e112))
+
 ## [0.13.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.12.0...orchestrator-v0.13.0) (2026-06-10)
 
 
