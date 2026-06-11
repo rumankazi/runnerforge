@@ -210,32 +210,6 @@ def test_webhook_queued_event_does_not_create_vm_when_labels_are_invalid(
     payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
     payload["workflow_job"]["labels"] = ["runnerforge", "gigantic"]
     body = json.dumps(payload).encode()
-    respx.post("https://api.github.com/app/installations/135399152/access_tokens").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "token": "ghs_installation_token",
-                "expires_at": "2026-05-30T11:00:00Z",
-                "permissions": {
-                    "actions": "read",
-                    "metadata": "read",
-                    "administration": "write",
-                },
-                "repository_selection": "selected",
-            },
-        )
-    )
-    respx.post(
-        "https://api.github.com/repos/rumankazi/runnerforge/actions/runners/registration-token"
-    ).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "token": "ghs_registration_token",
-                "expires_at": "2026-05-30T11:00:00Z",
-            },
-        )
-    )
     create_mock = AsyncMock()
     monkeypatch.setattr("runnerforge.handlers.create_vm", create_mock)
 
@@ -256,6 +230,7 @@ def test_webhook_queued_event_does_not_create_vm_when_labels_are_invalid(
         and getattr(r, "offending_tokens", None) == ["gigantic"]
         for r in caplog.records
     )
+    assert not any("Registration token received" in r.message for r in caplog.records)
 
 
 @respx.mock

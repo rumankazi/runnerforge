@@ -30,6 +30,16 @@ async def handle_queued(event: WorkflowJobEvent) -> OperationHandle | None:
         span.set_attribute("run_id", event.workflow_job.run_id)
         span.set_attribute("run_attempt", event.workflow_job.run_attempt)
 
+        # Get requested machine type from labels
+        try:
+            policy = resolve_labels(event.workflow_job.labels)
+        except MachinePolicyError as e:
+            logger.warning(
+                "Machine policy rejected",
+                extra={"reason": e.reason, "offending_tokens": e.offending_tokens},
+            )
+            return None
+
         installation_id = event.installation.id
         installation_token = await get_installation_token(installation_id)
         registration_token = await get_registration_token(
@@ -64,15 +74,6 @@ async def handle_queued(event: WorkflowJobEvent) -> OperationHandle | None:
             queued_trace_id=queued_trace_id,
             queued_span_id=queued_span_id,
         )
-        # Get requested machine type from labels
-        try:
-            policy = resolve_labels(event.workflow_job.labels)
-        except MachinePolicyError as e:
-            logger.warning(
-                "Machine policy rejected",
-                extra={"reason": e.reason, "offending_tokens": e.offending_tokens},
-            )
-            return None
 
         operation = await create_vm(
             instance_name=vm_name,
