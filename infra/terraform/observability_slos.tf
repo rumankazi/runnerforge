@@ -21,9 +21,14 @@ resource "google_monitoring_slo" "availability" {
 
 # Time-to-Register — fraction of runner-registration events completing
 # within 300s. Distribution_cut takes the histogram from the
-# time_to_runner_seconds log-based metric and counts samples where
+# runner_readiness_seconds log-based metric and counts samples where
 # value <= 300 as "good". Threshold 0.995 means 99.5% of registrations
 # must land under 5 minutes for the SLO to hold over a 5-minute window.
+#
+# Sourced from `runner_readiness_seconds` (on-our-side), not the older
+# `time_to_runner_seconds` (end-to-end including GitHub delivery delay).
+# The latter conflated GitHub-side delivery jitter with our service's
+# latency, burning SLO budget for things outside our control.
 resource "google_monitoring_slo" "time_to_register" {
   # Wait for the log-based metric to become queryable. The SLO API rejects
   # references to metrics that exist in TF state but haven't yet propagated
@@ -42,7 +47,7 @@ resource "google_monitoring_slo" "time_to_register" {
       threshold = 0.995
       performance {
         distribution_cut {
-          distribution_filter = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.time_to_runner_seconds.name}\" resource.type=\"cloud_run_revision\""
+          distribution_filter = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.runner_readiness_seconds.name}\" resource.type=\"cloud_run_revision\""
           range {
             max = 300
           }

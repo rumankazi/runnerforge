@@ -375,7 +375,7 @@
         "width": 48,
         "height": 16,
         "widget": {
-          "title": "Time-to-Register p05/p50/p95",
+          "title": "Runner Readiness p05/p50/p95 (SLO source, excl. GH delay)",
           "xyChart": {
             "chartOptions": {
               "mode": "COLOR"
@@ -393,7 +393,7 @@
                       "crossSeriesReducer": "REDUCE_MEAN",
                       "perSeriesAligner": "ALIGN_PERCENTILE_05"
                     },
-                    "filter": "metric.type=\"logging.googleapis.com/user/time_to_runner_seconds\" resource.type=\"cloud_run_revision\""
+                    "filter": "metric.type=\"logging.googleapis.com/user/runner_readiness_seconds\" resource.type=\"cloud_run_revision\""
                   }
                 }
               },
@@ -409,7 +409,7 @@
                       "crossSeriesReducer": "REDUCE_MEAN",
                       "perSeriesAligner": "ALIGN_PERCENTILE_50"
                     },
-                    "filter": "metric.type=\"logging.googleapis.com/user/time_to_runner_seconds\" resource.type=\"cloud_run_revision\""
+                    "filter": "metric.type=\"logging.googleapis.com/user/runner_readiness_seconds\" resource.type=\"cloud_run_revision\""
                   }
                 }
               },
@@ -425,7 +425,7 @@
                       "crossSeriesReducer": "REDUCE_MEAN",
                       "perSeriesAligner": "ALIGN_PERCENTILE_95"
                     },
-                    "filter": "metric.type=\"logging.googleapis.com/user/time_to_runner_seconds\" resource.type=\"cloud_run_revision\""
+                    "filter": "metric.type=\"logging.googleapis.com/user/runner_readiness_seconds\" resource.type=\"cloud_run_revision\""
                   }
                 }
               }
@@ -781,6 +781,155 @@
             ],
             "yAxis": {
               "label": "events/min",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "yPos": 164,
+        "xPos": 0,
+        "width": 48,
+        "height": 4,
+        "widget": {
+          "title": "Webhook delivery latency",
+          "sectionHeader": {
+            "subtitle": "Separating GitHub-side webhook delay from our service's latency. Time-to-Register SLO is sourced from Runner Readiness above (excl. GH delay).",
+            "dividerBelow": true
+          }
+        }
+      },
+      {
+        "yPos": 168,
+        "xPos": 0,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "End-to-end Time-to-Runner p50/p95 (incl. GH delay)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "legendTemplate": "p50",
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_50"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/time_to_runner_seconds\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              },
+              {
+                "legendTemplate": "p95",
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/time_to_runner_seconds\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "label": "s",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "yPos": 168,
+        "xPos": 24,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "GitHub webhook delivery lag p50/p95 (observation only)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "legendTemplate": "queued p50",
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_50"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/github_queued_delivery_lag_seconds\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              },
+              {
+                "legendTemplate": "queued p95",
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/github_queued_delivery_lag_seconds\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              },
+              {
+                "legendTemplate": "in_progress p50",
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_50"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/github_in_progress_delivery_lag_seconds\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              },
+              {
+                "legendTemplate": "in_progress p95",
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/github_in_progress_delivery_lag_seconds\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "label": "s",
               "scale": "LINEAR"
             }
           }

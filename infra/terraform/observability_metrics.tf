@@ -135,13 +135,14 @@ resource "google_logging_metric" "vm_deletion_count" {
 }
 
 # ---------------------------------------------------------------------------
-# Runner registration latency — backs the Time-to-Register SLO
+# Runner registration latency — backs the Time-to-Register SLO + dashboards
 # ---------------------------------------------------------------------------
 
-# Distribution of seconds between GitHub job creation and runner pickup.
-# Source field `time_to_runner_seconds` is a numeric on the structured log;
-# extracted as the metric value, bucketed exponentially to cover the full
-# realistic range (seconds → many minutes for outliers).
+# End-to-end view: distribution of seconds between GitHub job creation and
+# runner pickup. Includes GitHub-side webhook delivery delay so degradations
+# here can't cleanly be attributed to our service. Kept as a tracking
+# dashboard metric only — the SLO points at `runner_readiness_seconds`
+# below, which strips the GitHub-side delay.
 resource "google_logging_metric" "time_to_runner_seconds" {
   name   = "time_to_runner_seconds"
   filter = <<-EOT
@@ -169,6 +170,102 @@ resource "google_logging_metric" "time_to_runner_seconds" {
     "machine_type"  = "EXTRACT(jsonPayload.machine_type)"
     "image_version" = "EXTRACT(jsonPayload.image_version)"
   }
+
+  bucket_options {
+    exponential_buckets {
+      num_finite_buckets = 12
+      growth_factor      = 2.0
+      scale              = 1.0
+    }
+  }
+}
+
+# On-our-side latency: from the moment we received the queued webhook to
+# the moment GitHub stamped `started_at` on the job. Strips GitHub's
+# queued-webhook delivery delay (which polluted `time_to_runner_seconds`
+# as an SLO signal). Source of the Time-to-Register SLO since this PR.
+resource "google_logging_metric" "runner_readiness_seconds" {
+  name   = "runner_readiness_seconds"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Runner registration outcome"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "DISTRIBUTION"
+    unit        = "s"
+    labels {
+      key        = "machine_type"
+      value_type = "STRING"
+    }
+    labels {
+      key        = "image_version"
+      value_type = "STRING"
+    }
+  }
+
+  value_extractor = "EXTRACT(jsonPayload.runner_readiness_seconds)"
+
+  label_extractors = {
+    "machine_type"  = "EXTRACT(jsonPayload.machine_type)"
+    "image_version" = "EXTRACT(jsonPayload.image_version)"
+  }
+
+  bucket_options {
+    exponential_buckets {
+      num_finite_buckets = 12
+      growth_factor      = 2.0
+      scale              = 1.0
+    }
+  }
+}
+
+# Observation-only: GitHub-side delay firing the `queued` webhook. Computed
+# as `queued_received_at - workflow_job.created_at`. Not alertable (it's
+# GitHub's responsibility, not ours), but tracking it lets us correlate
+# "our SLO got worse" with "GitHub got slower at delivering webhooks."
+resource "google_logging_metric" "github_queued_delivery_lag_seconds" {
+  name   = "github_queued_delivery_lag_seconds"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Runner registration outcome"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "DISTRIBUTION"
+    unit        = "s"
+  }
+
+  value_extractor = "EXTRACT(jsonPayload.github_queued_delivery_lag_seconds)"
+
+  bucket_options {
+    exponential_buckets {
+      num_finite_buckets = 12
+      growth_factor      = 2.0
+      scale              = 1.0
+    }
+  }
+}
+
+# Observation-only: GitHub-side delay firing the `in_progress` webhook.
+# Computed as `in_progress_received_at - workflow_job.started_at`. Same
+# rationale as the queued lag metric.
+resource "google_logging_metric" "github_in_progress_delivery_lag_seconds" {
+  name   = "github_in_progress_delivery_lag_seconds"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Runner registration outcome"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "DISTRIBUTION"
+    unit        = "s"
+  }
+
+  value_extractor = "EXTRACT(jsonPayload.github_in_progress_delivery_lag_seconds)"
 
   bucket_options {
     exponential_buckets {
@@ -485,6 +582,9 @@ resource "time_sleep" "wait_for_log_metrics" {
     google_logging_metric.vm_creation_outcome_count,
     google_logging_metric.vm_deletion_count,
     google_logging_metric.time_to_runner_seconds,
+    google_logging_metric.runner_readiness_seconds,
+    google_logging_metric.github_queued_delivery_lag_seconds,
+    google_logging_metric.github_in_progress_delivery_lag_seconds,
     google_logging_metric.webhook_request_count,
     google_logging_metric.webhook_rejection_count,
     google_logging_metric.webhook_event_count,
