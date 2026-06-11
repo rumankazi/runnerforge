@@ -9,7 +9,7 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from opentelemetry import trace
 
 from runnerforge import compute_client, github_client
-from runnerforge.compute_client import wait_for_vm_creation
+from runnerforge.compute_client import cross_check_preemption, wait_for_vm_creation
 from runnerforge.config import (
     EXPECTED_AUDIENCE,
     EXPECTED_SCHEDULER_SA_EMAIL,
@@ -41,6 +41,7 @@ async def lifespan(app: FastAPI):
     compute_client.init_compute_client()
     compute_client.init_runner_image()
     compute_client.init_machine_types_cache()
+    compute_client.init_logging_client()
     logger.info("Clients initialized")
     yield
     await github_client.close_http_client()
@@ -160,7 +161,17 @@ async def webhook(
         case "in_progress":
             await handle_in_progress(event)
         case "completed":
-            await handle_completed(event)
+            preempt_req = await handle_completed(event)
+            if preempt_req is not None:
+                # Snapshot context now; background task re-installs it so
+                # request_id/job_id/repo correlation survives the post-response
+                # hop into the audit-log query.
+                background_tasks.add_task(
+                    with_log_context,
+                    get_context(),
+                    cross_check_preemption,
+                    preempt_req,
+                )
         case _:
             logger.warning("Ignoring unknown action", extra={"action": event.action})
     return {"ok": True}

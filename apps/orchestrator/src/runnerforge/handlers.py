@@ -4,6 +4,7 @@ from opentelemetry import trace
 
 from runnerforge.compute_client import (
     OperationHandle,
+    PreemptionCheckRequest,
     create_vm,
     delete_vm,
     get_vm_labels_by_job,
@@ -129,7 +130,13 @@ async def handle_in_progress(event: WorkflowJobEvent):
             )
 
 
-async def handle_completed(event: WorkflowJobEvent):
+async def handle_completed(event: WorkflowJobEvent) -> PreemptionCheckRequest | None:
+    """Process a `workflow_job.completed` webhook: deletes the runner VM and
+    returns a `PreemptionCheckRequest` when the job ended in failure or
+    cancellation — the caller (main.py) schedules the audit-log cross-check
+    in a BackgroundTask. Symmetric with `handle_queued` returning an
+    `OperationHandle` for `wait_for_vm_creation` to consume.
+    """
     with tracer.start_as_current_span("webhook.handle_completed") as span:
         span.set_attribute("repo", event.repository.full_name)
         span.set_attribute("sender", event.sender.login)
@@ -144,7 +151,7 @@ async def handle_completed(event: WorkflowJobEvent):
                 "No VM found for completed job (already cleaned up or never created)",
                 extra={"runner_name": runner_name},
             )
-            return
+            return None
         span.set_attribute("runner_name", runner_name)
 
         operation_id = await delete_vm(runner_name, reason="webhook")
@@ -152,3 +159,17 @@ async def handle_completed(event: WorkflowJobEvent):
             "VM deletion submitted",
             extra={"runner_name": runner_name, "operation_id": operation_id},
         )
+
+        # On failure/cancellation, surface a PreemptionCheckRequest so main.py
+        # can schedule the audit-log cross-check in a BackgroundTask. Keeps the
+        # webhook response off the Cloud Logging round-trip (~100-500ms) and
+        # ensures request_id/job_id/repo correlation survives the post-response
+        # hop (main.py wraps the task with `with_log_context`).
+        conclusion = event.workflow_job.conclusion
+        if conclusion in ("failure", "cancelled"):
+            return PreemptionCheckRequest(
+                vm_name=runner_name,
+                job_id=event.workflow_job.id,
+                conclusion=conclusion,
+            )
+        return None

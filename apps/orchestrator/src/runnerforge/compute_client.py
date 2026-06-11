@@ -2,11 +2,13 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from google.api_core.exceptions import AlreadyExists, GoogleAPIError, NotFound
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud import compute_v1
+from google.cloud import logging as gcp_logging
 from opentelemetry import trace
 from pydantic import ValidationError
 
@@ -14,6 +16,7 @@ from runnerforge.config import GCP_PROJECT_ID, GCP_ZONE, RUNNER_VM_SA_EMAIL
 from runnerforge.models import RunnerForgeVmLabels, VmInfo
 
 _KNOWN_MACHINE_TYPES: set[str] | None = None
+_logging_client: gcp_logging.Client | None = None
 _RUNNER_IMAGE_NAME: str | None = None  # full GCE name, used as source_image pin
 _RUNNER_IMAGE_VERSION: str | None = None  # dotted semver, used in logs/metrics
 _BOOT_IMAGE_FAMILY = "projects/runnerforge/global/images/family/runnerforge-runner"
@@ -33,6 +36,18 @@ class OperationHandle:
     spot: bool
     machine_type: str
     image_version: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class PreemptionCheckRequest:
+    """What `handle_completed` returns when a failed/cancelled job should be
+    cross-checked for spot preemption. Consumed by `cross_check_preemption`
+    inside a BackgroundTask. Symmetric with `OperationHandle` for the queued
+    path — handler returns data, main.py owns the BackgroundTask scheduling."""
+
+    vm_name: str
+    job_id: int
+    conclusion: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +80,7 @@ def init_compute_client():
 
 
 def close_compute_client():
-    global _compute_client, _zone_ops_client, _images_client
+    global _compute_client, _zone_ops_client, _images_client, _logging_client
     if _compute_client is not None:
         _compute_client.transport.close()
         _compute_client = None
@@ -77,6 +92,24 @@ def close_compute_client():
     if _images_client is not None:
         _images_client.transport.close()
         _images_client = None
+
+    if _logging_client is not None:
+        _logging_client.close()
+        _logging_client = None
+
+
+def init_logging_client() -> None:
+    """Initialize the Cloud Logging client used for audit-log queries (e.g. the
+    preemption cross-check). Tolerant of startup failures — leaves the client
+    at None and degrades to 'no preemption signal' if creds aren't available."""
+    global _logging_client
+    try:
+        _logging_client = gcp_logging.Client(project=GCP_PROJECT_ID)
+    except DefaultCredentialsError:
+        logger.warning(
+            "logging client init skipped - no GCP credentials available; "
+            "preemption cross-check will degrade to no-signal"
+        )
 
 
 # Helper to convert runnerforge-runner-image-0-1-0 to 0.1.0
@@ -147,6 +180,61 @@ def is_valid_machine_type(machine_type: str) -> bool:
     if _KNOWN_MACHINE_TYPES is None:
         return True
     return machine_type in _KNOWN_MACHINE_TYPES
+
+
+async def was_preempted(vm_name: str) -> bool:
+    """Query Cloud Audit Log for `compute.instances.preempted` entries matching
+    the given VM. Returns True if the VM was reclaimed by GCE's Spot scheduler,
+    False otherwise (including the degraded-client case, on API error, or when
+    no matching entry exists).
+
+    24h lookback covers any reasonable runner lifetime (sweep HARD_LIMIT=6h;
+    GH job timeout ~24h). Filter is VM-name-scoped so it's specific even
+    without a tighter timestamp bound.
+    """
+    if _logging_client is None:
+        return False
+    client = _logging_client  # local binding so the lambda's closure type-narrows
+
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    filter_str = (
+        f'protoPayload.methodName="compute.instances.preempted" '
+        f'AND protoPayload.resourceName:"{vm_name}" '
+        f'AND timestamp >= "{since.isoformat()}"'
+    )
+
+    try:
+        entries = await asyncio.to_thread(
+            lambda: list(client.list_entries(filter_=filter_str, max_results=1))
+        )
+    except GoogleAPIError as e:
+        logger.warning(
+            "Failed to query audit log for preemption check",
+            extra={"vm_name": vm_name, "reason": str(e)},
+        )
+        return False
+
+    return bool(entries)
+
+
+async def cross_check_preemption(request: PreemptionCheckRequest) -> None:
+    """BackgroundTask body: ask the audit log whether the VM in `request` was
+    reclaimed by GCE's Spot scheduler. If so, emit a structured event so the
+    operator (and the future user-facing frontend) can distinguish preemption
+    from a normal runner failure.
+
+    Mirrors `wait_for_vm_creation` in shape: takes a typed request object,
+    queries GCE-side state, emits a structured log on the result.
+    """
+    if await was_preempted(request.vm_name):
+        logger.warning(
+            "Job ended due to spot preemption",
+            extra={
+                "vm_name": request.vm_name,
+                "job_id": request.job_id,
+                "conclusion": request.conclusion,
+            },
+        )
 
 
 async def create_vm(
@@ -323,7 +411,7 @@ async def wait_for_vm_creation(
                         error_message=first.message,
                     )
                     logger.warning(
-                        "vm.create.outcome",
+                        "VM creation outcome",
                         extra={
                             "outcome": outcome.outcome,
                             "op_name": outcome.op_name,
@@ -344,7 +432,7 @@ async def wait_for_vm_creation(
                         duration_ms=duration_ms,
                     )
                     logger.info(
-                        "vm.create.outcome",
+                        "VM creation outcome",
                         extra={
                             "outcome": outcome.outcome,
                             "op_name": outcome.op_name,
@@ -368,7 +456,7 @@ async def wait_for_vm_creation(
             duration_ms=duration_ms,
         )
         logger.warning(
-            "vm.create.outcome",
+            "VM creation outcome",
             extra={
                 "outcome": outcome.outcome,
                 "op_name": outcome.op_name,
