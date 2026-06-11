@@ -3,6 +3,11 @@ self-hosted-runner:
   labels:
     - runnerforge
     - e2-medium
+    - small
+    - medium
+    - large
+    - xlarge
+    - spot
 
 # Configuration variables in array of strings defined in your repository or
 # organization. `null` means disabling configuration variables check.
