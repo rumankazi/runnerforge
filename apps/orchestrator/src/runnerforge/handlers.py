@@ -7,6 +7,7 @@ from runnerforge.compute_client import (
     create_vm,
     delete_vm,
     get_vm_labels_by_job,
+    is_valid_machine_type,
 )
 from runnerforge.config import STARTUP_SCRIPT
 from runnerforge.github_client import get_installation_token, get_registration_token
@@ -33,6 +34,8 @@ async def handle_queued(event: WorkflowJobEvent) -> OperationHandle | None:
         # Get requested machine type from labels
         try:
             policy = resolve_labels(event.workflow_job.labels)
+            if not is_valid_machine_type(policy.machine_type):
+                raise MachinePolicyError("invalid_machine_type", [policy.machine_type])
         except MachinePolicyError as e:
             logger.warning(
                 "Machine policy rejected",

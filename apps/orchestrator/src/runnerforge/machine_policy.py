@@ -20,7 +20,7 @@ class MachinePolicy:
 
 @dataclass
 class MachinePolicyError(Exception):
-    reason: Literal["unknown_token", "conflicting_machines"]
+    reason: Literal["unknown_token", "conflicting_machines", "invalid_machine_type"]
     offending_tokens: list[str]
 
     def __post_init__(self):
