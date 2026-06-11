@@ -24,10 +24,32 @@ resource "google_project_iam_member" "ci_runner_image_build_instance_admin" {
   member  = "serviceAccount:${google_service_account.ci_runner_image_build.email}"
 }
 
-# Allows SA ci-runner-image-build to publish images to storage
-resource "google_project_iam_member" "ci_runner_image_build_publish_image" {
+# Tightened replacement for the previous `roles/compute.storageAdmin` grant on
+# ci-runner-image-build. Scopes the SA's image authority to the minimum needed
+# to: create the image (Packer), use it as a source (smoke test), set/update
+# metadata (family promote + deprecate), list/get family members for
+# retention, and delete on demand.
+resource "google_project_iam_custom_role" "ci_runner_image_manager_role" {
+  role_id     = "runnerImageManager"
+  title       = "RunnerForge Runner Image Manager (CI)"
+  description = "Image-only permissions for the ci-runner-image-build SA: replaces the previous roles/compute.storageAdmin grant with a narrowly-scoped image lifecycle role."
+  project     = data.google_project.current.project_id
+  permissions = [
+    "compute.images.create",
+    "compute.images.delete",
+    "compute.images.deprecate",
+    "compute.images.get",
+    "compute.images.list",
+    "compute.images.setLabels",
+    "compute.images.update",
+    "compute.images.useReadOnly",
+  ]
+}
+
+# Binds ci-runner-image-build SA to the custom role above.
+resource "google_project_iam_member" "ci_runner_image_manager" {
   project = data.google_project.current.project_id
-  role    = "roles/compute.storageAdmin"
+  role    = google_project_iam_custom_role.ci_runner_image_manager_role.name
   member  = "serviceAccount:${google_service_account.ci_runner_image_build.email}"
 }
 
