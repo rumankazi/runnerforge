@@ -56,7 +56,7 @@ resource "google_logging_metric" "vm_creation_outcome_count" {
   name   = "vm_creation_outcome_count"
   filter = <<-EOT
     ${local.log_metric_resource_filter}
-    jsonPayload.message="vm.create.outcome"
+    jsonPayload.message="VM creation outcome"
   EOT
 
   metric_descriptor {

@@ -61,6 +61,7 @@ def test_lifespan_initializes_and_closes_clients(monkeypatch):
     init_compute = MagicMock()
     init_image = MagicMock()
     init_cache = MagicMock()
+    init_logging = MagicMock()
     close_compute = MagicMock()
 
     monkeypatch.setattr(github_client, "init_http_client", init_http)
@@ -68,6 +69,7 @@ def test_lifespan_initializes_and_closes_clients(monkeypatch):
     monkeypatch.setattr(compute_client, "init_compute_client", init_compute)
     monkeypatch.setattr(compute_client, "init_runner_image", init_image)
     monkeypatch.setattr(compute_client, "init_machine_types_cache", init_cache)
+    monkeypatch.setattr(compute_client, "init_logging_client", init_logging)
     monkeypatch.setattr(compute_client, "close_compute_client", close_compute)
 
     with TestClient(app):
@@ -75,6 +77,7 @@ def test_lifespan_initializes_and_closes_clients(monkeypatch):
         init_compute.assert_called_once()
         init_image.assert_called_once()
         init_cache.assert_called_once()
+        init_logging.assert_called_once()
     # After exiting the context, shutdown has run
     close_http.assert_awaited_once()
     close_compute.assert_called_once()
@@ -92,3 +95,16 @@ def test_close_compute_client_closes_both_transports(monkeypatch):
     zone_ops_mock.transport.close.assert_called_once()
     assert compute_client._compute_client is None
     assert compute_client._zone_ops_client is None
+
+
+def test_close_compute_client_closes_logging_client(monkeypatch):
+    # The logging client uses a different close pattern from the compute
+    # clients (high-level .close() instead of .transport.close()). This pins
+    # that the close branch in close_compute_client actually runs.
+    logging_mock = MagicMock()
+    monkeypatch.setattr(compute_client, "_logging_client", logging_mock)
+
+    compute_client.close_compute_client()
+
+    logging_mock.close.assert_called_once()
+    assert compute_client._logging_client is None

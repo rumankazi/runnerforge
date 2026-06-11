@@ -500,7 +500,7 @@ def test_wait_for_vm_creation_returns_success_when_op_done_no_error(
     assert outcome.error_message is None
     assert outcome.duration_ms >= 0
 
-    log = next((r for r in caplog.records if r.message == "vm.create.outcome"), None)
+    log = next((r for r in caplog.records if r.message == "VM creation outcome"), None)
     assert log is not None
     assert log.levelno == logging.INFO
     assert log.outcome == "success"
@@ -532,7 +532,7 @@ def test_wait_for_vm_creation_returns_failure_on_op_error(monkeypatch, caplog):
     assert outcome.error_code == "QUOTA_EXCEEDED"
     assert outcome.error_message == "SSD_TOTAL_GB cap hit"
 
-    log = next((r for r in caplog.records if r.message == "vm.create.outcome"), None)
+    log = next((r for r in caplog.records if r.message == "VM creation outcome"), None)
     assert log is not None
     assert log.levelno == logging.WARNING
     assert log.outcome == "failure"
@@ -588,7 +588,7 @@ def test_wait_for_vm_creation_times_out_when_op_stays_running(monkeypatch, caplo
     assert outcome.outcome == "timeout"
     assert outcome.error_code is None
 
-    log = next((r for r in caplog.records if r.message == "vm.create.outcome"), None)
+    log = next((r for r in caplog.records if r.message == "VM creation outcome"), None)
     assert log is not None
     assert log.levelno == logging.WARNING
     assert log.outcome == "timeout"
@@ -972,3 +972,92 @@ def test_create_vm_omits_scheduling_block_when_spot_false(monkeypatch):
     ].instance_resource.scheduling
     assert scheduling.provisioning_model == ""
     assert scheduling.instance_termination_action == ""
+
+
+# -----------------------------------------------------------------------------
+# init_logging_client
+# -----------------------------------------------------------------------------
+
+
+def test_init_logging_client_assigns_client(monkeypatch):
+    sentinel = MagicMock()
+    monkeypatch.setattr(
+        "runnerforge.compute_client.gcp_logging.Client",
+        lambda **kwargs: sentinel,
+    )
+    monkeypatch.setattr(compute_client, "_logging_client", None)
+
+    compute_client.init_logging_client()
+
+    assert compute_client._logging_client is sentinel
+
+
+def test_init_logging_client_logs_warning_when_no_credentials(monkeypatch, caplog):
+    def _raise(**kwargs):
+        raise DefaultCredentialsError("no creds")
+
+    monkeypatch.setattr("runnerforge.compute_client.gcp_logging.Client", _raise)
+    monkeypatch.setattr(compute_client, "_logging_client", None)
+
+    with caplog.at_level(logging.WARNING):
+        compute_client.init_logging_client()
+
+    assert compute_client._logging_client is None
+    assert any(
+        r.levelno == logging.WARNING and "logging client init skipped" in r.message
+        for r in caplog.records
+    )
+
+
+# -----------------------------------------------------------------------------
+# was_preempted
+# -----------------------------------------------------------------------------
+
+
+def test_was_preempted_returns_true_when_audit_entry_found(monkeypatch):
+    mock_client = MagicMock()
+    mock_client.list_entries.return_value = iter([MagicMock()])
+    monkeypatch.setattr(compute_client, "_logging_client", mock_client)
+
+    result = asyncio.run(compute_client.was_preempted("test-vm"))
+
+    assert result is True
+    mock_client.list_entries.assert_called_once()
+    filter_arg = mock_client.list_entries.call_args.kwargs["filter_"]
+    assert "compute.instances.preempted" in filter_arg
+    assert "test-vm" in filter_arg
+
+
+def test_was_preempted_returns_false_when_no_entry(monkeypatch):
+    mock_client = MagicMock()
+    mock_client.list_entries.return_value = iter([])
+    monkeypatch.setattr(compute_client, "_logging_client", mock_client)
+
+    result = asyncio.run(compute_client.was_preempted("test-vm"))
+
+    assert result is False
+
+
+def test_was_preempted_returns_false_when_client_unavailable(monkeypatch):
+    # Degraded mode — preemption signal not available, so we treat the failure
+    # as a normal runner failure (no false positive on the preemption metric).
+    monkeypatch.setattr(compute_client, "_logging_client", None)
+
+    result = asyncio.run(compute_client.was_preempted("test-vm"))
+
+    assert result is False
+
+
+def test_was_preempted_returns_false_on_api_error(monkeypatch, caplog):
+    mock_client = MagicMock()
+    mock_client.list_entries.side_effect = GoogleAPIError("API failed")
+    monkeypatch.setattr(compute_client, "_logging_client", mock_client)
+
+    with caplog.at_level(logging.WARNING):
+        result = asyncio.run(compute_client.was_preempted("test-vm"))
+
+    assert result is False
+    assert any(
+        "Failed to query audit log for preemption check" in r.message
+        for r in caplog.records
+    )

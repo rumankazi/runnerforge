@@ -38,6 +38,17 @@ resource "google_project_iam_member" "orchestrator_cloud_trace_agent" {
   member  = "serviceAccount:${google_service_account.orchestrator.email}"
 }
 
+# Read-only access to Cloud Logging for the preemption cross-check in
+# handle_completed. The orchestrator queries audit logs for
+# `compute.instances.preempted` entries to distinguish spot-preemption
+# failures from regular runner failures. Read-only is sufficient; write is
+# already covered by `roles/logging.logWriter` above.
+resource "google_project_iam_member" "orchestrator_log_viewer" {
+  project = data.google_project.current.project_id
+  role    = "roles/logging.viewer"
+  member  = "serviceAccount:${google_service_account.orchestrator.email}"
+}
+
 # ----- Secret-level grants (narrowest scope possible) ----
 
 resource "google_secret_manager_secret_iam_member" "orchestrator_reads_webhook_secret" {

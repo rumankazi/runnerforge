@@ -427,6 +427,107 @@ def test_webhook_completed_event_logs_when_no_vm_found(
 
 
 @respx.mock
+def test_webhook_completed_failure_logs_preemption_when_audit_log_says_so(
+    fixtures_dir, monkeypatch, caplog
+):
+    """When a job completes with conclusion=failure AND the audit log shows
+    the VM was preempted, the BackgroundTask emits a structured
+    'Job ended due to spot preemption' event. This is the foundation for the
+    future user-facing per-job-outcome surface."""
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload["action"] = "completed"
+    payload["workflow_job"]["conclusion"] = "failure"
+    payload["workflow_job"]["runner_name"] = "test-runner-preempted"
+    payload["workflow_job"]["runner_id"] = 1234
+    body = json.dumps(payload).encode()
+
+    monkeypatch.setattr(
+        "runnerforge.handlers.delete_vm", AsyncMock(return_value="op-test")
+    )
+    # Cross-check returns True → preemption was found in the audit log
+    was_preempted_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("runnerforge.handlers.was_preempted", was_preempted_mock)
+
+    with caplog.at_level(logging.WARNING):
+        response = client.post(
+            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+        )
+
+    assert response.status_code == 200
+    # BackgroundTask ran the cross-check
+    was_preempted_mock.assert_awaited_once_with("test-runner-preempted")
+    # Structured event fired with the right payload
+    assert any(
+        r.levelno == logging.WARNING
+        and "Job ended due to spot preemption" in r.message
+        and getattr(r, "vm_name", None) == "test-runner-preempted"
+        and getattr(r, "conclusion", None) == "failure"
+        for r in caplog.records
+    )
+
+
+@respx.mock
+def test_webhook_completed_failure_skips_preemption_log_when_audit_log_empty(
+    fixtures_dir, monkeypatch, caplog
+):
+    """Conclusion=failure but no preemption entry in the audit log → cross-check
+    runs but no structured preemption event. The job failed for some other
+    reason (real bug, OOM, etc.) — not our concern to characterize."""
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload["action"] = "completed"
+    payload["workflow_job"]["conclusion"] = "failure"
+    payload["workflow_job"]["runner_name"] = "test-runner-real-fail"
+    payload["workflow_job"]["runner_id"] = 5678
+    body = json.dumps(payload).encode()
+
+    monkeypatch.setattr(
+        "runnerforge.handlers.delete_vm", AsyncMock(return_value="op-test")
+    )
+    was_preempted_mock = AsyncMock(return_value=False)
+    monkeypatch.setattr("runnerforge.handlers.was_preempted", was_preempted_mock)
+
+    response = client.post(
+        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+    )
+
+    assert response.status_code == 200
+    was_preempted_mock.assert_awaited_once_with("test-runner-real-fail")
+    # No preemption event emitted
+    assert not any(
+        "Job ended due to spot preemption" in r.message for r in caplog.records
+    )
+
+
+@respx.mock
+def test_webhook_completed_success_does_not_schedule_preemption_check(
+    fixtures_dir, monkeypatch, caplog
+):
+    """Conclusion=success → no cross-check scheduled. Skipping the audit-log
+    query on the success path keeps the common case cheap (no Cloud Logging
+    call) and prevents spurious preemption signals."""
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload["action"] = "completed"
+    payload["workflow_job"]["conclusion"] = "success"
+    payload["workflow_job"]["runner_name"] = "test-runner-ok"
+    payload["workflow_job"]["runner_id"] = 9999
+    body = json.dumps(payload).encode()
+
+    monkeypatch.setattr(
+        "runnerforge.handlers.delete_vm", AsyncMock(return_value="op-test")
+    )
+    was_preempted_mock = AsyncMock(return_value=False)
+    monkeypatch.setattr("runnerforge.handlers.was_preempted", was_preempted_mock)
+
+    response = client.post(
+        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+    )
+
+    assert response.status_code == 200
+    # Cross-check NOT scheduled for successful jobs
+    was_preempted_mock.assert_not_awaited()
+
+
+@respx.mock
 def test_webhook_unknown_action_logs_warning(fixtures_dir, caplog):
     payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
     payload["action"] = "deleted"  # not in our match arms

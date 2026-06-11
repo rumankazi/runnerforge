@@ -1,5 +1,6 @@
 import logging
 
+from fastapi import BackgroundTasks
 from opentelemetry import trace
 
 from runnerforge.compute_client import (
@@ -8,9 +9,11 @@ from runnerforge.compute_client import (
     delete_vm,
     get_vm_labels_by_job,
     is_valid_machine_type,
+    was_preempted,
 )
 from runnerforge.config import STARTUP_SCRIPT
 from runnerforge.github_client import get_installation_token, get_registration_token
+from runnerforge.logger import get_context, with_log_context
 from runnerforge.machine_policy import MachinePolicyError, resolve_labels
 from runnerforge.models import RunnerForgeVmLabels, WorkflowJobEvent
 
@@ -129,7 +132,25 @@ async def handle_in_progress(event: WorkflowJobEvent):
             )
 
 
-async def handle_completed(event: WorkflowJobEvent):
+async def _cross_check_preemption(vm_name: str, job_id: int, conclusion: str) -> None:
+    """BackgroundTask body: ask the audit log whether this VM was reclaimed by
+    GCE's Spot scheduler. If so, emit a structured event so the operator (and
+    eventually the future user-facing frontend) can distinguish preemption from
+    a normal runner failure."""
+    if await was_preempted(vm_name):
+        logger.warning(
+            "Job ended due to spot preemption",
+            extra={
+                "vm_name": vm_name,
+                "job_id": job_id,
+                "conclusion": conclusion,
+            },
+        )
+
+
+async def handle_completed(
+    event: WorkflowJobEvent, background_tasks: BackgroundTasks
+):
     with tracer.start_as_current_span("webhook.handle_completed") as span:
         span.set_attribute("repo", event.repository.full_name)
         span.set_attribute("sender", event.sender.login)
@@ -152,3 +173,18 @@ async def handle_completed(event: WorkflowJobEvent):
             "VM deletion submitted",
             extra={"runner_name": runner_name, "operation_id": operation_id},
         )
+
+        # On failure/cancellation, cross-check the audit log for a preemption
+        # event. Runs in a BackgroundTask so the webhook response isn't blocked
+        # on the Cloud Logging round-trip (~100-500ms). LogContext is snapshotted
+        # so request_id/job_id/repo correlation survives the post-response hop.
+        conclusion = event.workflow_job.conclusion
+        if conclusion in ("failure", "cancelled"):
+            background_tasks.add_task(
+                with_log_context,
+                get_context(),
+                _cross_check_preemption,
+                runner_name,
+                event.workflow_job.id,
+                conclusion,
+            )

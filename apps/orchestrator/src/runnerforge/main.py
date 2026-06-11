@@ -41,6 +41,7 @@ async def lifespan(app: FastAPI):
     compute_client.init_compute_client()
     compute_client.init_runner_image()
     compute_client.init_machine_types_cache()
+    compute_client.init_logging_client()
     logger.info("Clients initialized")
     yield
     await github_client.close_http_client()
@@ -160,7 +161,7 @@ async def webhook(
         case "in_progress":
             await handle_in_progress(event)
         case "completed":
-            await handle_completed(event)
+            await handle_completed(event, background_tasks)
         case _:
             logger.warning("Ignoring unknown action", extra={"action": event.action})
     return {"ok": True}
