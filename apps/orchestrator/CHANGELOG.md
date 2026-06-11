@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.14.0...orchestrator-v0.15.0) (2026-06-11)
+
+
+### Features
+
+* add spot machines status cross check ([#133](https://github.com/rumankazi/runnerforge/issues/133)) ([29d8266](https://github.com/rumankazi/runnerforge/commit/29d82667deb8d8ad9c11ce1ffc610c39d6438bc9))
+
 ## [0.14.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.13.0...orchestrator-v0.14.0) (2026-06-11)
 
 
