@@ -107,7 +107,7 @@ resource "google_monitoring_alert_policy" "cold_start_p95" {
     condition_threshold {
       filter                  = "metric.type=\"run.googleapis.com/container/startup_latencies\" resource.type=\"cloud_run_revision\" resource.labels.service_name=\"${google_cloud_run_v2_service.orchestrator.name}\""
       comparison              = "COMPARISON_GT"
-      threshold_value         = 8000
+      threshold_value         = 30000
       duration                = "300s"
       evaluation_missing_data = "EVALUATION_MISSING_DATA_INACTIVE"
 
