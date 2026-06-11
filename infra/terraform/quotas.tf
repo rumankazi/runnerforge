@@ -5,12 +5,24 @@
 # state details — those are computed attributes. Future quota bumps go
 # through this file: edit `preferred_value`, PR, plan, apply.
 #
-# Capacity math for europe-west4 (verified 2026-06-11):
+# Capacity math for europe-west4 (verified 2026-06-12):
 #
-#   Per-family CPU quotas (GCP defaults, not requested here — visible via
+#   Modern Spot VM quota model:
+#     `provisioning_model = SPOT` VMs (what `compute_client.create_vm` uses
+#     when policy.spot=true) consume the FAMILY-SPECIFIC CPU quota — e.g.
+#     N2_CPUS for n2-standard-* sizes. The legacy `PREEMPTIBLE_CPUS` quota
+#     applies only to old-style Preemptible VMs (`scheduling.preemptible=true`
+#     without `provisioning_model=SPOT`) — which we don't create.
+#     Verified empirically 2026-06-12: a running n2-standard-2 SPOT VM
+#     increments N2_CPUS.usage by 2; PREEMPTIBLE_CPUS.usage stays at 0.
+#     Earlier "we need to bump PREEMPTIBLE_CPUS to enable spot" assumption
+#     was wrong; N2_CPUS=200 (default) was always sufficient.
+#
+#   Per-family CPU quotas (GCP defaults, NOT requested here — visible via
 #   `gcloud compute regions describe europe-west4 --format='value(quotas)'`):
 #     E2_CPUS   = 24    (binding for E2 family — why we don't default to e2)
-#     N2_CPUS   = 200   (50× n2-standard-4 — comfortable headroom)
+#     N2_CPUS   = 200   (50× n2-standard-4 — gates both on-demand AND spot
+#                        for n2 family)
 #     CPUS      = 200   (N1-only in modern regions; doesn't gate E2/N2)
 #     N2D_CPUS  = 16    (tiny)
 #     C2_CPUS   = 8     (tiny)
@@ -18,12 +30,9 @@
 #   User-requested (the preferences in this file):
 #     INSTANCES         = 200    → 200 concurrent VMs total
 #     SSD_TOTAL_GB      = 1500   → 30-VM hard cap (50 GB per runner) ← BINDING
-#     PREEMPTIBLE_CPUS  = 200 (preferred) / 0 (granted, DENIED)
-#                              → spot is blocked until manually re-requested;
-#                                see the resource comment below
 #
-#   Effective ceiling: SSD binds at ~30 concurrent VMs for sizes ≤ std-8;
-#   N2_CPUS binds before SSD only at xlarge (12 concurrent).
+#   Effective ceiling: SSD_TOTAL_GB binds at ~30 concurrent VMs for sizes
+#   ≤ std-8; N2_CPUS binds before SSD only at xlarge (12 concurrent).
 #
 # Importing existing preferences: each was created via `gcloud alpha quotas
 # preferences create` and adopted into TF state via `terraform import` during
@@ -66,28 +75,10 @@ resource "google_cloud_quotas_quota_preference" "ssd_total_gb" {
   }
 }
 
-# DENIED by GCP's auto-evaluator on 2026-06-11. `granted_value` is computed and
-# will read 0 until a re-request succeeds. The TF resource still owns the
-# preference object so the next attempt is a tracked code change rather than
-# another out-of-band gcloud call. To re-request:
-#   1. File via the GCP Console "Quotas & system limits" UI with a written
-#      justification (auto-evaluator denies low-context low-history requests).
-#   2. Once granted, terraform refresh will pick up the new granted_value;
-#      preferred_value in this file already matches the request.
-resource "google_cloud_quotas_quota_preference" "preemptible_cpus" {
-  provider      = google.quotas
-  parent        = "projects/${data.google_project.current.project_id}"
-  name          = "570369b4-fab1-4286-8618-7ec6acb528f5"
-  service       = "compute.googleapis.com"
-  quota_id      = "PREEMPTIBLE-CPUS-per-project-region"
-  contact_email = "kaziruman@gmail.com"
-  justification = "Codified into IaC after the original gcloud request was denied. Re-request through console pending. See infra/terraform/quotas.tf for capacity-math context."
-
-  dimensions = {
-    region = "europe-west4"
-  }
-
-  quota_config {
-    preferred_value = 200
-  }
-}
+# NOTE 2026-06-12: a PREEMPTIBLE_CPUS preference (UUID 570369b4-...) exists
+# in the cloud project as an artifact of the original (denied) request. It
+# is intentionally NOT codified here — the modern Spot model uses
+# family-specific CPU quotas (N2_CPUS), not PREEMPTIBLE_CPUS. The cloud
+# artifact is harmless (granted=0, doesn't gate anything) and can't be
+# deleted via the Cloud Quotas API (no DELETE method exists). Leave it
+# alone; it has no operational effect.
