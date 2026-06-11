@@ -795,16 +795,18 @@ def test_init_machine_types_cache_degrades_on_default_credentials_error(
         _raise,
     )
     # Pre-populate to a sentinel so we can verify the degraded path resets to None
-    monkeypatch.setattr(
-        "runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel"}
-    )
+    monkeypatch.setattr("runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel"})
 
     with caplog.at_level(logging.WARNING):
         compute_client.init_machine_types_cache()
 
     assert compute_client._KNOWN_MACHINE_TYPES is None
     log = next(
-        (r for r in caplog.records if "Failed to load machine types cache" in r.message),
+        (
+            r
+            for r in caplog.records
+            if "Failed to load machine types cache" in r.message
+        ),
         None,
     )
     assert log is not None
@@ -819,16 +821,18 @@ def test_init_machine_types_cache_degrades_on_google_api_error(monkeypatch, capl
         "runnerforge.compute_client.compute_v1.MachineTypesClient",
         lambda: mock_client,
     )
-    monkeypatch.setattr(
-        "runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel"}
-    )
+    monkeypatch.setattr("runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel"})
 
     with caplog.at_level(logging.WARNING):
         compute_client.init_machine_types_cache()
 
     assert compute_client._KNOWN_MACHINE_TYPES is None
     log = next(
-        (r for r in caplog.records if "Failed to load machine types cache" in r.message),
+        (
+            r
+            for r in caplog.records
+            if "Failed to load machine types cache" in r.message
+        ),
         None,
     )
     assert log is not None
@@ -842,9 +846,7 @@ def test_init_machine_types_cache_degrades_on_empty_response(monkeypatch, caplog
         "runnerforge.compute_client.compute_v1.MachineTypesClient",
         lambda: mock_client,
     )
-    monkeypatch.setattr(
-        "runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel"}
-    )
+    monkeypatch.setattr("runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel"})
 
     with caplog.at_level(logging.WARNING):
         compute_client.init_machine_types_cache()
