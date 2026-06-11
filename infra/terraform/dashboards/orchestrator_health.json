@@ -665,43 +665,7 @@
       {
         "yPos": 132,
         "xPos": 0,
-        "width": 24,
-        "height": 16,
-        "widget": {
-          "title": "VM creation rate by spot",
-          "xyChart": {
-            "chartOptions": {
-              "mode": "COLOR"
-            },
-            "dataSets": [
-              {
-                "minAlignmentPeriod": "60s",
-                "plotType": "LINE",
-                "targetAxis": "Y1",
-                "timeSeriesQuery": {
-                  "timeSeriesFilter": {
-                    "aggregation": {
-                      "alignmentPeriod": "60s",
-                      "crossSeriesReducer": "REDUCE_SUM",
-                      "groupByFields": ["metric.label.\"spot\""],
-                      "perSeriesAligner": "ALIGN_DELTA"
-                    },
-                    "filter": "metric.type=\"logging.googleapis.com/user/vm_creation_count\" resource.type=\"cloud_run_revision\""
-                  }
-                }
-              }
-            ],
-            "yAxis": {
-              "label": "events/min",
-              "scale": "LINEAR"
-            }
-          }
-        }
-      },
-      {
-        "yPos": 132,
-        "xPos": 24,
-        "width": 24,
+        "width": 48,
         "height": 16,
         "widget": {
           "title": "Preemption events (GCE audit log vs job-confirmed)",

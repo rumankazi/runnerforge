@@ -41,16 +41,11 @@ resource "google_logging_metric" "vm_creation_count" {
       key        = "image_version"
       value_type = "STRING"
     }
-    labels {
-      key        = "spot"
-      value_type = "STRING"
-    }
   }
 
   label_extractors = {
     "machine_type"  = "EXTRACT(jsonPayload.machine_type)"
     "image_version" = "EXTRACT(jsonPayload.image_version)"
-    "spot"          = "EXTRACT(jsonPayload.spot)"
   }
 }
 
@@ -84,10 +79,6 @@ resource "google_logging_metric" "vm_creation_outcome_count" {
       key        = "error_code"
       value_type = "STRING"
     }
-    labels {
-      key        = "spot"
-      value_type = "STRING"
-    }
   }
 
   label_extractors = {
@@ -95,7 +86,6 @@ resource "google_logging_metric" "vm_creation_outcome_count" {
     "machine_type"  = "EXTRACT(jsonPayload.machine_type)"
     "image_version" = "EXTRACT(jsonPayload.image_version)"
     "error_code"    = "EXTRACT(jsonPayload.error_code)"
-    "spot"          = "EXTRACT(jsonPayload.spot)"
   }
 }
 
