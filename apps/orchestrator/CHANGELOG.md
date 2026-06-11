@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.15.0...orchestrator-v0.16.0) (2026-06-11)
+
+
+### Features
+
+* **orchestrator+infra:** strip GH-side delay from Time-to-Register SLO ([#146](https://github.com/rumankazi/runnerforge/issues/146)) ([4c13322](https://github.com/rumankazi/runnerforge/commit/4c13322acb0a48cee1b2a5c9ae9a0a683a13f167))
+
 ## [0.15.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.14.0...orchestrator-v0.15.0) (2026-06-11)
 
 
