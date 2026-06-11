@@ -1,0 +1,263 @@
+/* ============================================================
+   RunnerForge design tokens — "Industrial forge"
+   Raw ramps live in @theme; semantic aliases are set per-theme
+   on :root/.dark and exposed as utilities via @theme inline.
+   ============================================================ */
+
+@theme {
+  /* ---- Iron ramp: warm umber-tinted neutrals (never gray-blue) ---- */
+  --color-iron-950: oklch(0.155 0.008 60);
+  --color-iron-900: oklch(0.2 0.009 60);
+  --color-iron-850: oklch(0.235 0.01 60);
+  --color-iron-800: oklch(0.27 0.01 60);
+  --color-iron-700: oklch(0.34 0.011 62);
+  --color-iron-600: oklch(0.43 0.012 64);
+  --color-iron-500: oklch(0.55 0.012 66);
+  --color-iron-400: oklch(0.65 0.012 70);
+  --color-iron-300: oklch(0.76 0.012 75);
+  --color-iron-200: oklch(0.85 0.01 80);
+  --color-iron-100: oklch(0.93 0.008 85);
+  --color-iron-50: oklch(0.965 0.006 85);
+
+  /* ---- Ember ramp: the single accent. Live activity, primary actions,
+         focus. Nothing else gets to be orange. ---- */
+  --color-ember-300: oklch(0.85 0.12 75);
+  --color-ember-400: oklch(0.78 0.16 60);
+  --color-ember-500: oklch(0.72 0.19 48);
+  --color-ember-600: oklch(0.63 0.19 42);
+  --color-ember-700: oklch(0.54 0.16 38);
+
+  /* ---- Type ---- */
+  --font-sans: var(--font-archivo), system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  --text-metric: 2rem;
+  --text-metric--line-height: 2.25rem;
+
+  /* ---- Radii: machinist-sharp ---- */
+  --radius-xs: 1px;
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+
+  /* ---- Motion ---- */
+  --ease-machine: cubic-bezier(0.2, 0, 0, 1);
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  --duration-slow: 300ms;
+}
+
+/* ============================================================
+   Semantic aliases — light theme ("workshop daylight")
+   ============================================================ */
+:root {
+  --surface-page: var(--color-iron-50);
+  --surface-panel: oklch(0.985 0.004 85);
+  --surface-raised: oklch(1 0 0);
+  --surface-hover: oklch(0.945 0.007 85);
+  --surface-inset: oklch(0.945 0.007 85);
+
+  --border-hairline: oklch(0.2 0.01 60 / 12%);
+  --border-strong: oklch(0.2 0.01 60 / 28%);
+  --edge-highlight: transparent;
+
+  --text-primary: oklch(0.22 0.01 60);
+  --text-secondary: oklch(0.42 0.012 64);
+  --text-muted: oklch(0.55 0.012 66);
+  --text-disabled: oklch(0.7 0.01 70);
+
+  --accent: var(--color-ember-600);
+  --accent-hover: var(--color-ember-700);
+  --accent-text: var(--color-ember-700);
+  --focus-ring: var(--color-ember-500);
+
+  /* status: heat metaphor — fg / bg / border per status */
+  --status-queued: oklch(0.62 0.14 78);
+  --status-queued-bg: oklch(0.93 0.05 85);
+  --status-queued-border: oklch(0.8 0.1 82);
+  --status-running: oklch(0.6 0.19 44);
+  --status-running-bg: oklch(0.93 0.05 55);
+  --status-running-border: oklch(0.78 0.13 50);
+  /* success = "forged" cooled steel. Deliberately not green; always
+     pair with a check glyph. Green alternative (one-line swap):
+     --status-success: oklch(0.52 0.12 155); */
+  --status-success: oklch(0.5 0.08 230);
+  --status-success-bg: oklch(0.93 0.025 230);
+  --status-success-border: oklch(0.78 0.06 228);
+  --status-failure: oklch(0.52 0.19 27);
+  --status-failure-bg: oklch(0.93 0.04 25);
+  --status-failure-border: oklch(0.76 0.11 26);
+  --status-cancelled: oklch(0.5 0.015 60);
+  --status-cancelled-bg: oklch(0.93 0.008 70);
+  --status-cancelled-border: oklch(0.8 0.012 70);
+  --status-warning: oklch(0.58 0.14 80);
+  --status-warning-bg: oklch(0.94 0.06 90);
+  --status-warning-border: oklch(0.8 0.11 85);
+  --status-preempted: oklch(0.52 0.13 300);
+  --status-preempted-bg: oklch(0.94 0.03 300);
+  --status-preempted-border: oklch(0.78 0.08 300);
+
+  --shadow-overlay: 0 8px 24px oklch(0.2 0.02 60 / 18%);
+  --noise-opacity: 0.015;
+  --glow-opacity: 0;
+}
+
+/* ============================================================
+   Semantic aliases — dark theme ("forge at night")
+   ============================================================ */
+.dark {
+  --surface-page: var(--color-iron-950);
+  --surface-panel: var(--color-iron-900);
+  --surface-raised: var(--color-iron-850);
+  --surface-hover: var(--color-iron-800);
+  --surface-inset: oklch(0.135 0.008 60);
+
+  --border-hairline: oklch(1 0 0 / 7%);
+  --border-strong: oklch(1 0 0 / 16%);
+  --edge-highlight: oklch(1 0 0 / 4%);
+
+  --text-primary: var(--color-iron-100);
+  --text-secondary: var(--color-iron-300);
+  --text-muted: var(--color-iron-500);
+  --text-disabled: var(--color-iron-600);
+
+  --accent: var(--color-ember-500);
+  --accent-hover: var(--color-ember-400);
+  --accent-text: var(--color-ember-400);
+  --focus-ring: var(--color-ember-500);
+
+  --status-queued: oklch(0.8 0.14 80);
+  --status-queued-bg: oklch(0.24 0.04 80);
+  --status-queued-border: oklch(0.4 0.07 80);
+  --status-running: var(--color-ember-500);
+  --status-running-bg: oklch(0.24 0.05 48);
+  --status-running-border: oklch(0.42 0.1 48);
+  /* Green alternative: --status-success: oklch(0.74 0.13 155); */
+  --status-success: oklch(0.74 0.07 220);
+  --status-success-bg: oklch(0.24 0.025 225);
+  --status-success-border: oklch(0.4 0.05 222);
+  --status-failure: oklch(0.62 0.19 25);
+  --status-failure-bg: oklch(0.24 0.05 25);
+  --status-failure-border: oklch(0.42 0.1 25);
+  --status-cancelled: oklch(0.58 0.015 60);
+  --status-cancelled-bg: oklch(0.24 0.008 60);
+  --status-cancelled-border: oklch(0.38 0.01 60);
+  --status-warning: oklch(0.78 0.15 85);
+  --status-warning-bg: oklch(0.24 0.045 85);
+  --status-warning-border: oklch(0.42 0.08 85);
+  --status-preempted: oklch(0.66 0.12 300);
+  --status-preempted-bg: oklch(0.24 0.04 300);
+  --status-preempted-border: oklch(0.42 0.08 300);
+
+  --shadow-overlay: 0 8px 24px oklch(0 0 0 / 35%);
+  --noise-opacity: 0.025;
+  --glow-opacity: 0.06;
+}
+
+/* ============================================================
+   Expose semantic tokens as Tailwind utilities
+   (bg-surface-panel, text-secondary, border-hairline, …)
+   ============================================================ */
+@theme inline {
+  --color-surface-page: var(--surface-page);
+  --color-surface-panel: var(--surface-panel);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-inset: var(--surface-inset);
+
+  --color-hairline: var(--border-hairline);
+  --color-strong: var(--border-strong);
+
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-muted: var(--text-muted);
+  --color-disabled: var(--text-disabled);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-text: var(--accent-text);
+  --color-focus: var(--focus-ring);
+
+  --color-status-queued: var(--status-queued);
+  --color-status-queued-bg: var(--status-queued-bg);
+  --color-status-queued-border: var(--status-queued-border);
+  --color-status-running: var(--status-running);
+  --color-status-running-bg: var(--status-running-bg);
+  --color-status-running-border: var(--status-running-border);
+  --color-status-success: var(--status-success);
+  --color-status-success-bg: var(--status-success-bg);
+  --color-status-success-border: var(--status-success-border);
+  --color-status-failure: var(--status-failure);
+  --color-status-failure-bg: var(--status-failure-bg);
+  --color-status-failure-border: var(--status-failure-border);
+  --color-status-cancelled: var(--status-cancelled);
+  --color-status-cancelled-bg: var(--status-cancelled-bg);
+  --color-status-cancelled-border: var(--status-cancelled-border);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-bg: var(--status-warning-bg);
+  --color-status-warning-border: var(--status-warning-border);
+  --color-status-preempted: var(--status-preempted);
+  --color-status-preempted-bg: var(--status-preempted-bg);
+  --color-status-preempted-border: var(--status-preempted-border);
+
+  --shadow-overlay: var(--shadow-overlay);
+}
+
+/* ============================================================
+   Brand utilities
+   ============================================================ */
+
+/* Stamped display style: condensed Archivo caps, used for page
+   titles, section labels, the wordmark. */
+@utility stamp {
+  font-family: var(--font-sans);
+  font-variation-settings: 'wdth' 75;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Machined panel edge: hairline border + inset top highlight
+   (highlight is transparent in light theme). */
+@utility machined {
+  border: 1px solid var(--border-hairline);
+  box-shadow: inset 0 1px 0 var(--edge-highlight);
+}
+
+/* Tabular figures for anything numeric. */
+@utility tnum {
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+}
+
+/* Heat-dot pulses (running glow / queued breathe). */
+@media (prefers-reduced-motion: no-preference) {
+  .heat-pulse-running {
+    animation: heat-pulse-running 1.6s var(--ease-machine) infinite;
+  }
+  .heat-pulse-queued {
+    animation: heat-pulse-queued 2.8s ease-in-out infinite;
+  }
+}
+
+@keyframes heat-pulse-running {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 oklch(0.72 0.19 48 / 45%);
+  }
+  50% {
+    box-shadow: 0 0 6px 2px oklch(0.72 0.19 48 / 30%);
+  }
+}
+
+@keyframes heat-pulse-queued {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}

@@ -1,6 +1,38 @@
 @import 'tailwindcss';
 @import 'fumadocs-ui/css/neutral.css';
 @import 'fumadocs-ui/css/preset.css';
+@import './theme.css';
+
+/* Retheme fumadocs to the RunnerForge palette. Variable names pinned
+   to fumadocs-ui@16.10.0 css/lib/default-colors.css. */
+:root {
+  --color-fd-background: var(--surface-page);
+  --color-fd-foreground: var(--text-primary);
+  --color-fd-muted: var(--surface-hover);
+  --color-fd-muted-foreground: var(--text-muted);
+  --color-fd-popover: var(--surface-raised);
+  --color-fd-popover-foreground: var(--text-primary);
+  --color-fd-card: var(--surface-panel);
+  --color-fd-card-foreground: var(--text-primary);
+  --color-fd-border: var(--border-hairline);
+  --color-fd-primary: var(--accent);
+  --color-fd-primary-foreground: oklch(0.985 0.004 85);
+  --color-fd-secondary: var(--surface-hover);
+  --color-fd-secondary-foreground: var(--text-primary);
+  --color-fd-accent: var(--surface-hover);
+  --color-fd-accent-foreground: var(--text-primary);
+  --color-fd-ring: var(--focus-ring);
+}
+
+.dark {
+  --color-fd-primary-foreground: var(--color-iron-950);
+}
+
+.dark #nd-sidebar {
+  --color-fd-muted: var(--surface-raised);
+  --color-fd-secondary: var(--surface-hover);
+  --color-fd-muted-foreground: var(--text-secondary);
+}
 
 html {
   scrollbar-gutter: stable;
@@ -9,4 +41,20 @@ html {
 html > body[data-scroll-locked] {
   margin-right: 0px !important;
   --removed-body-scroll-bar-size: 0px !important;
+}
+
+body {
+  background-color: var(--surface-page);
+  color: var(--text-primary);
+}
+
+/* Single page-level grain texture; everything else stays flat. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: var(--noise-opacity);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
