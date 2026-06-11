@@ -11,6 +11,20 @@ provider "google" {
   zone    = "europe-west4-a"
 }
 
+# Aliased provider used only by Cloud Quotas resources. The Cloud Quotas API
+# requires the X-Goog-User-Project header (user_project_override=true) so the
+# API can attribute billing/quota to the caller's project. The override is
+# scoped to this alias so the default provider's behavior is unchanged for
+# every other resource type.
+provider "google" {
+  alias                 = "quotas"
+  project               = "runnerforge"
+  region                = "europe-west4"
+  zone                  = "europe-west4-a"
+  user_project_override = true
+  billing_project       = "runnerforge"
+}
+
 resource "google_artifact_registry_repository" "orchestrator" {
   location      = "europe-west4"
   repository_id = "orchestrator"
