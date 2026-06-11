@@ -111,8 +111,6 @@ def test_webhook_queued_event_does_not_schedule_polling_when_vm_already_exists(
 ):
     """When create_vm returns None (VM already exists), no background polling is
     scheduled — there's no operation to observe."""
-    from runnerforge.compute_client import OperationHandle  # noqa: F401
-
     body = (fixtures_dir / "queued_job_payload.json").read_bytes()
 
     respx.post("https://api.github.com/app/installations/135399152/access_tokens").mock(
@@ -202,6 +200,61 @@ def test_webhook_rejects_invalid_signature_without_calling_github(fixtures_dir, 
         record.levelno == logging.WARNING
         and "signature validation failed" in record.message
         for record in caplog.records
+    )
+
+
+@respx.mock
+def test_webhook_queued_event_does_not_create_vm_when_labels_are_invalid(
+    fixtures_dir, monkeypatch, caplog
+):
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload["workflow_job"]["labels"] = ["runnerforge", "gigantic"]
+    body = json.dumps(payload).encode()
+    respx.post("https://api.github.com/app/installations/135399152/access_tokens").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "token": "ghs_installation_token",
+                "expires_at": "2026-05-30T11:00:00Z",
+                "permissions": {
+                    "actions": "read",
+                    "metadata": "read",
+                    "administration": "write",
+                },
+                "repository_selection": "selected",
+            },
+        )
+    )
+    respx.post(
+        "https://api.github.com/repos/rumankazi/runnerforge/actions/runners/registration-token"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "token": "ghs_registration_token",
+                "expires_at": "2026-05-30T11:00:00Z",
+            },
+        )
+    )
+    create_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.handlers.create_vm", create_mock)
+
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/webhook",
+            content=body,
+            headers={"X-Hub-Signature-256": _sign(body)},
+        )
+
+    assert response.status_code == 200
+    create_mock.assert_not_awaited()
+    # Reject emits the structured warning log
+    assert any(
+        r.levelno == logging.WARNING
+        and "Machine policy rejected" in r.message
+        and getattr(r, "reason", None) == "unknown_token"
+        and getattr(r, "offending_tokens", None) == ["gigantic"]
+        for r in caplog.records
     )
 
 

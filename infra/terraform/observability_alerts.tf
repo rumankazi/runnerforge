@@ -95,15 +95,15 @@ resource "google_monitoring_alert_policy" "vm_creation_failure_ratio" {
 # starts, so during warm-stay periods there is no data — and that's
 # expected behaviour, not a degraded signal. evaluation_missing_data set
 # to INACTIVE prevents the policy from opening or holding an incident
-# during quiet times. Threshold 8s is a placeholder until we have
+# during quiet times. Threshold 30s is a placeholder until we have
 # baseline data; re-tune after a week of observations.
 resource "google_monitoring_alert_policy" "cold_start_p95" {
-  display_name = "Cold-start latency p95 > 8s (5m)"
+  display_name = "Cold-start latency p95 > 30s (5m)"
   combiner     = "OR"
   severity     = "WARNING"
 
   conditions {
-    display_name = "startup_latencies p95 over 8s"
+    display_name = "startup_latencies p95 over 30s"
     condition_threshold {
       filter                  = "metric.type=\"run.googleapis.com/container/startup_latencies\" resource.type=\"cloud_run_revision\" resource.labels.service_name=\"${google_cloud_run_v2_service.orchestrator.name}\""
       comparison              = "COMPARISON_GT"
