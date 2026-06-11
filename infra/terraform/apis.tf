@@ -10,6 +10,7 @@ locals {
     "cloudtrace.googleapis.com",
     "monitoring.googleapis.com",
     "logging.googleapis.com",
+    "cloudquotas.googleapis.com",
   ]
 }
 
