@@ -97,6 +97,12 @@ async def webhook(
     background_tasks: BackgroundTasks,
     x_hub_signature_256: Annotated[str, Header()],
 ):
+    # Captured as close to the wire as possible so the resulting
+    # runner_readiness_seconds metric reflects "time since we owned the
+    # event" — not "time since GitHub thinks it sent the event". Wall-clock
+    # (time.time) rather than monotonic because downstream code compares
+    # against GitHub-stamped timestamps from the payload.
+    received_at = time.time()
     body = await request.body()
 
     # HMAC validation
@@ -150,7 +156,7 @@ async def webhook(
 
     match event.action:
         case "queued":
-            handle = await handle_queued(event)
+            handle = await handle_queued(event, received_at=received_at)
             if handle is not None:
                 # Snapshot context now; background task re-installs it before polling
                 # so log correlation (request_id/job_id/repo) survives across the
@@ -159,7 +165,7 @@ async def webhook(
                     with_log_context, get_context(), wait_for_vm_creation, handle
                 )
         case "in_progress":
-            await handle_in_progress(event)
+            await handle_in_progress(event, received_at=received_at)
         case "completed":
             preempt_req = await handle_completed(event)
             if preempt_req is not None:

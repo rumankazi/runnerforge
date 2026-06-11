@@ -78,6 +78,13 @@ class RunnerForgeVmLabels(BaseModel):
     installation_id: str
     queued_trace_id: str = ""
     queued_span_id: str = ""
+    # Unix epoch seconds (integer, stringified) captured at /webhook entry for
+    # the `queued` event. Read back on `in_progress` to compute
+    # runner_readiness_seconds — the on-our-side latency that strips out
+    # GitHub-side webhook delivery delay. Default empty for VMs created
+    # before this field shipped (back-compat with in-flight runners during
+    # the deploy window).
+    queued_received_at: str = ""
 
 
 class VmInfo(BaseModel):
