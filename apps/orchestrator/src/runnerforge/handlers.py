@@ -42,6 +42,8 @@ async def handle_queued(event: WorkflowJobEvent) -> OperationHandle | None:
                 extra={"reason": e.reason, "offending_tokens": e.offending_tokens},
             )
             return None
+        span.set_attribute("policy.machine_type", policy.machine_type)
+        span.set_attribute("policy.spot", policy.spot)
 
         installation_id = event.installation.id
         installation_token = await get_installation_token(installation_id)
@@ -81,6 +83,7 @@ async def handle_queued(event: WorkflowJobEvent) -> OperationHandle | None:
         operation = await create_vm(
             instance_name=vm_name,
             machine_type=policy.machine_type,
+            spot=policy.spot,
             labels=labels.model_dump(),
             metadata=metadata,
         )

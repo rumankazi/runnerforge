@@ -61,6 +61,7 @@ def test_webhook_queued_event_triggers_github_auth_chain(
         return_value=OperationHandle(
             name="op-test-12345",
             zone="europe-west4-a",
+            spot=True,
             machine_type="e2-medium",
             image_version="0.2.0",
         )
@@ -535,6 +536,7 @@ async def test_concurrent_webhooks_keep_per_request_context_isolated(
             name="op-test",
             zone="europe-west4-a",
             machine_type="e2-medium",
+            spot=False,
             image_version="0.1.0",
         )
     )

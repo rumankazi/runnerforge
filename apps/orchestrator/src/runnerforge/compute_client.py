@@ -30,6 +30,7 @@ class OperationHandle:
 
     name: str
     zone: str
+    spot: bool
     machine_type: str
     image_version: str | None
 
@@ -152,6 +153,7 @@ async def create_vm(
     instance_name: str,
     machine_type: str,
     labels: dict[str, str],
+    spot: bool = False,
     metadata: dict[str, str] | None = None,
     data_disk_size_gb: int = _DATA_DISK_SIZE_GB,
     zone: str = GCP_ZONE,
@@ -176,6 +178,7 @@ async def create_vm(
         span.set_attributes({"label." + k: v for k, v in labels.items()})
         span.set_attribute("project_id", project_id)
         span.set_attribute("zone", zone)
+        span.set_attribute("spot", spot)
 
         instance = compute_v1.Instance()
         # Disks
@@ -224,6 +227,14 @@ async def create_vm(
             )
         ]
 
+        if spot:
+            instance.scheduling = compute_v1.Scheduling(
+                provisioning_model="SPOT",
+                instance_termination_action="DELETE",
+                automatic_restart=False,
+                on_host_maintenance="TERMINATE",
+            )
+
         # Prepare the request to insert an instance
         request = compute_v1.InsertInstanceRequest()
         request.zone = zone
@@ -249,6 +260,7 @@ async def create_vm(
                 "zone": zone,
                 "operation_id": operation.name,
                 "machine_type": machine_type,
+                "spot": spot,
                 "image_version": _RUNNER_IMAGE_VERSION,
             },
         )
@@ -256,6 +268,7 @@ async def create_vm(
             name=operation.name,
             zone=zone,
             machine_type=machine_type,
+            spot=spot,
             image_version=_RUNNER_IMAGE_VERSION,
         )
 
@@ -317,6 +330,7 @@ async def wait_for_vm_creation(
                             "zone": outcome.zone,
                             "duration_ms": outcome.duration_ms,
                             "machine_type": handle.machine_type,
+                            "spot": handle.spot,
                             "image_version": handle.image_version,
                             "error_code": outcome.error_code,
                             "error_message": outcome.error_message,
@@ -337,6 +351,7 @@ async def wait_for_vm_creation(
                             "zone": outcome.zone,
                             "duration_ms": outcome.duration_ms,
                             "machine_type": handle.machine_type,
+                            "spot": handle.spot,
                             "image_version": handle.image_version,
                         },
                     )
@@ -360,6 +375,7 @@ async def wait_for_vm_creation(
                 "zone": outcome.zone,
                 "duration_ms": outcome.duration_ms,
                 "machine_type": handle.machine_type,
+                "spot": handle.spot,
                 "image_version": handle.image_version,
             },
         )
