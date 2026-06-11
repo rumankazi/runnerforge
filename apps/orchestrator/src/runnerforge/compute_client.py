@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from runnerforge.config import GCP_PROJECT_ID, GCP_ZONE, RUNNER_VM_SA_EMAIL
 from runnerforge.models import RunnerForgeVmLabels, VmInfo
 
+_KNOWN_MACHINE_TYPES: set[str] | None = None
 _RUNNER_IMAGE_NAME: str | None = None  # full GCE name, used as source_image pin
 _RUNNER_IMAGE_VERSION: str | None = None  # dotted semver, used in logs/metrics
 _BOOT_IMAGE_FAMILY = "projects/runnerforge/global/images/family/runnerforge-runner"
@@ -109,6 +110,42 @@ def init_runner_image():
             "image_version": _RUNNER_IMAGE_VERSION,
         },
     )
+
+
+def init_machine_types_cache(zone: str = GCP_ZONE) -> None:
+    """Populate the in-process cache of valid GCE machine type in the given zone. Tolerant of startup failures - leaves cache at None to fall back to 'trust the parser' if the API call doesn't succeed"""
+    global _KNOWN_MACHINE_TYPES
+    try:
+        client = compute_v1.MachineTypesClient()
+        request = compute_v1.ListMachineTypesRequest(project=GCP_PROJECT_ID, zone=zone)
+        types = [t.name for t in client.list(request=request)]
+        client.transport.close()
+    except (GoogleAPIError, DefaultCredentialsError) as e:
+        logger.warning(
+            "Failed to load machine types cache - validation in degraded mode",
+            extra={"reason": str(e)},
+        )
+        _KNOWN_MACHINE_TYPES = None
+        return
+    if not types:
+        logger.warning(
+            "Machine types list was empty - validation in degraded mode",
+            extra={"zone": zone},
+        )
+        _KNOWN_MACHINE_TYPES = None
+        return
+    _KNOWN_MACHINE_TYPES = set(types)
+    logger.info(
+        "Loaded machine types cache",
+        extra={"zone": zone, "count": len(_KNOWN_MACHINE_TYPES)},
+    )
+
+
+def is_valid_machine_type(machine_type: str) -> bool:
+    """True if the type exists in the cache OR cache is degraded (None). Degraded mode = permissive: trust the parser. GCE will reject on insert"""
+    if _KNOWN_MACHINE_TYPES is None:
+        return True
+    return machine_type in _KNOWN_MACHINE_TYPES
 
 
 async def create_vm(

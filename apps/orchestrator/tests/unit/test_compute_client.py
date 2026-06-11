@@ -736,3 +736,155 @@ def test_create_vm_falls_back_to_family_alias_when_image_name_unset(monkeypatch)
         boot_disk.initialize_params.source_image
         == "projects/runnerforge/global/images/family/runnerforge-runner"
     )
+
+
+# -----------------------------------------------------------------------------
+# init_machine_types_cache
+# -----------------------------------------------------------------------------
+
+
+def _mock_machine_type(name: str):
+    """Build a MagicMock that mimics a GCE MachineType resource."""
+    m = MagicMock()
+    m.name = name
+    return m
+
+
+def test_init_machine_types_cache_populates_cache_on_success(monkeypatch, caplog):
+    mock_client = MagicMock()
+    mock_client.list.return_value = [
+        _mock_machine_type("n2-standard-2"),
+        _mock_machine_type("n2-standard-4"),
+        _mock_machine_type("e2-small"),
+    ]
+    monkeypatch.setattr(
+        "runnerforge.compute_client.compute_v1.MachineTypesClient",
+        lambda: mock_client,
+    )
+    monkeypatch.setattr("runnerforge.compute_client._KNOWN_MACHINE_TYPES", None)
+
+    with caplog.at_level(logging.INFO):
+        compute_client.init_machine_types_cache()
+
+    assert compute_client._KNOWN_MACHINE_TYPES == {
+        "n2-standard-2",
+        "n2-standard-4",
+        "e2-small",
+    }
+    # The transport is closed after the one-shot list call — no client retained.
+    mock_client.transport.close.assert_called_once()
+
+    log = next(
+        (r for r in caplog.records if "Loaded machine types cache" in r.message),
+        None,
+    )
+    assert log is not None
+    assert log.levelno == logging.INFO
+    assert log.count == 3
+    assert log.zone == "europe-west4-a"  # from conftest env
+
+
+def test_init_machine_types_cache_degrades_on_default_credentials_error(
+    monkeypatch, caplog
+):
+    def _raise():
+        raise DefaultCredentialsError("no creds")
+
+    monkeypatch.setattr(
+        "runnerforge.compute_client.compute_v1.MachineTypesClient",
+        _raise,
+    )
+    # Pre-populate to a sentinel so we can verify the degraded path resets to None
+    monkeypatch.setattr("runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel"})
+
+    with caplog.at_level(logging.WARNING):
+        compute_client.init_machine_types_cache()
+
+    assert compute_client._KNOWN_MACHINE_TYPES is None
+    log = next(
+        (
+            r
+            for r in caplog.records
+            if "Failed to load machine types cache" in r.message
+        ),
+        None,
+    )
+    assert log is not None
+    assert log.levelno == logging.WARNING
+    assert "no creds" in log.reason
+
+
+def test_init_machine_types_cache_degrades_on_google_api_error(monkeypatch, caplog):
+    mock_client = MagicMock()
+    mock_client.list.side_effect = GoogleAPIError("transient")
+    monkeypatch.setattr(
+        "runnerforge.compute_client.compute_v1.MachineTypesClient",
+        lambda: mock_client,
+    )
+    monkeypatch.setattr("runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel"})
+
+    with caplog.at_level(logging.WARNING):
+        compute_client.init_machine_types_cache()
+
+    assert compute_client._KNOWN_MACHINE_TYPES is None
+    log = next(
+        (
+            r
+            for r in caplog.records
+            if "Failed to load machine types cache" in r.message
+        ),
+        None,
+    )
+    assert log is not None
+    assert log.levelno == logging.WARNING
+
+
+def test_init_machine_types_cache_degrades_on_empty_response(monkeypatch, caplog):
+    mock_client = MagicMock()
+    mock_client.list.return_value = []
+    monkeypatch.setattr(
+        "runnerforge.compute_client.compute_v1.MachineTypesClient",
+        lambda: mock_client,
+    )
+    monkeypatch.setattr("runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel"})
+
+    with caplog.at_level(logging.WARNING):
+        compute_client.init_machine_types_cache()
+
+    assert compute_client._KNOWN_MACHINE_TYPES is None
+    # Transport is still closed even on the empty-list degrade path
+    mock_client.transport.close.assert_called_once()
+    log = next(
+        (r for r in caplog.records if "Machine types list was empty" in r.message),
+        None,
+    )
+    assert log is not None
+    assert log.levelno == logging.WARNING
+    assert log.zone == "europe-west4-a"
+
+
+# -----------------------------------------------------------------------------
+# is_valid_machine_type
+# -----------------------------------------------------------------------------
+
+
+def test_is_valid_machine_type_returns_true_for_cached_type(monkeypatch):
+    monkeypatch.setattr(
+        "runnerforge.compute_client._KNOWN_MACHINE_TYPES",
+        {"n2-standard-2", "n2-standard-4"},
+    )
+    assert compute_client.is_valid_machine_type("n2-standard-4") is True
+
+
+def test_is_valid_machine_type_returns_false_for_uncached_type(monkeypatch):
+    monkeypatch.setattr(
+        "runnerforge.compute_client._KNOWN_MACHINE_TYPES",
+        {"n2-standard-2", "n2-standard-4"},
+    )
+    assert compute_client.is_valid_machine_type("n2-malformed-name") is False
+
+
+def test_is_valid_machine_type_returns_true_when_cache_degraded(monkeypatch):
+    # Degraded mode (cache=None) is permissive — trust the parser; GCE rejects on insert.
+    monkeypatch.setattr("runnerforge.compute_client._KNOWN_MACHINE_TYPES", None)
+    assert compute_client.is_valid_machine_type("anything-at-all") is True

@@ -7,19 +7,15 @@ from runnerforge.compute_client import (
     create_vm,
     delete_vm,
     get_vm_labels_by_job,
+    is_valid_machine_type,
 )
 from runnerforge.config import STARTUP_SCRIPT
 from runnerforge.github_client import get_installation_token, get_registration_token
+from runnerforge.machine_policy import MachinePolicyError, resolve_labels
 from runnerforge.models import RunnerForgeVmLabels, WorkflowJobEvent
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
-
-
-# TODO: move this later to proper location
-def machine_type_for_labels(labels: list[str]) -> str:
-    # later add the actual logic for handling and processing this
-    return "e2-medium"
 
 
 async def handle_queued(event: WorkflowJobEvent) -> OperationHandle | None:
@@ -34,6 +30,18 @@ async def handle_queued(event: WorkflowJobEvent) -> OperationHandle | None:
         span.set_attribute("labels", event.workflow_job.labels)
         span.set_attribute("run_id", event.workflow_job.run_id)
         span.set_attribute("run_attempt", event.workflow_job.run_attempt)
+
+        # Get requested machine type from labels
+        try:
+            policy = resolve_labels(event.workflow_job.labels)
+            if not is_valid_machine_type(policy.machine_type):
+                raise MachinePolicyError("invalid_machine_type", [policy.machine_type])
+        except MachinePolicyError as e:
+            logger.warning(
+                "Machine policy rejected",
+                extra={"reason": e.reason, "offending_tokens": e.offending_tokens},
+            )
+            return None
 
         installation_id = event.installation.id
         installation_token = await get_installation_token(installation_id)
@@ -69,9 +77,10 @@ async def handle_queued(event: WorkflowJobEvent) -> OperationHandle | None:
             queued_trace_id=queued_trace_id,
             queued_span_id=queued_span_id,
         )
+
         operation = await create_vm(
             instance_name=vm_name,
-            machine_type=machine_type_for_labels(event.workflow_job.labels),
+            machine_type=policy.machine_type,
             labels=labels.model_dump(),
             metadata=metadata,
         )

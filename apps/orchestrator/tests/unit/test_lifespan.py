@@ -59,16 +59,22 @@ def test_lifespan_initializes_and_closes_clients(monkeypatch):
     init_http = AsyncMock()
     close_http = AsyncMock()
     init_compute = MagicMock()
+    init_image = MagicMock()
+    init_cache = MagicMock()
     close_compute = MagicMock()
 
     monkeypatch.setattr(github_client, "init_http_client", init_http)
     monkeypatch.setattr(github_client, "close_http_client", close_http)
     monkeypatch.setattr(compute_client, "init_compute_client", init_compute)
+    monkeypatch.setattr(compute_client, "init_runner_image", init_image)
+    monkeypatch.setattr(compute_client, "init_machine_types_cache", init_cache)
     monkeypatch.setattr(compute_client, "close_compute_client", close_compute)
 
     with TestClient(app):
         init_http.assert_awaited_once()
         init_compute.assert_called_once()
+        init_image.assert_called_once()
+        init_cache.assert_called_once()
     # After exiting the context, shutdown has run
     close_http.assert_awaited_once()
     close_compute.assert_called_once()

@@ -111,8 +111,6 @@ def test_webhook_queued_event_does_not_schedule_polling_when_vm_already_exists(
 ):
     """When create_vm returns None (VM already exists), no background polling is
     scheduled — there's no operation to observe."""
-    from runnerforge.compute_client import OperationHandle  # noqa: F401
-
     body = (fixtures_dir / "queued_job_payload.json").read_bytes()
 
     respx.post("https://api.github.com/app/installations/135399152/access_tokens").mock(
@@ -202,6 +200,80 @@ def test_webhook_rejects_invalid_signature_without_calling_github(fixtures_dir, 
         record.levelno == logging.WARNING
         and "signature validation failed" in record.message
         for record in caplog.records
+    )
+
+
+@respx.mock
+def test_webhook_queued_event_does_not_create_vm_when_labels_are_invalid(
+    fixtures_dir, monkeypatch, caplog
+):
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload["workflow_job"]["labels"] = ["runnerforge", "gigantic"]
+    body = json.dumps(payload).encode()
+    create_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.handlers.create_vm", create_mock)
+
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/webhook",
+            content=body,
+            headers={"X-Hub-Signature-256": _sign(body)},
+        )
+
+    assert response.status_code == 200
+    create_mock.assert_not_awaited()
+    # Reject emits the structured warning log
+    assert any(
+        r.levelno == logging.WARNING
+        and "Machine policy rejected" in r.message
+        and getattr(r, "reason", None) == "unknown_token"
+        and getattr(r, "offending_tokens", None) == ["gigantic"]
+        for r in caplog.records
+    )
+    assert not any("Registration token received" in r.message for r in caplog.records)
+
+
+@respx.mock
+def test_webhook_queued_event_rejects_when_machine_type_not_in_cache(
+    fixtures_dir, monkeypatch, caplog
+):
+    """Cache says the literal escape-hatch type doesn't exist in our zone →
+    handler raises MachinePolicyError("invalid_machine_type", ...) before any
+    GH token exchange. No create_vm call; structured warning log fires with the
+    new reason discriminator."""
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    # Loose regex accepts this token; cache (mocked below) doesn't contain it.
+    payload["workflow_job"]["labels"] = ["runnerforge", "n2-malformed-4"]
+    body = json.dumps(payload).encode()
+
+    # Populated cache that EXCLUDES the bad type — exercises the validator's
+    # cache-populated-but-missing branch.
+    monkeypatch.setattr(
+        "runnerforge.compute_client._KNOWN_MACHINE_TYPES",
+        {"n2-standard-2", "n2-standard-4", "n2-standard-8"},
+    )
+    create_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.handlers.create_vm", create_mock)
+
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/webhook",
+            content=body,
+            headers={"X-Hub-Signature-256": _sign(body)},
+        )
+
+    assert response.status_code == 200
+    create_mock.assert_not_awaited()
+    # Reject happens BEFORE the GH token exchange (resolve_labels is at the top
+    # of handle_queued after the reorder)
+    assert not any("Registration token received" in r.message for r in caplog.records)
+    # Structured warning with the new "invalid_machine_type" reason
+    assert any(
+        r.levelno == logging.WARNING
+        and "Machine policy rejected" in r.message
+        and getattr(r, "reason", None) == "invalid_machine_type"
+        and getattr(r, "offending_tokens", None) == ["n2-malformed-4"]
+        for r in caplog.records
     )
 
 
