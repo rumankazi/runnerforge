@@ -265,13 +265,17 @@ jobs:
             --source-image-project=runnerforge \
             --family="$IMAGE_FAMILY"
           echo "Promoted $SRC_IMAGE → $DST in family $IMAGE_FAMILY"
+      - name: Clean up smoke image
+        run: |
+          set -euo pipefail
           echo "Cleaning up source image"
-          gcloud compute images delete "$SRC_IMAGE"
+          gcloud compute images delete "$SRC_IMAGE" --quiet
           echo "Cleaned up $SRC_IMAGE"
 
       - name: Retention
         continue-on-error: true
         run: |
+          set -euo pipefail
           # Get the list of images to deprecate (skip 5 most recent)
           to_deprecate=$(
             gcloud compute images list \
