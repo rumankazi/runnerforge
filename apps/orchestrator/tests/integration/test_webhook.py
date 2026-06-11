@@ -396,9 +396,7 @@ def test_webhook_in_progress_skips_time_log_when_started_at_missing(
     # The on-our-side readiness metric is ALSO gated on started_at — verify
     # the new structured log doesn't fire either, so neither SLO source
     # produces a sample for an event missing the load-bearing timestamp.
-    assert not any(
-        "Runner registration outcome" in r.message for r in caplog.records
-    )
+    assert not any("Runner registration outcome" in r.message for r in caplog.records)
 
 
 @respx.mock
@@ -586,9 +584,7 @@ def test_webhook_in_progress_skips_outcome_log_when_queued_received_at_missing(
 
     assert response.status_code == 200
     # New log gated off
-    assert not any(
-        "Runner registration outcome" in r.message for r in caplog.records
-    )
+    assert not any("Runner registration outcome" in r.message for r in caplog.records)
     # Legacy log still fires — keeps the existing panel populated through rollout
     assert any(
         "Time for runner to be picked up by github" in r.message for r in caplog.records
@@ -621,9 +617,7 @@ def test_webhook_in_progress_emits_no_outcome_log_when_vm_labels_missing(
         )
 
     assert response.status_code == 200
-    assert not any(
-        "Runner registration outcome" in r.message for r in caplog.records
-    )
+    assert not any("Runner registration outcome" in r.message for r in caplog.records)
 
 
 @respx.mock

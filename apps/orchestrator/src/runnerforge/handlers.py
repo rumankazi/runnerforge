@@ -166,7 +166,9 @@ async def handle_in_progress(event: WorkflowJobEvent, received_at: float):
     parent_context = (
         set_span_in_context(NonRecordingSpan(queued_ctx)) if queued_ctx else None
     )
-    queued_received_at_str = vm_labels.get("queued_received_at", "") if vm_labels else ""
+    queued_received_at_str = (
+        vm_labels.get("queued_received_at", "") if vm_labels else ""
+    )
     if parent_context is not None and queued_received_at_str:
         gap_start_ns = int(queued_received_at_str) * 1_000_000_000
         gap_span = tracer.start_span(
@@ -226,9 +228,7 @@ async def handle_in_progress(event: WorkflowJobEvent, received_at: float):
             runner_readiness_seconds = max(
                 0.0, started_at_epoch - queued_received_at_float
             )
-            in_progress_delivery_lag = max(
-                0.0, received_at - started_at_epoch
-            )
+            in_progress_delivery_lag = max(0.0, received_at - started_at_epoch)
 
             extras: dict[str, float | str | int] = {
                 "job_id": event.workflow_job.id,
