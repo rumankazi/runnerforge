@@ -46,6 +46,14 @@ resource "google_service_account_iam_member" "ci_terraform_plan_wif" {
 
 # For ci_terraform_apply
 
+# Allows ci-terraform-apply to create + update custom IAM roles
+# The narrower iam.securityAdmin above covers IAM policies/bindings but not role definitions themselves.
+resource "google_project_iam_member" "ci_terraform_apply_iam_role_admin" {
+  project = data.google_project.current.project_id
+  role    = "roles/iam.roleAdmin"
+  member  = "serviceAccount:${google_service_account.ci_terraform_apply.email}"
+}
+
 resource "google_project_iam_member" "ci_terraform_apply_editor" {
   project = data.google_project.current.project_id
   role    = "roles/editor"
