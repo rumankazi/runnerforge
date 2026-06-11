@@ -1,19 +1,17 @@
 import logging
 
-from fastapi import BackgroundTasks
 from opentelemetry import trace
 
 from runnerforge.compute_client import (
     OperationHandle,
+    PreemptionCheckRequest,
     create_vm,
     delete_vm,
     get_vm_labels_by_job,
     is_valid_machine_type,
-    was_preempted,
 )
 from runnerforge.config import STARTUP_SCRIPT
 from runnerforge.github_client import get_installation_token, get_registration_token
-from runnerforge.logger import get_context, with_log_context
 from runnerforge.machine_policy import MachinePolicyError, resolve_labels
 from runnerforge.models import RunnerForgeVmLabels, WorkflowJobEvent
 
@@ -132,25 +130,13 @@ async def handle_in_progress(event: WorkflowJobEvent):
             )
 
 
-async def _cross_check_preemption(vm_name: str, job_id: int, conclusion: str) -> None:
-    """BackgroundTask body: ask the audit log whether this VM was reclaimed by
-    GCE's Spot scheduler. If so, emit a structured event so the operator (and
-    eventually the future user-facing frontend) can distinguish preemption from
-    a normal runner failure."""
-    if await was_preempted(vm_name):
-        logger.warning(
-            "Job ended due to spot preemption",
-            extra={
-                "vm_name": vm_name,
-                "job_id": job_id,
-                "conclusion": conclusion,
-            },
-        )
-
-
-async def handle_completed(
-    event: WorkflowJobEvent, background_tasks: BackgroundTasks
-):
+async def handle_completed(event: WorkflowJobEvent) -> PreemptionCheckRequest | None:
+    """Process a `workflow_job.completed` webhook: deletes the runner VM and
+    returns a `PreemptionCheckRequest` when the job ended in failure or
+    cancellation — the caller (main.py) schedules the audit-log cross-check
+    in a BackgroundTask. Symmetric with `handle_queued` returning an
+    `OperationHandle` for `wait_for_vm_creation` to consume.
+    """
     with tracer.start_as_current_span("webhook.handle_completed") as span:
         span.set_attribute("repo", event.repository.full_name)
         span.set_attribute("sender", event.sender.login)
@@ -165,7 +151,7 @@ async def handle_completed(
                 "No VM found for completed job (already cleaned up or never created)",
                 extra={"runner_name": runner_name},
             )
-            return
+            return None
         span.set_attribute("runner_name", runner_name)
 
         operation_id = await delete_vm(runner_name, reason="webhook")
@@ -174,17 +160,16 @@ async def handle_completed(
             extra={"runner_name": runner_name, "operation_id": operation_id},
         )
 
-        # On failure/cancellation, cross-check the audit log for a preemption
-        # event. Runs in a BackgroundTask so the webhook response isn't blocked
-        # on the Cloud Logging round-trip (~100-500ms). LogContext is snapshotted
-        # so request_id/job_id/repo correlation survives the post-response hop.
+        # On failure/cancellation, surface a PreemptionCheckRequest so main.py
+        # can schedule the audit-log cross-check in a BackgroundTask. Keeps the
+        # webhook response off the Cloud Logging round-trip (~100-500ms) and
+        # ensures request_id/job_id/repo correlation survives the post-response
+        # hop (main.py wraps the task with `with_log_context`).
         conclusion = event.workflow_job.conclusion
         if conclusion in ("failure", "cancelled"):
-            background_tasks.add_task(
-                with_log_context,
-                get_context(),
-                _cross_check_preemption,
-                runner_name,
-                event.workflow_job.id,
-                conclusion,
+            return PreemptionCheckRequest(
+                vm_name=runner_name,
+                job_id=event.workflow_job.id,
+                conclusion=conclusion,
             )
+        return None

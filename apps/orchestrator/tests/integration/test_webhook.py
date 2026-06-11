@@ -446,7 +446,7 @@ def test_webhook_completed_failure_logs_preemption_when_audit_log_says_so(
     )
     # Cross-check returns True → preemption was found in the audit log
     was_preempted_mock = AsyncMock(return_value=True)
-    monkeypatch.setattr("runnerforge.handlers.was_preempted", was_preempted_mock)
+    monkeypatch.setattr("runnerforge.compute_client.was_preempted", was_preempted_mock)
 
     with caplog.at_level(logging.WARNING):
         response = client.post(
@@ -484,7 +484,7 @@ def test_webhook_completed_failure_skips_preemption_log_when_audit_log_empty(
         "runnerforge.handlers.delete_vm", AsyncMock(return_value="op-test")
     )
     was_preempted_mock = AsyncMock(return_value=False)
-    monkeypatch.setattr("runnerforge.handlers.was_preempted", was_preempted_mock)
+    monkeypatch.setattr("runnerforge.compute_client.was_preempted", was_preempted_mock)
 
     response = client.post(
         "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
@@ -516,7 +516,7 @@ def test_webhook_completed_success_does_not_schedule_preemption_check(
         "runnerforge.handlers.delete_vm", AsyncMock(return_value="op-test")
     )
     was_preempted_mock = AsyncMock(return_value=False)
-    monkeypatch.setattr("runnerforge.handlers.was_preempted", was_preempted_mock)
+    monkeypatch.setattr("runnerforge.compute_client.was_preempted", was_preempted_mock)
 
     response = client.post(
         "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}

@@ -39,6 +39,18 @@ class OperationHandle:
 
 
 @dataclass(frozen=True, slots=True)
+class PreemptionCheckRequest:
+    """What `handle_completed` returns when a failed/cancelled job should be
+    cross-checked for spot preemption. Consumed by `cross_check_preemption`
+    inside a BackgroundTask. Symmetric with `OperationHandle` for the queued
+    path — handler returns data, main.py owns the BackgroundTask scheduling."""
+
+    vm_name: str
+    job_id: int
+    conclusion: str
+
+
+@dataclass(frozen=True, slots=True)
 class OperationOutcome:
     outcome: Literal["success", "failure", "timeout"]
     op_name: str
@@ -203,6 +215,26 @@ async def was_preempted(vm_name: str) -> bool:
         return False
 
     return bool(entries)
+
+
+async def cross_check_preemption(request: PreemptionCheckRequest) -> None:
+    """BackgroundTask body: ask the audit log whether the VM in `request` was
+    reclaimed by GCE's Spot scheduler. If so, emit a structured event so the
+    operator (and the future user-facing frontend) can distinguish preemption
+    from a normal runner failure.
+
+    Mirrors `wait_for_vm_creation` in shape: takes a typed request object,
+    queries GCE-side state, emits a structured log on the result.
+    """
+    if await was_preempted(request.vm_name):
+        logger.warning(
+            "Job ended due to spot preemption",
+            extra={
+                "vm_name": request.vm_name,
+                "job_id": request.job_id,
+                "conclusion": request.conclusion,
+            },
+        )
 
 
 async def create_vm(
