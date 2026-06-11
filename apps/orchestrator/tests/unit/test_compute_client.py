@@ -486,6 +486,7 @@ def test_wait_for_vm_creation_returns_success_when_op_done_no_error(
         name="op-123",
         zone="europe-west4-a",
         machine_type="e2-medium",
+        spot=False,
         image_version="0.1.0",
     )
 
@@ -520,6 +521,7 @@ def test_wait_for_vm_creation_returns_failure_on_op_error(monkeypatch, caplog):
         name="op-456",
         zone="europe-west4-a",
         machine_type="e2-medium",
+        spot=False,
         image_version="0.1.0",
     )
 
@@ -553,6 +555,7 @@ def test_wait_for_vm_creation_polls_until_done(monkeypatch):
         name="op-789",
         zone="europe-west4-a",
         machine_type="e2-medium",
+        spot=False,
         image_version="0.1.0",
     )
 
@@ -574,6 +577,7 @@ def test_wait_for_vm_creation_times_out_when_op_stays_running(monkeypatch, caplo
         name="op-timeout",
         zone="europe-west4-a",
         machine_type="e2-medium",
+        spot=False,
         image_version="0.1.0",
     )
 
@@ -610,6 +614,7 @@ def test_wait_for_vm_creation_keeps_polling_after_transient_get_error(
         name="op-flake",
         zone="europe-west4-a",
         machine_type="e2-medium",
+        spot=False,
         image_version="0.1.0",
     )
 
@@ -888,3 +893,82 @@ def test_is_valid_machine_type_returns_true_when_cache_degraded(monkeypatch):
     # Degraded mode (cache=None) is permissive — trust the parser; GCE rejects on insert.
     monkeypatch.setattr("runnerforge.compute_client._KNOWN_MACHINE_TYPES", None)
     assert compute_client.is_valid_machine_type("anything-at-all") is True
+
+
+# -----------------------------------------------------------------------------
+# create_vm — spot scheduling block
+# -----------------------------------------------------------------------------
+
+
+def test_create_vm_attaches_spot_scheduling_block_when_spot_true(monkeypatch, caplog):
+    """Spot=True triggers the Layer 1 scheduling block (D4). Verifies the four
+    GCE Scheduling fields, the propagated log extra, and the OperationHandle.spot
+    field. Layer 2 observability (audit-log metric for preemption) lands in PR 4."""
+    mock_client = MagicMock()
+    mock_client.insert.return_value.name = "op-spot-1"
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
+    monkeypatch.setattr(
+        "runnerforge.compute_client._RUNNER_IMAGE_NAME",
+        "runnerforge-runner-image-0-1-0",
+    )
+    monkeypatch.setattr("runnerforge.compute_client._RUNNER_IMAGE_VERSION", "0.1.0")
+
+    with caplog.at_level(logging.INFO):
+        op_handle = asyncio.run(
+            create_vm(
+                instance_name="test-spot-vm",
+                machine_type="n2-standard-4",
+                labels={"runner": "runnerforge"},
+                spot=True,
+            )
+        )
+
+    assert op_handle is not None
+    assert op_handle.spot is True
+
+    # Scheduling block carries all four D4-locked fields
+    request = mock_client.insert.call_args.kwargs["request"]
+    scheduling = request.instance_resource.scheduling
+    assert scheduling.provisioning_model == "SPOT"
+    assert scheduling.instance_termination_action == "DELETE"
+    assert scheduling.automatic_restart is False
+    assert scheduling.on_host_maintenance == "TERMINATE"
+
+    # Log carries the spot dimension so PR 4's vm_creation_count metric can slice on it
+    log = next(
+        (r for r in caplog.records if "Submitted VM creation" in r.message), None
+    )
+    assert log is not None
+    assert getattr(log, "spot", None) is True
+    assert log.machine_type == "n2-standard-4"
+
+
+def test_create_vm_omits_scheduling_block_when_spot_false(monkeypatch):
+    """spot=False (default) means no scheduling block is set — GCE applies
+    on-demand defaults. Pins the negative-path behavior so a regression that
+    always attaches the block can't slip through."""
+    mock_client = MagicMock()
+    mock_client.insert.return_value.name = "op-ondemand-1"
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
+
+    op_handle = asyncio.run(
+        create_vm(
+            instance_name="test-ondemand-vm",
+            machine_type="n2-standard-4",
+            labels={"runner": "runnerforge"},
+            spot=False,
+        )
+    )
+
+    assert op_handle is not None
+    assert op_handle.spot is False
+
+    # When spot=False, scheduling is the default proto value (an empty Scheduling
+    # message). The four spot-specific fields stay at their defaults: empty
+    # string for provisioning_model / termination_action / maintenance, True
+    # for automatic_restart.
+    scheduling = mock_client.insert.call_args.kwargs[
+        "request"
+    ].instance_resource.scheduling
+    assert scheduling.provisioning_model == ""
+    assert scheduling.instance_termination_action == ""
