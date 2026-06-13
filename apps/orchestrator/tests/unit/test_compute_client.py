@@ -217,8 +217,8 @@ def test_get_vm_labels_by_job_returns_labels_when_matched(monkeypatch, caplog):
         "run_id": "2",
         "run_attempt": "2",
         "installation_id": "123",
-        "queued_trace_id": "12da",
-        "queued_span_id": "129asd",
+        "webhook_trace_id": "12da",
+        "webhook_span_id": "129asd",
     }
     mock_client.list.return_value = [mock_vm]
     monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)

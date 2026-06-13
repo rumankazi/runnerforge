@@ -25,20 +25,20 @@ logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 
-def _queued_span_context(
-    queued_trace_id: str, queued_span_id: str
+def _webhook_span_context(
+    webhook_trace_id: str, webhook_span_id: str
 ) -> SpanContext | None:
     """Reconstruct an OTel SpanContext from the hex strings persisted in VM
     labels. Returns None if either is empty (VM created before this field
-    shipped, or queued span context was never written). Marked as
+    shipped, or webhook span context was never written). Marked as
     `is_remote=True` so the tracer treats it as cross-process — same trace
     id continuum but originating from a different worker.
     """
-    if not queued_trace_id or not queued_span_id:
+    if not webhook_trace_id or not webhook_span_id:
         return None
     return SpanContext(
-        trace_id=int(queued_trace_id, 16),
-        span_id=int(queued_span_id, 16),
+        trace_id=int(webhook_trace_id, 16),
+        span_id=int(webhook_span_id, 16),
         is_remote=True,
         trace_flags=TraceFlags(TraceFlags.SAMPLED),
     )
@@ -47,10 +47,15 @@ def _queued_span_context(
 async def handle_queued(
     event: WorkflowJobEvent, received_at: float
 ) -> OperationHandle | None:
+    # Anchor on the outer (auto-instrumented `POST /webhook`) server span —
+    # captured BEFORE we enter our own span. handle_in_progress later parents
+    # under this same anchor, so it renders as a sibling of handle_queued
+    # (not nested inside it) when the two webhooks merge into one trace.
+    outer_ctx = trace.get_current_span().get_span_context()
+    webhook_trace_id = format(outer_ctx.trace_id, "032x")
+    webhook_span_id = format(outer_ctx.span_id, "016x")
+
     with tracer.start_as_current_span("webhook.handle_queued") as span:
-        span_context = span.get_span_context()
-        queued_trace_id = format(span_context.trace_id, "032x")
-        queued_span_id = format(span_context.span_id, "016x")
         span.set_attribute("repo", event.repository.full_name)
         span.set_attribute("sender", event.sender.login)
         span.set_attribute("job_id", event.workflow_job.id)
@@ -104,8 +109,8 @@ async def handle_queued(
             run_attempt=str(event.workflow_job.run_attempt),
             repo=event.repository.full_name.replace("/", "_"),
             installation_id=str(event.installation.id),
-            queued_trace_id=queued_trace_id,
-            queued_span_id=queued_span_id,
+            webhook_trace_id=webhook_trace_id,
+            webhook_span_id=webhook_span_id,
             # GCE label values can't contain '.' — store as integer epoch
             # seconds. Sub-second precision isn't needed for the SLO
             # (300s threshold, NTP skew is sub-second).
@@ -127,13 +132,12 @@ async def handle_in_progress(event: WorkflowJobEvent, received_at: float):
 
     Two trace-structure jobs in one function:
 
-    1. Promote the in_progress span from a sibling-via-link of the queued
-       span (old behavior) to a child of it. Effect: queued + in_progress
-       render as one trace tree in Cloud Trace, so an operator opens one
-       trace and sees the entire runner-registration lifecycle. The gap
-       between the two webhook deliveries is filled by an explicitly-named
-       `runner.provisioning_wait` span so the empty-timeline gap is
-       informative ("this is the wait period; not us") rather than blank.
+    1. Parent the in_progress span under the queued request's outer
+       `POST /webhook` server span (anchor persisted in VM labels by
+       handle_queued). Effect: queued + in_progress render as one trace
+       tree in Cloud Trace, with `webhook.handle_in_progress` as a sibling
+       of `webhook.handle_queued` — operator opens one trace and sees the
+       entire runner-registration lifecycle.
 
     2. Emit the on-our-side latency metric — `runner_readiness_seconds` —
        which strips GitHub's queued-webhook delivery delay from the SLO
@@ -143,48 +147,25 @@ async def handle_in_progress(event: WorkflowJobEvent, received_at: float):
        drive small negatives that are noise, not signal.
     """
     # Labels lookup BEFORE starting our own span so we can parent it under
-    # the queued span when the VM exists.
+    # the queued request when the VM exists.
     vm_labels = await get_vm_labels_by_job(
         job_id=str(event.workflow_job.id),
         run_id=str(event.workflow_job.run_id),
         run_attempt=str(event.workflow_job.run_attempt),
     )
     queued_ctx = (
-        _queued_span_context(
-            vm_labels.get("queued_trace_id", ""), vm_labels.get("queued_span_id", "")
+        _webhook_span_context(
+            vm_labels.get("webhook_trace_id", ""), vm_labels.get("webhook_span_id", "")
         )
         if vm_labels
         else None
     )
-
-    # Synthetic gap span: explicitly labels the wall-clock window between the
-    # two webhook deliveries so the merged trace timeline shows "what's
-    # happening here" instead of empty whitespace. Span starts at
-    # queued_received_at and ends now — so it overlaps the queued span's
-    # ~1-2s handler duration at the leading edge. That overlap is acceptable
-    # cost for not needing to persist queued_span_end_at on the VM labels.
     parent_context = (
         set_span_in_context(NonRecordingSpan(queued_ctx)) if queued_ctx else None
     )
     queued_received_at_str = (
         vm_labels.get("queued_received_at", "") if vm_labels else ""
     )
-    if parent_context is not None and queued_received_at_str:
-        gap_start_ns = int(queued_received_at_str) * 1_000_000_000
-        gap_span = tracer.start_span(
-            "runner.provisioning_wait",
-            context=parent_context,
-            start_time=gap_start_ns,
-            attributes={
-                "spans": "queued_received_at -> in_progress_received_at",
-                "note": (
-                    "Wall-clock gap between the two webhooks. Includes VM "
-                    "provisioning, runner registration, and GitHub's delay "
-                    "firing the in_progress webhook."
-                ),
-            },
-        )
-        gap_span.end(end_time=int(received_at * 1_000_000_000))
 
     with tracer.start_as_current_span(
         "webhook.handle_in_progress", context=parent_context
@@ -277,9 +258,9 @@ async def handle_completed(event: WorkflowJobEvent) -> PreemptionCheckRequest | 
         span.set_attribute("run_id", event.workflow_job.run_id)
         span.set_attribute("run_attempt", event.workflow_job.run_attempt)
         if vm_labels:
-            queued_ctx = _queued_span_context(
-                vm_labels.get("queued_trace_id", ""),
-                vm_labels.get("queued_span_id", ""),
+            queued_ctx = _webhook_span_context(
+                vm_labels.get("webhook_trace_id", ""),
+                vm_labels.get("webhook_span_id", ""),
             )
             if queued_ctx is not None:
                 span.add_link(queued_ctx)

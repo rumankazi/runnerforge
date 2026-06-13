@@ -76,8 +76,11 @@ class RunnerForgeVmLabels(BaseModel):
     run_attempt: str
     repo: str
     installation_id: str
-    queued_trace_id: str = ""
-    queued_span_id: str = ""
+    # Outer `POST /webhook` server span IDs for the queued event, persisted
+    # so handle_in_progress can re-parent under the same anchor — merges
+    # the two webhooks into one trace.
+    webhook_trace_id: str = ""
+    webhook_span_id: str = ""
     # Unix epoch seconds (integer, stringified) captured at /webhook entry for
     # the `queued` event. Read back on `in_progress` to compute
     # runner_readiness_seconds — the on-our-side latency that strips out

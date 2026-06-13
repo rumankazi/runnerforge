@@ -1,25 +1,20 @@
 {
-  "displayName": "RunnerForge \u2014 Orchestrator Health",
+  "displayName": "RunnerForge — Orchestrator Health",
   "mosaicLayout": {
     "columns": 48,
     "tiles": [
       {
-        "yPos": 0,
-        "xPos": 0,
-        "width": 48,
         "height": 4,
         "widget": {
-          "title": "Orchestrator Health",
           "sectionHeader": {
-            "subtitle": "Service-level health, scaling behavior, and request signals.",
-            "dividerBelow": true
-          }
-        }
+            "dividerBelow": true,
+            "subtitle": "Service-level health, scaling behavior, and request signals."
+          },
+          "title": "Orchestrator Health"
+        },
+        "width": 48
       },
       {
-        "yPos": 4,
-        "xPos": 0,
-        "width": 24,
         "height": 16,
         "widget": {
           "title": "Request rate by response_code_class",
@@ -37,7 +32,9 @@
                     "aggregation": {
                       "alignmentPeriod": "60s",
                       "crossSeriesReducer": "REDUCE_SUM",
-                      "groupByFields": ["metric.label.\"response_code_class\""],
+                      "groupByFields": [
+                        "metric.label.\"response_code_class\""
+                      ],
                       "perSeriesAligner": "ALIGN_RATE"
                     },
                     "filter": "metric.type=\"run.googleapis.com/request_count\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\""
@@ -49,12 +46,11 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 24,
+        "yPos": 4
       },
       {
-        "yPos": 4,
-        "xPos": 24,
-        "width": 24,
         "height": 16,
         "widget": {
           "title": "Request latency p50/p95/p99",
@@ -117,12 +113,12 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 24,
+        "xPos": 24,
+        "yPos": 4
       },
       {
-        "yPos": 20,
-        "xPos": 0,
-        "width": 24,
         "height": 16,
         "widget": {
           "title": "Active instances + cold-start p95 by revision",
@@ -141,7 +137,9 @@
                     "aggregation": {
                       "alignmentPeriod": "60s",
                       "crossSeriesReducer": "REDUCE_SUM",
-                      "groupByFields": ["resource.label.\"revision_name\""],
+                      "groupByFields": [
+                        "resource.label.\"revision_name\""
+                      ],
                       "perSeriesAligner": "ALIGN_MEAN"
                     },
                     "filter": "metric.type=\"run.googleapis.com/container/instance_count\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\""
@@ -158,7 +156,9 @@
                     "aggregation": {
                       "alignmentPeriod": "60s",
                       "crossSeriesReducer": "REDUCE_MAX",
-                      "groupByFields": ["resource.label.\"revision_name\""],
+                      "groupByFields": [
+                        "resource.label.\"revision_name\""
+                      ],
                       "perSeriesAligner": "ALIGN_PERCENTILE_95"
                     },
                     "filter": "metric.type=\"run.googleapis.com/container/startup_latencies\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\""
@@ -166,21 +166,20 @@
                 }
               }
             ],
-            "yAxis": {
-              "label": "instances",
-              "scale": "LINEAR"
-            },
             "y2Axis": {
               "label": "cold-start ms",
               "scale": "LINEAR"
+            },
+            "yAxis": {
+              "label": "instances",
+              "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 24,
+        "yPos": 20
       },
       {
-        "yPos": 20,
-        "xPos": 24,
-        "width": 24,
         "height": 16,
         "widget": {
           "title": "Memory utilization p95 by revision",
@@ -198,7 +197,9 @@
                     "aggregation": {
                       "alignmentPeriod": "60s",
                       "crossSeriesReducer": "REDUCE_MAX",
-                      "groupByFields": ["resource.label.\"revision_name\""],
+                      "groupByFields": [
+                        "resource.label.\"revision_name\""
+                      ],
                       "perSeriesAligner": "ALIGN_PERCENTILE_95"
                     },
                     "filter": "metric.type=\"run.googleapis.com/container/memory/utilizations\" resource.type=\"cloud_run_revision\" resource.label.\"service_name\"=\"runnerforge-orchestrator\""
@@ -211,25 +212,24 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 24,
+        "xPos": 24,
+        "yPos": 20
       },
       {
-        "yPos": 36,
-        "xPos": 0,
-        "width": 48,
         "height": 4,
         "widget": {
-          "title": "Runner Fleet",
           "sectionHeader": {
-            "subtitle": "VM lifecycle: requested \u2192 registered \u2192 completed \u2192 deleted.",
-            "dividerBelow": true
-          }
-        }
+            "dividerBelow": true,
+            "subtitle": "VM lifecycle: requested → registered → completed → deleted."
+          },
+          "title": "Runner Fleet"
+        },
+        "width": 48,
+        "yPos": 36
       },
       {
-        "yPos": 40,
-        "xPos": 0,
-        "width": 24,
         "height": 16,
         "widget": {
           "title": "VM creation rate by machine_type",
@@ -247,7 +247,9 @@
                     "aggregation": {
                       "alignmentPeriod": "60s",
                       "crossSeriesReducer": "REDUCE_SUM",
-                      "groupByFields": ["metric.label.\"machine_type\""],
+                      "groupByFields": [
+                        "metric.label.\"machine_type\""
+                      ],
                       "perSeriesAligner": "ALIGN_DELTA"
                     },
                     "filter": "metric.type=\"logging.googleapis.com/user/vm_creation_count\" resource.type=\"cloud_run_revision\""
@@ -260,12 +262,11 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 24,
+        "yPos": 40
       },
       {
-        "yPos": 40,
-        "xPos": 24,
-        "width": 24,
         "height": 16,
         "widget": {
           "title": "VM creation outcomes per minute by outcome",
@@ -283,7 +284,9 @@
                     "aggregation": {
                       "alignmentPeriod": "60s",
                       "crossSeriesReducer": "REDUCE_SUM",
-                      "groupByFields": ["metric.label.\"outcome\""],
+                      "groupByFields": [
+                        "metric.label.\"outcome\""
+                      ],
                       "perSeriesAligner": "ALIGN_DELTA"
                     },
                     "filter": "metric.type=\"logging.googleapis.com/user/vm_creation_outcome_count\" resource.type=\"cloud_run_revision\""
@@ -296,12 +299,12 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 24,
+        "xPos": 24,
+        "yPos": 40
       },
       {
-        "yPos": 56,
-        "xPos": 0,
-        "width": 24,
         "height": 16,
         "widget": {
           "title": "VM deletion rate by reason",
@@ -319,7 +322,9 @@
                     "aggregation": {
                       "alignmentPeriod": "60s",
                       "crossSeriesReducer": "REDUCE_SUM",
-                      "groupByFields": ["metric.label.\"reason\""],
+                      "groupByFields": [
+                        "metric.label.\"reason\""
+                      ],
                       "perSeriesAligner": "ALIGN_DELTA"
                     },
                     "filter": "metric.type=\"logging.googleapis.com/user/vm_deletion_count\" resource.type=\"cloud_run_revision\""
@@ -332,12 +337,11 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 24,
+        "yPos": 56
       },
       {
-        "yPos": 56,
-        "xPos": 24,
-        "width": 24,
         "height": 16,
         "widget": {
           "title": "Active runner VMs",
@@ -367,12 +371,12 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 24,
+        "xPos": 24,
+        "yPos": 56
       },
       {
-        "yPos": 72,
-        "xPos": 0,
-        "width": 48,
         "height": 16,
         "widget": {
           "title": "Runner Readiness p05/p50/p95 (SLO source, excl. GH delay)",
@@ -435,25 +439,23 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 48,
+        "yPos": 72
       },
       {
-        "yPos": 88,
-        "xPos": 0,
-        "width": 48,
         "height": 4,
         "widget": {
-          "title": "Sweep & cleanup",
           "sectionHeader": {
-            "subtitle": "Hourly orphan-VM safety net. Per-run distributions, ~12 samples/day.",
-            "dividerBelow": true
-          }
-        }
+            "dividerBelow": true,
+            "subtitle": "Hourly orphan-VM safety net. Per-run distributions, ~12 samples/day."
+          },
+          "title": "Sweep & cleanup"
+        },
+        "width": 48,
+        "yPos": 88
       },
       {
-        "yPos": 92,
-        "xPos": 0,
-        "width": 16,
         "height": 16,
         "widget": {
           "title": "Sweep checked (VMs inspected per run)",
@@ -483,12 +485,11 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 16,
+        "yPos": 92
       },
       {
-        "yPos": 92,
-        "xPos": 16,
-        "width": 16,
         "height": 16,
         "widget": {
           "title": "Sweep deleted (VMs removed per run)",
@@ -518,12 +519,12 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 16,
+        "xPos": 16,
+        "yPos": 92
       },
       {
-        "yPos": 92,
-        "xPos": 32,
-        "width": 16,
         "height": 16,
         "widget": {
           "title": "Sweep errors per run",
@@ -553,25 +554,24 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 16,
+        "xPos": 32,
+        "yPos": 92
       },
       {
-        "yPos": 108,
-        "xPos": 0,
-        "width": 48,
         "height": 4,
         "widget": {
-          "title": "Webhook reliability",
           "sectionHeader": {
-            "subtitle": "Lost-webhook detection: ratio of VM creations to RunnerForge-labeled queued webhooks accepted.",
-            "dividerBelow": true
-          }
-        }
+            "dividerBelow": true,
+            "subtitle": "Lost-webhook detection: ratio of VM creations to RunnerForge-labeled queued webhooks accepted."
+          },
+          "title": "Webhook reliability"
+        },
+        "width": 48,
+        "yPos": 108
       },
       {
-        "yPos": 112,
-        "xPos": 0,
-        "width": 24,
         "height": 16,
         "widget": {
           "title": "Webhook events received by event_type",
@@ -589,7 +589,9 @@
                     "aggregation": {
                       "alignmentPeriod": "60s",
                       "crossSeriesReducer": "REDUCE_SUM",
-                      "groupByFields": ["metric.label.\"event_type\""],
+                      "groupByFields": [
+                        "metric.label.\"event_type\""
+                      ],
                       "perSeriesAligner": "ALIGN_DELTA"
                     },
                     "filter": "metric.type=\"logging.googleapis.com/user/webhook_event_count\" resource.type=\"cloud_run_revision\""
@@ -602,12 +604,11 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 24,
+        "yPos": 112
       },
       {
-        "yPos": 112,
-        "xPos": 24,
-        "width": 24,
         "height": 16,
         "widget": {
           "title": "Lost-webhook ratio (VM creations / queued webhooks)",
@@ -622,21 +623,21 @@
                 "targetAxis": "Y1",
                 "timeSeriesQuery": {
                   "timeSeriesFilterRatio": {
-                    "numerator": {
-                      "filter": "metric.type=\"logging.googleapis.com/user/vm_creation_count\" resource.type=\"cloud_run_revision\"",
-                      "aggregation": {
-                        "alignmentPeriod": "300s",
-                        "perSeriesAligner": "ALIGN_RATE",
-                        "crossSeriesReducer": "REDUCE_SUM"
-                      }
-                    },
                     "denominator": {
-                      "filter": "metric.type=\"logging.googleapis.com/user/webhook_event_count\" resource.type=\"cloud_run_revision\" metric.label.event_type=\"queued\"",
                       "aggregation": {
                         "alignmentPeriod": "300s",
-                        "perSeriesAligner": "ALIGN_RATE",
-                        "crossSeriesReducer": "REDUCE_SUM"
-                      }
+                        "crossSeriesReducer": "REDUCE_SUM",
+                        "perSeriesAligner": "ALIGN_RATE"
+                      },
+                      "filter": "metric.type=\"logging.googleapis.com/user/webhook_event_count\" resource.type=\"cloud_run_revision\" metric.label.event_type=\"queued\""
+                    },
+                    "numerator": {
+                      "aggregation": {
+                        "alignmentPeriod": "300s",
+                        "crossSeriesReducer": "REDUCE_SUM",
+                        "perSeriesAligner": "ALIGN_RATE"
+                      },
+                      "filter": "metric.type=\"logging.googleapis.com/user/vm_creation_count\" resource.type=\"cloud_run_revision\""
                     }
                   }
                 }
@@ -647,25 +648,24 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 24,
+        "xPos": 24,
+        "yPos": 112
       },
       {
-        "yPos": 128,
-        "xPos": 0,
-        "width": 48,
         "height": 4,
         "widget": {
-          "title": "Spot & Policy",
           "sectionHeader": {
-            "subtitle": "Spot-VM observability and machine-policy reject visibility.",
-            "dividerBelow": true
-          }
-        }
+            "dividerBelow": true,
+            "subtitle": "Spot-VM observability and machine-policy reject visibility."
+          },
+          "title": "Spot & Policy"
+        },
+        "width": 48,
+        "yPos": 128
       },
       {
-        "yPos": 132,
-        "xPos": 0,
-        "width": 24,
         "height": 16,
         "widget": {
           "title": "VM creation rate by spot",
@@ -683,7 +683,9 @@
                     "aggregation": {
                       "alignmentPeriod": "60s",
                       "crossSeriesReducer": "REDUCE_SUM",
-                      "groupByFields": ["metric.label.\"spot\""],
+                      "groupByFields": [
+                        "metric.label.\"spot\""
+                      ],
                       "perSeriesAligner": "ALIGN_DELTA"
                     },
                     "filter": "metric.type=\"logging.googleapis.com/user/vm_creation_count\" resource.type=\"cloud_run_revision\""
@@ -696,12 +698,11 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 24,
+        "yPos": 132
       },
       {
-        "yPos": 132,
-        "xPos": 24,
-        "width": 24,
         "height": 16,
         "widget": {
           "title": "Preemption events (GCE audit log vs job-confirmed)",
@@ -748,12 +749,12 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 24,
+        "xPos": 24,
+        "yPos": 132
       },
       {
-        "yPos": 148,
-        "xPos": 0,
-        "width": 48,
         "height": 16,
         "widget": {
           "title": "Machine policy rejects by reason",
@@ -771,7 +772,9 @@
                     "aggregation": {
                       "alignmentPeriod": "60s",
                       "crossSeriesReducer": "REDUCE_SUM",
-                      "groupByFields": ["metric.label.\"reason\""],
+                      "groupByFields": [
+                        "metric.label.\"reason\""
+                      ],
                       "perSeriesAligner": "ALIGN_DELTA"
                     },
                     "filter": "metric.type=\"logging.googleapis.com/user/machine_policy_reject_count\" resource.type=\"cloud_run_revision\""
@@ -784,25 +787,23 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 48,
+        "yPos": 148
       },
       {
-        "yPos": 164,
-        "xPos": 0,
-        "width": 48,
         "height": 4,
         "widget": {
-          "title": "Webhook delivery latency",
           "sectionHeader": {
-            "subtitle": "Separating GitHub-side webhook delay from our service's latency. Time-to-Register SLO is sourced from Runner Readiness above (excl. GH delay).",
-            "dividerBelow": true
-          }
-        }
+            "dividerBelow": true,
+            "subtitle": "Separating GitHub-side webhook delay from our service's latency. Time-to-Register SLO is sourced from Runner Readiness above (excl. GH delay)."
+          },
+          "title": "Webhook delivery latency"
+        },
+        "width": 48,
+        "yPos": 164
       },
       {
-        "yPos": 168,
-        "xPos": 0,
-        "width": 24,
         "height": 16,
         "widget": {
           "title": "End-to-end Time-to-Runner p50/p95 (incl. GH delay)",
@@ -849,12 +850,11 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 24,
+        "yPos": 168
       },
       {
-        "yPos": 168,
-        "xPos": 24,
-        "width": 24,
         "height": 16,
         "widget": {
           "title": "GitHub webhook delivery lag p50/p95 (observation only)",
@@ -933,7 +933,10 @@
               "scale": "LINEAR"
             }
           }
-        }
+        },
+        "width": 24,
+        "xPos": 24,
+        "yPos": 168
       }
     ]
   }
