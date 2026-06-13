@@ -25,8 +25,8 @@ _VALID_VM_LABELS_WITH_TRACE = {
     "run_attempt": "3",
     "repo": "rumankazi_runnerforge",
     "installation_id": "135399152",
-    "queued_trace_id": "0123456789abcdef0123456789abcdef",
-    "queued_span_id": "0123456789abcdef",
+    "webhook_trace_id": "0123456789abcdef0123456789abcdef",
+    "webhook_span_id": "0123456789abcdef",
     # Sat 30 May 2026 10:00:00 UTC = epoch 1780135200
     "queued_received_at": "1780135200",
 }
@@ -344,8 +344,8 @@ def test_webhook_in_progress_event_adds_span_link_when_queued_trace_present(
             "run_attempt": "3",
             "repo": "rumankazi_runnerforge",
             "installation_id": "135399152",
-            "queued_trace_id": "0123456789abcdef0123456789abcdef",  # 32 hex chars
-            "queued_span_id": "0123456789abcdef",  # 16 hex chars
+            "webhook_trace_id": "0123456789abcdef0123456789abcdef",  # 32 hex chars
+            "webhook_span_id": "0123456789abcdef",  # 16 hex chars
         }
     )
     monkeypatch.setattr("runnerforge.handlers.get_vm_labels_by_job", get_labels_mock)
@@ -624,12 +624,12 @@ def test_webhook_in_progress_emits_no_outcome_log_when_vm_labels_missing(
 def test_webhook_in_progress_with_empty_trace_id_skips_parent_context(
     fixtures_dir, monkeypatch, caplog
 ):
-    """Defensive path on `_queued_span_context`: if VM labels exist but the
-    queued_trace_id/span_id were never populated (e.g. VM provisioned by an
+    """Defensive path on `_webhook_span_context`: if VM labels exist but the
+    webhook_trace_id/span_id were never populated (e.g. VM provisioned by an
     older orchestrator revision), the helper returns None and the
-    in_progress span stays standalone — no parent context, no synthetic
-    gap span. The new structured log MUST NOT fire either, since
-    queued_received_at is also absent on those legacy VMs."""
+    in_progress span stays standalone — no parent context. The new
+    structured log MUST NOT fire either, since queued_received_at is also
+    absent on those legacy VMs."""
     payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
     payload["action"] = "in_progress"
     payload["workflow_job"]["conclusion"] = "success"
@@ -639,8 +639,8 @@ def test_webhook_in_progress_with_empty_trace_id_skips_parent_context(
     body = json.dumps(payload).encode()
 
     labels_legacy = dict(_VALID_VM_LABELS_WITH_TRACE)
-    labels_legacy["queued_trace_id"] = ""
-    labels_legacy["queued_span_id"] = ""
+    labels_legacy["webhook_trace_id"] = ""
+    labels_legacy["webhook_span_id"] = ""
     monkeypatch.setattr(
         "runnerforge.handlers.get_vm_labels_by_job",
         AsyncMock(return_value=labels_legacy),
@@ -726,7 +726,7 @@ def test_webhook_in_progress_outcome_log_omits_queued_lag_when_created_at_missin
 def test_webhook_completed_skips_link_when_labels_have_empty_trace_id(
     fixtures_dir, monkeypatch, caplog
 ):
-    """Legacy VM (pre-PR) has labels but no queued_trace_id. The completed
+    """Legacy VM (pre-PR) has labels but no webhook_trace_id. The completed
     handler safely no-ops on the link without raising — defense for the
     cross-trace navigation feature degrading gracefully on partial data."""
     payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
@@ -737,8 +737,8 @@ def test_webhook_completed_skips_link_when_labels_have_empty_trace_id(
     body = json.dumps(payload).encode()
 
     labels_no_trace = dict(_VALID_VM_LABELS_WITH_TRACE)
-    labels_no_trace["queued_trace_id"] = ""
-    labels_no_trace["queued_span_id"] = ""
+    labels_no_trace["webhook_trace_id"] = ""
+    labels_no_trace["webhook_span_id"] = ""
     monkeypatch.setattr(
         "runnerforge.handlers.get_vm_labels_by_job",
         AsyncMock(return_value=labels_no_trace),
