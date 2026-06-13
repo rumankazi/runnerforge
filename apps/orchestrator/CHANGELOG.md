@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.16.0...orchestrator-v0.16.1) (2026-06-13)
+
+
+### Bug Fixes
+
+* trace parents connections ([#154](https://github.com/rumankazi/runnerforge/issues/154)) ([ba57a65](https://github.com/rumankazi/runnerforge/commit/ba57a65fadf4c7cb7972edb1c97016f98682a29e))
+
 ## [0.16.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.15.0...orchestrator-v0.16.0) (2026-06-11)
 
 
