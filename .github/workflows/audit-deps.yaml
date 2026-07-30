@@ -1,11 +1,15 @@
 name: Dependency Audit
 
 # Advisory scanning runs here, on a schedule, rather than in the PR gate.
-# `bun audit` resolves against a live advisory feed, so its result changes
-# without the code changing — as a required PR check that means a GHSA
-# published overnight blocks every open PR, including ones that can't fix it
-# (transitive deps). Here a finding opens/updates a single tracking issue and
-# the run stays green.
+# `bun audit` and `pip-audit` resolve against a live advisory feed, so their
+# result changes without the code changing — as required PR checks that means
+# an advisory published overnight blocks every open PR, including ones that
+# cannot fix it because the offending package is transitive. Here a finding
+# opens/updates a tracking issue and the run stays green.
+#
+# Deterministic scanners stay in the PR gate where they belong: `bandit`
+# analyses our own source and gives the same answer for the same code, so a
+# failure there is always the author's to fix.
 
 on:
   schedule:
@@ -19,7 +23,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  audit-web:
+  web:
     name: Audit web
     timeout-minutes: 15
     runs-on: ubuntu-latest
@@ -46,82 +50,76 @@ jobs:
         working-directory: apps/web
         run: |
           set +e
-          bun audit >"$RUNNER_TEMP/audit.txt" 2>&1
+          bun audit >"$RUNNER_TEMP/audit-web.txt" 2>&1
           code=$?
           set -e
-          cat "$RUNNER_TEMP/audit.txt"
+          cat "$RUNNER_TEMP/audit-web.txt"
           if [ "$code" -eq 0 ]; then
             echo "found=false" >>"$GITHUB_OUTPUT"
           else
             echo "found=true" >>"$GITHUB_OUTPUT"
           fi
 
-      - name: Open or update tracking issue
-        if: steps.audit.outputs.found == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      - name: Report
+        uses: ./.github/actions/audit-issue
+        with:
+          app: apps/web
+          found: ${{ steps.audit.outputs.found }}
+          report-file: ${{ runner.temp }}/audit-web.txt
+          token: ${{ secrets.GITHUB_TOKEN }}
+          remediation: |
+            Refreshing the lockfile (`bun install`) clears advisories that have a
+            patched release inside the existing range. Transitive ones usually
+            need an entry in the `overrides` block of `apps/web/package.json` —
+            and note that pinning a transitive package can force a major bump on
+            whatever depends on it, so check lint/types/build after.
+
+  orchestrator:
+    name: Audit orchestrator
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Mise activation
+        uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
+        with:
+          working_directory: apps/orchestrator
+
+      - name: Sync
+        working-directory: apps/orchestrator
+        run: uv sync --frozen
+
+      - name: Audit
+        id: audit
+        working-directory: apps/orchestrator
         run: |
-          gh label create dependency-audit \
-            --repo "$REPO" \
-            --color FBCA04 \
-            --description "Vulnerability found by the scheduled dependency audit" \
-            2>/dev/null || true
-
-          {
-            echo "\`bun audit\` reported vulnerabilities in \`apps/web\`."
-            echo
-            echo '```'
-            cat "$RUNNER_TEMP/audit.txt"
-            echo '```'
-            echo
-            echo "Refreshing the lockfile (\`bun install\`) clears advisories that have a"
-            echo "patched release in range. Transitive ones usually need an entry in the"
-            echo "\`overrides\` block of \`apps/web/package.json\`."
-            echo
-            echo "[Workflow run]($RUN_URL) — this issue is rewritten by each scheduled run."
-          } >"$RUNNER_TEMP/body.md"
-
-          existing=$(gh issue list \
-            --repo "$REPO" \
-            --label dependency-audit \
-            --state open \
-            --limit 1 \
-            --json number \
-            --jq '.[0].number // empty')
-
-          if [ -n "$existing" ]; then
-            echo "Updating existing issue #$existing"
-            gh issue edit "$existing" --repo "$REPO" --body-file "$RUNNER_TEMP/body.md"
+          set +e
+          uv run pip-audit --skip-editable >"$RUNNER_TEMP/audit-orchestrator.txt" 2>&1
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/audit-orchestrator.txt"
+          if [ "$code" -eq 0 ]; then
+            echo "found=false" >>"$GITHUB_OUTPUT"
           else
-            echo "Opening new issue"
-            gh issue create \
-              --repo "$REPO" \
-              --title "Dependency audit: vulnerabilities in apps/web" \
-              --label dependency-audit \
-              --body-file "$RUNNER_TEMP/body.md"
+            echo "found=true" >>"$GITHUB_OUTPUT"
           fi
 
-      - name: Close tracking issue when clean
-        if: steps.audit.outputs.found == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          existing=$(gh issue list \
-            --repo "$REPO" \
-            --label dependency-audit \
-            --state open \
-            --limit 1 \
-            --json number \
-            --jq '.[0].number // empty')
-
-          if [ -n "$existing" ]; then
-            gh issue close "$existing" \
-              --repo "$REPO" \
-              --reason completed \
-              --comment "\`bun audit\` is clean as of the latest scheduled run."
-          else
-            echo "No vulnerabilities and no open tracking issue."
-          fi
+      - name: Report
+        uses: ./.github/actions/audit-issue
+        with:
+          app: apps/orchestrator
+          found: ${{ steps.audit.outputs.found }}
+          report-file: ${{ runner.temp }}/audit-orchestrator.txt
+          token: ${{ secrets.GITHUB_TOKEN }}
+          remediation: |
+            Re-resolving the lockfile (`uv lock --upgrade-package <name>`) clears
+            advisories that have a patched release inside the existing range. For
+            transitive packages, add a constraint to `[project.dependencies]` in
+            `apps/orchestrator/pyproject.toml` to pull the resolver forward.
