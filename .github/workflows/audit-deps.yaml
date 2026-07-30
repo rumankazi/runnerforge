@@ -1,0 +1,127 @@
+name: Dependency Audit
+
+# Advisory scanning runs here, on a schedule, rather than in the PR gate.
+# `bun audit` resolves against a live advisory feed, so its result changes
+# without the code changing — as a required PR check that means a GHSA
+# published overnight blocks every open PR, including ones that can't fix it
+# (transitive deps). Here a finding opens/updates a single tracking issue and
+# the run stays green.
+
+on:
+  schedule:
+    - cron: "23 7 * * *" # daily 07:23 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: audit-deps
+  cancel-in-progress: true
+
+jobs:
+  audit-web:
+    name: Audit web
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Mise activation
+        uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
+        with:
+          working_directory: apps/web
+
+      - name: Sync packages
+        working-directory: apps/web
+        run: bun install --frozen-lockfile
+
+      - name: Audit
+        id: audit
+        working-directory: apps/web
+        run: |
+          set +e
+          bun audit >"$RUNNER_TEMP/audit.txt" 2>&1
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/audit.txt"
+          if [ "$code" -eq 0 ]; then
+            echo "found=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "found=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update tracking issue
+        if: steps.audit.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create dependency-audit \
+            --repo "$REPO" \
+            --color FBCA04 \
+            --description "Vulnerability found by the scheduled dependency audit" \
+            2>/dev/null || true
+
+          {
+            echo "\`bun audit\` reported vulnerabilities in \`apps/web\`."
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/audit.txt"
+            echo '```'
+            echo
+            echo "Refreshing the lockfile (\`bun install\`) clears advisories that have a"
+            echo "patched release in range. Transitive ones usually need an entry in the"
+            echo "\`overrides\` block of \`apps/web/package.json\`."
+            echo
+            echo "[Workflow run]($RUN_URL) — this issue is rewritten by each scheduled run."
+          } >"$RUNNER_TEMP/body.md"
+
+          existing=$(gh issue list \
+            --repo "$REPO" \
+            --label dependency-audit \
+            --state open \
+            --limit 1 \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [ -n "$existing" ]; then
+            echo "Updating existing issue #$existing"
+            gh issue edit "$existing" --repo "$REPO" --body-file "$RUNNER_TEMP/body.md"
+          else
+            echo "Opening new issue"
+            gh issue create \
+              --repo "$REPO" \
+              --title "Dependency audit: vulnerabilities in apps/web" \
+              --label dependency-audit \
+              --body-file "$RUNNER_TEMP/body.md"
+          fi
+
+      - name: Close tracking issue when clean
+        if: steps.audit.outputs.found == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          existing=$(gh issue list \
+            --repo "$REPO" \
+            --label dependency-audit \
+            --state open \
+            --limit 1 \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" \
+              --repo "$REPO" \
+              --reason completed \
+              --comment "\`bun audit\` is clean as of the latest scheduled run."
+          else
+            echo "No vulnerabilities and no open tracking issue."
+          fi
