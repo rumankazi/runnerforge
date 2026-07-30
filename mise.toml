@@ -1,3 +1,3 @@
 [tools]
 # rely on each app's own mise.toml for app-specific versions
-aqua = "2.60.0"
+aqua = "2.60.2"
