@@ -28,9 +28,11 @@ jobs:
       - name: Sync packages
         run: bun install --frozen-lockfile
 
-      - name: Audit
-        run: bun audit
-
+      # No `bun audit` here on purpose. It queries a live advisory feed, so a
+      # newly published GHSA turns every open PR red at once, regardless of the
+      # diff — and transitive advisories can't be fixed by the PR that trips
+      # them. Auditing runs on a schedule instead (audit-deps.yaml), which
+      # files an issue. This job stays a signal the PR author can act on.
       - name: Lint
         run: bun run lint
 
