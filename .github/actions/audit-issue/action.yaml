@@ -1,0 +1,112 @@
+name: Report audit findings as an issue
+description: |
+  Turns the result of a dependency audit into a single, self-maintaining
+  tracking issue: opened on the first finding, rewritten in place while the
+  finding persists, and closed once the audit comes back clean.
+
+  Why an issue rather than a failed check — advisory scanners (`bun audit`,
+  `pip-audit`) resolve against a live feed, so their result changes with no
+  change to the code. Wired into the PR gate, a newly published advisory
+  fails every open PR at once, including ones that cannot fix it because the
+  offending package is transitive. So the audit runs on a schedule and
+  reports here instead, and the workflow run stays green.
+
+  One issue per app, matched on exact title, so apps never clobber each
+  other's tracking issue.
+
+inputs:
+  app:
+    description: Path of the audited app, e.g. `apps/web`. Used in the issue title.
+    required: true
+
+  found:
+    description: '`true` if the audit reported vulnerabilities, `false` if it was clean.'
+    required: true
+
+  report-file:
+    description: File holding the audit output, embedded verbatim into the issue body.
+    required: true
+
+  remediation:
+    description: App-specific guidance appended to the issue body (Markdown).
+    required: false
+    default: ''
+
+  token:
+    description: 'Token used for issue read/write. Needs `issues: write`.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        INPUT_APP: ${{ inputs.app }}
+        INPUT_FOUND: ${{ inputs.found }}
+        INPUT_REPORT_FILE: ${{ inputs.report-file }}
+        INPUT_REMEDIATION: ${{ inputs.remediation }}
+        REPO: ${{ github.repository }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+
+        TITLE="Dependency audit: vulnerabilities in ${INPUT_APP}"
+
+        # Look for this app's existing tracking issue. Matched on exact title
+        # rather than label alone, so each app owns its own issue.
+        existing=$(gh issue list \
+          --repo "$REPO" \
+          --label dependency-audit \
+          --state open \
+          --limit 100 \
+          --json number,title \
+          --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")
+
+        if [ "$INPUT_FOUND" != "true" ]; then
+          if [ -n "$existing" ]; then
+            echo "Audit clean — closing #$existing"
+            gh issue close "$existing" \
+              --repo "$REPO" \
+              --reason completed \
+              --comment "The scheduled audit for \`${INPUT_APP}\` is now clean."
+          else
+            echo "Audit clean, no open tracking issue for ${INPUT_APP}. Nothing to do."
+          fi
+          exit 0
+        fi
+
+        # gh creates labels lazily; this is idempotent and safe to re-run.
+        gh label create dependency-audit \
+          --repo "$REPO" \
+          --color FBCA04 \
+          --description "Vulnerability found by the scheduled dependency audit" \
+          2>/dev/null || true
+
+        BODY="$RUNNER_TEMP/audit-issue-body.md"
+        {
+          echo "The scheduled dependency audit reported vulnerabilities in \`${INPUT_APP}\`."
+          echo
+          echo '```'
+          cat "$INPUT_REPORT_FILE"
+          echo '```'
+          if [ -n "$INPUT_REMEDIATION" ]; then
+            echo
+            echo "$INPUT_REMEDIATION"
+          fi
+          echo
+          echo "[Workflow run]($RUN_URL) — this issue is rewritten by each scheduled"
+          echo "run and closes automatically once the audit is clean."
+        } >"$BODY"
+
+        if [ -n "$existing" ]; then
+          echo "Updating #$existing"
+          gh issue edit "$existing" --repo "$REPO" --body-file "$BODY"
+        else
+          echo "Opening a new tracking issue"
+          gh issue create \
+            --repo "$REPO" \
+            --title "$TITLE" \
+            --label dependency-audit \
+            --body-file "$BODY"
+        fi
