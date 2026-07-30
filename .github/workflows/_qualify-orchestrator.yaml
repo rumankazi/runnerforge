@@ -35,12 +35,16 @@ jobs:
         run: |
           uv run ruff format --check
 
+      # Bandit stays here: it analyses our own source, so the same code always
+      # gives the same answer and a failure is the PR author's to fix.
       - name: Bandit
         run: uv run bandit -r src/ -ll -ii
 
-      - name: pip-audit
-        run: uv run pip-audit --skip-editable
-
+      # No `pip-audit` here on purpose — same reasoning as `bun audit` in
+      # _qualify-web.yaml. It queries a live advisory feed, so a newly
+      # published advisory fails every open PR at once regardless of the diff,
+      # and transitive findings can't be fixed by the PR that trips them.
+      # It runs on a schedule instead (audit-deps.yaml), which files an issue.
       - name: 🧪
         run: uv run pytest
 
