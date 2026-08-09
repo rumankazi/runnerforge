@@ -1,9 +1,7 @@
 import logging
-from typing import Any, TypeVar
+from typing import Any
 
 from pydantic import BaseModel, ValidationError
-
-T = TypeVar("T", bound=BaseModel)
 
 
 def _log_validation_errors(e: ValidationError, logger: logging.Logger) -> None:
@@ -13,7 +11,7 @@ def _log_validation_errors(e: ValidationError, logger: logging.Logger) -> None:
         logger.error(f"    - {field}: {err['msg']} (got: {err.get('input')!r})")
 
 
-def parse_github_response(
+def parse_github_response[T: BaseModel](
     model_cls: type[T], data: dict[str, Any], cause_hint: str, logger: logging.Logger
 ) -> T:
     # Abstraction layer for the model validation and error handling

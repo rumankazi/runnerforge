@@ -3,6 +3,7 @@ import logging
 
 import pytest
 from pydantic import ValidationError
+
 from runnerforge.models import WorkflowJobEvent
 from runnerforge.validation import parse_github_response
 

@@ -11,6 +11,19 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Drop pip and the ensurepip bundle. We install nothing with pip --- uv owns
+# the venv --- but the slim image carries pip's vendored tree and ensurepip's
+# bundled wheels, and Trivy reads the packages inside them. That is where the
+# setuptools 70.3.0 (CVE-2025-47273) and msgpack 1.1.2 (GHSA-6v7p-g79w-8964)
+# findings come from: not installed distributions (Syft's SBOM has neither,
+# and `uv tree --no-dev` lists neither) but files bundled inside the image, so
+# there is nothing to upgrade --- only to remove.
+RUN python -m pip uninstall -y pip 2>/dev/null || true; \
+    rm -rf /usr/local/lib/python3.14/ensurepip \
+           /usr/local/lib/python3.14/site-packages/pip \
+           /usr/local/lib/python3.14/site-packages/pip-*.dist-info \
+           /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.14
+
 WORKDIR /app
 
 # Copy uv binary from official image (no pip install needed)

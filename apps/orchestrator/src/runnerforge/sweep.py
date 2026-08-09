@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from runnerforge.compute_client import delete_vm, list_runnerforge_vms
 from runnerforge.github_client import get_installation_token, get_job_status
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 async def run_sweep() -> SweepResult:
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     installation_token_cache: dict[int, str] = {}
     errors: list[str] = []
     deleted: int = 0
@@ -77,7 +77,9 @@ async def run_sweep() -> SweepResult:
                     "Sweep decision",
                     extra={**log_extra, "decision": "skip", "reason": "job_running"},
                 )
-        except Exception as e:
+        # Deliberately broad: one VM that fails to sweep must not abort the
+        # sweep for every other VM. The failure is recorded and reported.
+        except Exception as e:  # noqa: BLE001
             errors.append(f"{vm.name}: {e}")
             logger.error(
                 "Sweep failed for VM", extra={"vm_name": vm.name, "error": str(e)}

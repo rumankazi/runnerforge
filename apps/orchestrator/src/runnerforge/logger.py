@@ -4,7 +4,7 @@ import os
 import sys
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from types import MappingProxyType
 
@@ -83,7 +83,7 @@ class ColorFormatter(logging.Formatter):
     def format(self, record):
         extras = _extract_extras(record)
         timestamp = (
-            datetime.fromtimestamp(record.created, tz=timezone.utc)
+            datetime.fromtimestamp(record.created, tz=UTC)
             .astimezone()
             .strftime("%H:%M:%S")
         )
@@ -105,9 +105,7 @@ class JsonFormatter(logging.Formatter):
         formatted_record = {
             "severity": record.levelname,
             "message": record.getMessage(),
-            "timestamp": datetime.fromtimestamp(
-                record.created, tz=timezone.utc
-            ).isoformat(),
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "logger": record.name,
             "logging.googleapis.com/sourceLocation": {
                 "file": record.pathname,
