@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 
 from fastapi import FastAPI
+
 from runnerforge.tracing import setup_tracing
 
 
