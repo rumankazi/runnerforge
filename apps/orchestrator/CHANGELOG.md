@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.16.4](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.16.3...orchestrator-v0.16.4) (2026-08-09)
+
+
+### Bug Fixes
+
+* **deps:** lock file maintenance ([#170](https://github.com/rumankazi/runnerforge/issues/170)) ([56bf5ce](https://github.com/rumankazi/runnerforge/commit/56bf5ce8a1fff1489fa26db784e6aa4744318495))
+* **deps:** lock file maintenance ([#172](https://github.com/rumankazi/runnerforge/issues/172)) ([debbf66](https://github.com/rumankazi/runnerforge/commit/debbf66b2d563d7f379e2ea7d44ae239da279ae8))
+* **deps:** lock file maintenance ([#176](https://github.com/rumankazi/runnerforge/issues/176)) ([7bedc8c](https://github.com/rumankazi/runnerforge/commit/7bedc8c00249c7792bfad6327ea6d48cbd7e270a))
+* **deps:** lock file maintenance ([#181](https://github.com/rumankazi/runnerforge/issues/181)) ([3c353a6](https://github.com/rumankazi/runnerforge/commit/3c353a6a5b8f0607f3500b84b8f0113cfdf1c26b))
+* **orchestrator:** unblock CI — ruff 0.16 rule set and base-image CVEs ([#191](https://github.com/rumankazi/runnerforge/issues/191)) ([2f614de](https://github.com/rumankazi/runnerforge/commit/2f614de1021fe727d11d3aa1a71470457a43f5d7))
+
 ## [0.16.3](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.16.2...orchestrator-v0.16.3) (2026-06-15)
 
 
