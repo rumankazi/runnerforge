@@ -3,6 +3,7 @@ import hmac
 from unittest.mock import MagicMock
 
 import pytest
+
 from runnerforge.security import verify_github_signature, verify_oidc_token
 
 SECRET = b"test-secret"

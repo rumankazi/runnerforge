@@ -2,6 +2,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 from fastapi.testclient import TestClient
+
 from runnerforge.main import app
 from runnerforge.models import SweepResult
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.4.0](https://github.com/rumankazi/runnerforge/compare/web-v1.3.2...web-v1.4.0) (2026-08-09)
+
+
+### Features
+
+* **deps:** update web deps (minor) ([#177](https://github.com/rumankazi/runnerforge/issues/177)) ([e3928f7](https://github.com/rumankazi/runnerforge/commit/e3928f78b73b110869f8e959f7cefa2f0fa8cdd5))
+
+
+### Bug Fixes
+
+* **deps:** lock file maintenance ([#170](https://github.com/rumankazi/runnerforge/issues/170)) ([56bf5ce](https://github.com/rumankazi/runnerforge/commit/56bf5ce8a1fff1489fa26db784e6aa4744318495))
+* **deps:** lock file maintenance ([#172](https://github.com/rumankazi/runnerforge/issues/172)) ([debbf66](https://github.com/rumankazi/runnerforge/commit/debbf66b2d563d7f379e2ea7d44ae239da279ae8))
+* **deps:** lock file maintenance ([#176](https://github.com/rumankazi/runnerforge/issues/176)) ([7bedc8c](https://github.com/rumankazi/runnerforge/commit/7bedc8c00249c7792bfad6327ea6d48cbd7e270a))
+* **deps:** lock file maintenance ([#181](https://github.com/rumankazi/runnerforge/issues/181)) ([3c353a6](https://github.com/rumankazi/runnerforge/commit/3c353a6a5b8f0607f3500b84b8f0113cfdf1c26b))
+* **deps:** update web deps (patch) ([#169](https://github.com/rumankazi/runnerforge/issues/169)) ([9c2e54e](https://github.com/rumankazi/runnerforge/commit/9c2e54e59944276bbe02d97de92d6298db0de17a))
+* **deps:** update web deps (patch) to v16.10.4 ([#166](https://github.com/rumankazi/runnerforge/issues/166)) ([c03e1ce](https://github.com/rumankazi/runnerforge/commit/c03e1ce87a400063159650be384469e04f3dd661))
+* **deps:** update web deps (patch) to v16.10.7 ([#173](https://github.com/rumankazi/runnerforge/issues/173)) ([bf43e39](https://github.com/rumankazi/runnerforge/commit/bf43e39f57110f1910e3488a67025609f77e3041))
+* **deps:** update web deps (patch) to v16.2.10 ([#175](https://github.com/rumankazi/runnerforge/issues/175)) ([e87cc33](https://github.com/rumankazi/runnerforge/commit/e87cc33ef8320265fd6b5d42923db535f8d122d4))
+* **deps:** update web deps (patch) to v16.2.11 ([#183](https://github.com/rumankazi/runnerforge/issues/183)) ([cf09e84](https://github.com/rumankazi/runnerforge/commit/cf09e84b55dd89f50c6ed3205af7e79061f66373))
+* **web:** clear transitive audit advisories, move auditing to a schedule ([#187](https://github.com/rumankazi/runnerforge/issues/187)) ([8fd3d14](https://github.com/rumankazi/runnerforge/commit/8fd3d14977b7ce96f667d2a1736df87cb8f1c373))
+
 ## [1.3.2](https://github.com/rumankazi/runnerforge/compare/web-v1.3.1...web-v1.3.2) (2026-06-16)
 
 
