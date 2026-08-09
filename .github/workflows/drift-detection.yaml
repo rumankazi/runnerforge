@@ -26,10 +26,10 @@ jobs:
       contents: read
       issues: read
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
-      - uses: suzuki-shunsuke/tfaction@0627b0a1dfec9479a3fa73a5831be7979661b7eb # v2.0.4
+      - uses: suzuki-shunsuke/tfaction@f62d11ce89de2aa26b00efaa266e449769f70442 # v2.1.0
         id: pick-out
         with:
           action: pick-out-drift-issues
@@ -49,7 +49,7 @@ jobs:
       matrix:
         issue: ${{fromJSON(needs.pick-out.outputs.issues)}}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
 
@@ -58,29 +58,29 @@ jobs:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
           service_account: ${{ env.CI_TERRAFORM_PLAN_SA }}
 
-      - uses: suzuki-shunsuke/tfaction@0627b0a1dfec9479a3fa73a5831be7979661b7eb # v2.0.4
+      - uses: suzuki-shunsuke/tfaction@f62d11ce89de2aa26b00efaa266e449769f70442 # v2.1.0
         with:
           action: set-drift-env
           issue: ${{toJSON(matrix.issue)}}
 
-      - uses: suzuki-shunsuke/tfaction@0627b0a1dfec9479a3fa73a5831be7979661b7eb # v2.0.4
+      - uses: suzuki-shunsuke/tfaction@f62d11ce89de2aa26b00efaa266e449769f70442 # v2.1.0
         with:
           action: setup
 
       - name: terraform init
-        uses: suzuki-shunsuke/tfaction@0627b0a1dfec9479a3fa73a5831be7979661b7eb # v2.0.4
+        uses: suzuki-shunsuke/tfaction@f62d11ce89de2aa26b00efaa266e449769f70442 # v2.1.0
         with:
           action: terraform-init
 
-      - uses: suzuki-shunsuke/tfaction@0627b0a1dfec9479a3fa73a5831be7979661b7eb # v2.0.4
+      - uses: suzuki-shunsuke/tfaction@f62d11ce89de2aa26b00efaa266e449769f70442 # v2.1.0
         with:
           action: test
 
-      - uses: suzuki-shunsuke/tfaction@0627b0a1dfec9479a3fa73a5831be7979661b7eb # v2.0.4
+      - uses: suzuki-shunsuke/tfaction@f62d11ce89de2aa26b00efaa266e449769f70442 # v2.1.0
         with:
           action: plan
 
-      - uses: suzuki-shunsuke/tfaction@0627b0a1dfec9479a3fa73a5831be7979661b7eb # v2.0.4
+      - uses: suzuki-shunsuke/tfaction@f62d11ce89de2aa26b00efaa266e449769f70442 # v2.1.0
         if: always()
         with:
           action: update-drift-issue
