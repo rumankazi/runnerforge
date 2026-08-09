@@ -11,18 +11,18 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# The same idea, for the pip-managed packages the slim image ships in its
-# system site-packages. `apt-get upgrade` above only patches Debian packages,
-# so it can't reach these. Trivy scans every Python package it finds in the
-# image, not just the ones we depend on, so a fixed CVE in one of them fails
-# the build even though neither is in our runtime dependency tree
-# (`uv tree --no-dev` lists neither). Upgrade whichever are present, in place;
-# the guard keeps this a no-op if a future base image drops one.
-RUN for pkg in setuptools msgpack; do \
-        if pip show "$pkg" > /dev/null 2>&1; then \
-            pip install --no-cache-dir --upgrade "$pkg"; \
-        fi; \
-    done
+# Drop pip and the ensurepip bundle. We install nothing with pip --- uv owns
+# the venv --- but the slim image carries pip's vendored tree and ensurepip's
+# bundled wheels, and Trivy reads the packages inside them. That is where the
+# setuptools 70.3.0 (CVE-2025-47273) and msgpack 1.1.2 (GHSA-6v7p-g79w-8964)
+# findings come from: not installed distributions (Syft's SBOM has neither,
+# and `uv tree --no-dev` lists neither) but files bundled inside the image, so
+# there is nothing to upgrade --- only to remove.
+RUN python -m pip uninstall -y pip 2>/dev/null || true; \
+    rm -rf /usr/local/lib/python3.14/ensurepip \
+           /usr/local/lib/python3.14/site-packages/pip \
+           /usr/local/lib/python3.14/site-packages/pip-*.dist-info \
+           /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.14
 
 WORKDIR /app
 
