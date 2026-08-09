@@ -1,8 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "helpers:pinGitHubActionDigestsToSemver", ":semanticCommits"],
-  "rebaseWhen": "conflicted",
+  "rebaseWhen": "behind-base-branch",
+  "prConcurrentLimit": 6,
   "labels": ["deps"],
+  "docker": {
+    "pinDigests": true
+  },
   "lockFileMaintenance": {
     "enabled": true,
     "autoApprove": true,

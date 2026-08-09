@@ -1,5 +1,8 @@
 # ------- Stage 1: base — prod deps only, no project code -------
-FROM public.ecr.aws/docker/library/python:3.14-slim AS base
+# Pinned by digest, same discipline as the SHA-pinned actions in .github: a
+# floating tag means two builds of the same commit can differ. Renovate keeps
+# the digest current (`docker.pinDigests` in renovate.json).
+FROM public.ecr.aws/docker/library/python:3.14-slim@sha256:a7fb1e634c4a578f9e0bd6327f11a3cde11b7a9395f48e24360c0988bcc5c2bc AS base
 
 # Pull latest OS-level security patches at build time. The python:3.14-slim
 # tag itself lags behind Debian's security repo by days when a CVE drops;
@@ -26,8 +29,16 @@ RUN python -m pip uninstall -y pip 2>/dev/null || true; \
 
 WORKDIR /app
 
-# Copy uv binary from official image (no pip install needed)
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+# Copy uv binary from official image (no pip install needed). Digest-pinned:
+# `:latest` here meant an unpinned third-party binary landing in the image on
+# every build, which is the one thing in this repo that wasn't reproducible.
+COPY --from=ghcr.io/astral-sh/uv:latest@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc /uv /uvx /usr/local/bin/
+
+# Keep uv's download cache out of the image. Every `uv sync` below would
+# otherwise leave build-time packages (hatchling, pathspec, pluggy, ...) in
+# the runtime filesystem, where they are dead weight and get picked up by
+# image scanners even though nothing imports them.
+ENV UV_NO_CACHE=1
 
 # Copy lock + manifest from orchestrator subdir
 COPY apps/orchestrator/pyproject.toml apps/orchestrator/uv.lock apps/orchestrator/README.md ./
