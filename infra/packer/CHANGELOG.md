@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/rumankazi/runnerforge/compare/runner-image-v0.1.0...runner-image-v0.2.0) (2026-08-09)
+
+
+### Features
+
+* **deps:** update dependency actions/runner to v2.336.0 ([#182](https://github.com/rumankazi/runnerforge/issues/182)) ([08ab2a0](https://github.com/rumankazi/runnerforge/commit/08ab2a0593c1a607077fb3720698375227c6c723))
+
 ## 0.1.0 (2026-06-06)
 
 
