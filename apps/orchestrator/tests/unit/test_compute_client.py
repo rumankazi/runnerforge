@@ -1,11 +1,12 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from google.api_core.exceptions import AlreadyExists, GoogleAPIError
 from google.auth.exceptions import DefaultCredentialsError
+
 from runnerforge import compute_client
 from runnerforge.compute_client import (
     create_vm,
@@ -277,7 +278,7 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
     assert vms == [
         VmInfo(
             name="runnerforge-1",
-            creation_timestamp=datetime(2026, 5, 31, 10, 0, 0, tzinfo=timezone.utc),
+            creation_timestamp=datetime(2026, 5, 31, 10, 0, 0, tzinfo=UTC),
             labels=RunnerForgeVmLabels(
                 runner="runnerforge",
                 repo="rumankazi/runnerforge",
@@ -289,7 +290,7 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
         ),
         VmInfo(
             name="runnerforge-2",
-            creation_timestamp=datetime(2026, 5, 31, 12, 0, 0, tzinfo=timezone.utc),
+            creation_timestamp=datetime(2026, 5, 31, 12, 0, 0, tzinfo=UTC),
             labels=RunnerForgeVmLabels(
                 runner="runnerforge",
                 repo="rumankazi/runnerforge",

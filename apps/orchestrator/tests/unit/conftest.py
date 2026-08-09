@@ -1,6 +1,7 @@
 import pytest
-from runnerforge.github_client import _post_with_retry
 from tenacity import wait_none
+
+from runnerforge.github_client import _post_with_retry
 
 
 @pytest.fixture(autouse=True)

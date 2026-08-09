@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from google.api_core.exceptions import AlreadyExists, GoogleAPIError, NotFound
@@ -196,7 +196,7 @@ async def was_preempted(vm_name: str) -> bool:
         return False
     client = _logging_client  # local binding so the lambda's closure type-narrows
 
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    since = datetime.now(UTC) - timedelta(hours=24)
     filter_str = (
         f'protoPayload.methodName="compute.instances.preempted" '
         f'AND protoPayload.resourceName:"{vm_name}" '

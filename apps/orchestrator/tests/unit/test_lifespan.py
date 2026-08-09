@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from fastapi.testclient import TestClient
 from httpx import AsyncClient, Timeout
+
 from runnerforge import compute_client, github_client
 from runnerforge.main import app
 
