@@ -6,6 +6,7 @@ import pytest
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import set_tracer_provider
+
 from runnerforge.logger import (
     ColorFormatter,
     ContextFilter,

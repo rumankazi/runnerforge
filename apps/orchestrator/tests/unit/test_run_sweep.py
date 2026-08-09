@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 from runnerforge.models import JobStatusResponse, RunnerForgeVmLabels, VmInfo
@@ -11,7 +11,7 @@ def _vm(age_hours: int, installation_id: str = "100", name_suffix: str = "") -> 
     name = f"runnerforge-vm-{age_hours}h" + (f"-{name_suffix}" if name_suffix else "")
     return VmInfo(
         name=name,
-        creation_timestamp=datetime.now(timezone.utc) - timedelta(hours=age_hours),
+        creation_timestamp=datetime.now(UTC) - timedelta(hours=age_hours),
         labels=RunnerForgeVmLabels(
             runner="runnerforge",
             job_id="12",

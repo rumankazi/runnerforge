@@ -3,12 +3,13 @@ import hashlib
 import hmac
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import httpx
 import respx
 from fastapi.testclient import TestClient
+
 from runnerforge.main import app
 
 SECRET = b"test-secret"
@@ -328,10 +329,10 @@ def test_webhook_in_progress_event_adds_span_link_when_queued_trace_present(
     payload["action"] = "in_progress"
     payload["workflow_job"]["conclusion"] = "success"
     payload["workflow_job"]["started_at"] = str(
-        datetime(2026, 5, 31, 10, 0, 30, tzinfo=timezone.utc)
+        datetime(2026, 5, 31, 10, 0, 30, tzinfo=UTC)
     )
     payload["workflow_job"]["created_at"] = str(
-        datetime(2026, 5, 31, 10, 0, 00, tzinfo=timezone.utc)
+        datetime(2026, 5, 31, 10, 0, 00, tzinfo=UTC)
     )
     body = json.dumps(payload).encode()
 
@@ -474,10 +475,10 @@ def test_webhook_in_progress_emits_runner_readiness_outcome_log(
     payload["workflow_job"]["conclusion"] = "success"
     # started_at 30s after queued_received_at = 1779177630
     payload["workflow_job"]["started_at"] = str(
-        datetime(2026, 5, 30, 10, 0, 30, tzinfo=timezone.utc)
+        datetime(2026, 5, 30, 10, 0, 30, tzinfo=UTC)
     )
     payload["workflow_job"]["created_at"] = str(
-        datetime(2026, 5, 30, 10, 0, 0, tzinfo=timezone.utc)
+        datetime(2026, 5, 30, 10, 0, 0, tzinfo=UTC)
     )
     body = json.dumps(payload).encode()
 
@@ -519,11 +520,11 @@ def test_webhook_in_progress_floors_negative_delivery_lag_at_zero(
     payload["workflow_job"]["conclusion"] = "success"
     # started_at = queued_received_at exactly = no positive readiness contribution
     payload["workflow_job"]["started_at"] = str(
-        datetime(2026, 5, 30, 10, 0, 0, tzinfo=timezone.utc)
+        datetime(2026, 5, 30, 10, 0, 0, tzinfo=UTC)
     )
     # created_at FUTURE of queued_received_at — drives queued delivery lag negative
     payload["workflow_job"]["created_at"] = str(
-        datetime(2026, 5, 30, 10, 0, 10, tzinfo=timezone.utc)
+        datetime(2026, 5, 30, 10, 0, 10, tzinfo=UTC)
     )
     body = json.dumps(payload).encode()
 
@@ -562,10 +563,10 @@ def test_webhook_in_progress_skips_outcome_log_when_queued_received_at_missing(
     payload["action"] = "in_progress"
     payload["workflow_job"]["conclusion"] = "success"
     payload["workflow_job"]["started_at"] = str(
-        datetime(2026, 5, 30, 10, 0, 30, tzinfo=timezone.utc)
+        datetime(2026, 5, 30, 10, 0, 30, tzinfo=UTC)
     )
     payload["workflow_job"]["created_at"] = str(
-        datetime(2026, 5, 30, 10, 0, 0, tzinfo=timezone.utc)
+        datetime(2026, 5, 30, 10, 0, 0, tzinfo=UTC)
     )
     body = json.dumps(payload).encode()
 
@@ -603,7 +604,7 @@ def test_webhook_in_progress_emits_no_outcome_log_when_vm_labels_missing(
     payload["action"] = "in_progress"
     payload["workflow_job"]["conclusion"] = "success"
     payload["workflow_job"]["started_at"] = str(
-        datetime(2026, 5, 30, 10, 0, 30, tzinfo=timezone.utc)
+        datetime(2026, 5, 30, 10, 0, 30, tzinfo=UTC)
     )
     body = json.dumps(payload).encode()
 
@@ -634,7 +635,7 @@ def test_webhook_in_progress_with_empty_trace_id_skips_parent_context(
     payload["action"] = "in_progress"
     payload["workflow_job"]["conclusion"] = "success"
     payload["workflow_job"]["started_at"] = str(
-        datetime(2026, 5, 30, 10, 0, 30, tzinfo=timezone.utc)
+        datetime(2026, 5, 30, 10, 0, 30, tzinfo=UTC)
     )
     body = json.dumps(payload).encode()
 
@@ -696,7 +697,7 @@ def test_webhook_in_progress_outcome_log_omits_queued_lag_when_created_at_missin
     payload["action"] = "in_progress"
     payload["workflow_job"]["conclusion"] = "success"
     payload["workflow_job"]["started_at"] = str(
-        datetime(2026, 5, 30, 10, 0, 30, tzinfo=timezone.utc)
+        datetime(2026, 5, 30, 10, 0, 30, tzinfo=UTC)
     )
     payload["workflow_job"]["created_at"] = None
     body = json.dumps(payload).encode()
