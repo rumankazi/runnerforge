@@ -11,6 +11,19 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# The same idea, for the pip-managed packages the slim image ships in its
+# system site-packages. `apt-get upgrade` above only patches Debian packages,
+# so it can't reach these. Trivy scans every Python package it finds in the
+# image, not just the ones we depend on, so a fixed CVE in one of them fails
+# the build even though neither is in our runtime dependency tree
+# (`uv tree --no-dev` lists neither). Upgrade whichever are present, in place;
+# the guard keeps this a no-op if a future base image drops one.
+RUN for pkg in setuptools msgpack; do \
+        if pip show "$pkg" > /dev/null 2>&1; then \
+            pip install --no-cache-dir --upgrade "$pkg"; \
+        fi; \
+    done
+
 WORKDIR /app
 
 # Copy uv binary from official image (no pip install needed)
