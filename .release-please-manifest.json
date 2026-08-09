@@ -1,5 +1,5 @@
 {
   "apps/orchestrator": "0.16.4",
   "apps/web": "1.4.0",
-  "infra/packer": "0.1.0"
+  "infra/packer": "0.2.0"
 }
