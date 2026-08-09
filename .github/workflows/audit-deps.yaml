@@ -123,3 +123,84 @@ jobs:
             advisories that have a patched release inside the existing range. For
             transitive packages, add a constraint to `[project.dependencies]` in
             `apps/orchestrator/pyproject.toml` to pull the resolver forward.
+
+  # Image scanning, moved here out of the orchestrator PR gate for exactly the
+  # reasons in the header: Trivy resolves against a live feed, and it scans
+  # every package it can find in the image — including ones bundled in the base
+  # image that no PR can fix.
+  container:
+    name: Audit orchestrator image
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Build runtime image
+        run: docker build -f apps/orchestrator/Dockerfile --target runtime -t orchestrator:probe .
+
+      - name: Scan
+        id: scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: orchestrator:probe
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          format: table
+          output: ${{ runner.temp }}/audit-container.txt
+
+      - name: Collect result
+        id: audit
+        env:
+          OUTCOME: ${{ steps.scan.outcome }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/audit-container.txt"
+
+          # A non-empty report means findings. An empty or missing one with a
+          # failed step means Trivy itself broke, which is also worth an issue —
+          # say so rather than filing a blank report.
+          if [ ! -s "$report" ]; then
+            if [ "$OUTCOME" = "success" ]; then
+              echo "No vulnerabilities found." >"$report"
+            else
+              echo "Trivy did not produce a report; the scan step failed. See the run log." >"$report"
+            fi
+          fi
+
+          cat "$report"
+
+          if [ "$OUTCOME" = "success" ]; then
+            echo "found=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "found=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Report
+        uses: ./.github/actions/audit-issue
+        with:
+          app: apps/orchestrator (container image)
+          found: ${{ steps.audit.outputs.found }}
+          report-file: ${{ runner.temp }}/audit-container.txt
+          token: ${{ secrets.GITHUB_TOKEN }}
+          remediation: |
+            Findings fall into two kinds, and they are fixed differently.
+
+            Packages we depend on show up under an `app/.venv/.../METADATA`
+            target — bump them with `uv lock --upgrade-package <name>` in
+            `apps/orchestrator`.
+
+            Packages we do *not* depend on show up under a bare `Python` target
+            with no file path, and `uv tree --no-dev` will not list them. Those
+            are bundled inside the base image, so there is nothing to upgrade;
+            either remove the bundling files in the Dockerfile's base stage (as
+            we already do for `pip` and `ensurepip`) or wait for a newer base
+            image digest. Confirm which kind you have before trying to fix it —
+            an upgrade for the second kind is silently a no-op.

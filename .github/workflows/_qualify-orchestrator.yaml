@@ -102,15 +102,18 @@ jobs:
         if: always()
         run: docker rm -f probe
 
-      - name: Trivy scan
-        if: always()
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: orchestrator:probe
-          severity: HIGH,CRITICAL
-          exit-code: '1'
-          ignore-unfixed: true
-          format: table
+      # No Trivy gate here on purpose — same reasoning as `pip-audit` above and
+      # `bun audit` in _qualify-web.yaml. It resolves against a live
+      # vulnerability feed, so its answer changes without the code changing.
+      # As a required check that meant a newly published advisory blocked every
+      # open orchestrator PR at once: three CVEs landing after 2026-07-30 froze
+      # the whole queue, including a release PR whose diff was a CHANGELOG and a
+      # version number. Two of the three were not even installed packages —
+      # they were files bundled inside the base image, unfixable from any PR.
+      # It runs on a schedule instead (audit-deps.yaml), which files an issue.
+      #
+      # The deterministic parts of this job stay: the image has to build, the
+      # test stage has to pass pytest, and the container has to answer /health.
 
       - name: Generate SBOM
         if: always()
