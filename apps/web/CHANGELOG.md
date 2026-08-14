@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.1](https://github.com/rumankazi/runnerforge/compare/web-v1.4.0...web-v1.4.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **deps:** lock file maintenance ([#186](https://github.com/rumankazi/runnerforge/issues/186)) ([917838e](https://github.com/rumankazi/runnerforge/commit/917838e28093ad6e316f618d5b9c549bc074275a))
+* **deps:** update web deps (patch) ([#198](https://github.com/rumankazi/runnerforge/issues/198)) ([3ef3a4e](https://github.com/rumankazi/runnerforge/commit/3ef3a4ed55fe63d092766b368b7977539fb66097))
+
 ## [1.4.0](https://github.com/rumankazi/runnerforge/compare/web-v1.3.2...web-v1.4.0) (2026-08-09)
 
 
