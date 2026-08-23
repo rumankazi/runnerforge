@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/rumankazi/runnerforge/compare/web-v1.4.2...web-v1.5.0) (2026-08-22)
+
+
+### Features
+
+* **deps:** update web deps (minor) ([#214](https://github.com/rumankazi/runnerforge/issues/214)) ([8d80781](https://github.com/rumankazi/runnerforge/commit/8d80781533a93089d72713a9116a49728d90f5f9))
+
 ## [1.4.2](https://github.com/rumankazi/runnerforge/compare/web-v1.4.1...web-v1.4.2) (2026-08-21)
 
 
