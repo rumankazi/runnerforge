@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.5.1](https://github.com/rumankazi/runnerforge/compare/web-v1.5.0...web-v1.5.1) (2026-08-27)
+
+
+### Bug Fixes
+
+* **deps:** update web deps (patch) to v16.15.1 ([#219](https://github.com/rumankazi/runnerforge/issues/219)) ([63d9fdc](https://github.com/rumankazi/runnerforge/commit/63d9fdc8bda7136062882ea2129d22b860bb657f))
+* **deps:** update web deps (patch) to v16.15.2 ([#226](https://github.com/rumankazi/runnerforge/issues/226)) ([4e1c884](https://github.com/rumankazi/runnerforge/commit/4e1c884867432beb2414766f45fb4cce2c106953))
+* **deps:** update web deps (patch) to v16.3.3 ([#224](https://github.com/rumankazi/runnerforge/issues/224)) ([a1180b3](https://github.com/rumankazi/runnerforge/commit/a1180b3b44f04f5b5454a45c3e11ac0bf41168c7))
+
 ## [1.5.0](https://github.com/rumankazi/runnerforge/compare/web-v1.4.2...web-v1.5.0) (2026-08-22)
 
 
