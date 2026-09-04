@@ -15,7 +15,7 @@
 set -euo pipefail # exit on error, undefined var, pipe failure
 
 # --- Pinned versions ---
-RUNNER_VERSION="2.336.0" # check https://github.com/actions/runner/releases
+RUNNER_VERSION="2.337.0" # check https://github.com/actions/runner/releases
 RUNNER_ARCH="x64"        # or arm64
 
 # --- 1. Create runner user ---
