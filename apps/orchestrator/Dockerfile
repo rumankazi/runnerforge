@@ -32,7 +32,7 @@ WORKDIR /app
 # Copy uv binary from official image (no pip install needed). Digest-pinned:
 # `:latest` here meant an unpinned third-party binary landing in the image on
 # every build, which is the one thing in this repo that wasn't reproducible.
-COPY --from=ghcr.io/astral-sh/uv:latest@sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:latest@sha256:adc68cd785ca65ea25c0611043b0a00b4ea3a22e1b54102fc084406d888082ee /uv /uvx /usr/local/bin/
 
 # Keep uv's download cache out of the image. Every `uv sync` below would
 # otherwise leave build-time packages (hatchling, pathspec, pluggy, ...) in
