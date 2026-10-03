@@ -17,6 +17,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: suzuki-shunsuke/tfaction@9fdf06dabe8e3d9acb003939af57e477a0d3090e # v2.2.0
+      - uses: suzuki-shunsuke/tfaction@07a983968cbace490e9059103a7019a638c65e10 # v2.3.3
         with:
           action: create-drift-issues
