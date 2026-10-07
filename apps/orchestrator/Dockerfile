@@ -2,7 +2,7 @@
 # Pinned by digest, same discipline as the SHA-pinned actions in .github: a
 # floating tag means two builds of the same commit can differ. Renovate keeps
 # the digest current (`docker.pinDigests` in renovate.json).
-FROM public.ecr.aws/docker/library/python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6 AS base
+FROM public.ecr.aws/docker/library/python:3.14-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2 AS base
 
 # Pull latest OS-level security patches at build time. The python:3.14-slim
 # tag itself lags behind Debian's security repo by days when a CVE drops;
