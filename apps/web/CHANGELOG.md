@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.1](https://github.com/rumankazi/runnerforge/compare/web-v1.6.0...web-v1.6.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* **deps:** update web deps (patch) ([#241](https://github.com/rumankazi/runnerforge/issues/241)) ([03ae04d](https://github.com/rumankazi/runnerforge/commit/03ae04d956b177f0cc35c170aed253041bde2d4f))
+
 ## [1.6.0](https://github.com/rumankazi/runnerforge/compare/web-v1.5.3...web-v1.6.0) (2026-09-19)
 
 
