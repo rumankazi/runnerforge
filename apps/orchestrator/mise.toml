@@ -1,6 +1,6 @@
 [tools]
 python = "3.14"
-uv = "latest"
+uv = "0.12.23" # keep in sync with the uv image tag in Dockerfile (Renovate group "uv")
 
 [env]
 _.python.venv = ".venv"

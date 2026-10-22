@@ -73,6 +73,10 @@ conftest 0.68.2. Install with `mise install` / `aqua i -a` where available.
 - CI hardening: actions SHA-pinned with version comment, docker images digest-pinned,
   `persist-credentials: false`, minimal `permissions:`. Keep this for any workflow you add or edit.
 - Advisory scanners (bun audit, pip-audit, trivy image) run on a schedule (`audit-deps.yaml`), not in the PR gate — on purpose.
+- CI installs orchestrator deps with `uv sync --locked`, failing on uv.lock/pyproject.toml drift
+  (catches a broken release-please lock bump on its own release PR). Local dev keeps `--frozen`.
+- uv is version-pinned in `apps/orchestrator/mise.toml` and as the uv image tag in the Dockerfile;
+  a Renovate `groupName: "uv"` rule bumps both in one PR — if you change one by hand, change the other.
 - Releases: release-please, three independent components (orchestrator, web, runner-image). Don't hand-edit
   versions or CHANGELOGs.
 
@@ -99,4 +103,6 @@ conftest 0.68.2. Install with `mise install` / `aqua i -a` where available.
   `uv run --frozen` is still recommended locally to avoid unintentional lock revisions.
 - `mise`/`aqua` may be absent: then trivy and conftest are missing and `pre-push-check.sh infra|all` fails at the
   trivy step; system terraform/tflint may be newer than the pins (checks still pass, but output can differ from CI).
+  The aqua bin symlinks need `aqua` itself on PATH (it comes from mise): use `mise activate`, or prepend
+  `~/.local/share/mise/shims` before `~/.local/share/aquaproj-aqua/bin`.
 - `docker build` context is the repo root; everything else runs inside the app directory.

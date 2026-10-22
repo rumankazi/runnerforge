@@ -40,7 +40,9 @@ check_infra() {
 	(cd infra/terraform && terraform init -backend=false -input=false >/dev/null && terraform validate)
 
 	heading "Trivy IaC scan"
-	trivy config infra/terraform/
+	# Mirror tfaction: it runs trivy with cwd = the module dir (so the module's
+	# .trivyignore is honoured) and fails the job on any reported finding.
+	(cd infra/terraform && trivy config --exit-code 1 .)
 
 	heading "tflint"
 	(cd infra/terraform && tflint --recursive)

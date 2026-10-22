@@ -1,8 +1,13 @@
+# ------- Stage 0: uv — official uv binary, pinned by digest -------
+# Keep the tag in sync with mise.toml's uv version (Renovate group "uv");
+# the digest pins the bytes, the tag makes the version human-readable.
+FROM ghcr.io/astral-sh/uv:0.12.23@sha256:61d393e44e249f2e4b526b6c7ddcecce245946826e608e11c93ad4f5bba55b21 AS uv
+
 # ------- Stage 1: base — prod deps only, no project code -------
 # Pinned by digest, same discipline as the SHA-pinned actions in .github: a
 # floating tag means two builds of the same commit can differ. Renovate keeps
 # the digest current (`docker.pinDigests` in renovate.json).
-FROM public.ecr.aws/docker/library/python:3.14-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2 AS base
+FROM python:3.14-slim@sha256:0b566a9f30a60730df33c26ac62dedb55393d8814645cd03543b67bf8987f3a1 AS base
 
 # Pull latest OS-level security patches at build time. The python:3.14-slim
 # tag itself lags behind Debian's security repo by days when a CVE drops;
@@ -32,7 +37,7 @@ WORKDIR /app
 # Copy uv binary from official image (no pip install needed). Digest-pinned:
 # `:latest` here meant an unpinned third-party binary landing in the image on
 # every build, which is the one thing in this repo that wasn't reproducible.
-COPY --from=ghcr.io/astral-sh/uv:latest@sha256:61d393e44e249f2e4b526b6c7ddcecce245946826e608e11c93ad4f5bba55b21 /uv /uvx /usr/local/bin/
+COPY --from=uv /uv /uvx /usr/local/bin/
 
 # Keep uv's download cache out of the image. Every `uv sync` below would
 # otherwise leave build-time packages (hatchling, pathspec, pluggy, ...) in
