@@ -1,7 +1,7 @@
 # ------- Stage 0: uv — official uv binary, pinned by digest -------
 # Keep the tag in sync with mise.toml's uv version (Renovate group "uv");
 # the digest pins the bytes, the tag makes the version human-readable.
-FROM ghcr.io/astral-sh/uv:0.12.23@sha256:61d393e44e249f2e4b526b6c7ddcecce245946826e608e11c93ad4f5bba55b21 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
 
 # ------- Stage 1: base — prod deps only, no project code -------
 # Pinned by digest, same discipline as the SHA-pinned actions in .github: a
