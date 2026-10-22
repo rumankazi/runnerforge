@@ -36,6 +36,7 @@ venv/
 # Coverage / test
 coverage/
 .nyc_output/
+apps/orchestrator/coverage.json
 
 # Secrets / local env
 *.pem
