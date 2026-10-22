@@ -24,8 +24,10 @@ jobs:
         with:
           working_directory: apps/orchestrator
 
+      # --locked (not --frozen): fail if uv.lock doesn't match pyproject.toml,
+      # so a broken release-please uv.lock bump fails its own release PR here.
       - name: Sync
-        run: uv sync --frozen
+        run: uv sync --locked
 
       - name: Lint
         run: |
