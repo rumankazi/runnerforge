@@ -2,7 +2,11 @@
 # Pinned by digest, same discipline as the SHA-pinned actions in .github: a
 # floating tag means two builds of the same commit can differ. Renovate keeps
 # the digest current (`docker.pinDigests` in renovate.json).
-FROM public.ecr.aws/docker/library/python:3.14-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2 AS base
+# Pulled via Google's Docker Hub mirror (mirror.gcr.io): anonymous pulls from
+# public.ecr.aws hit its shared-IP quota (429 toomanyrequests) on GitHub-hosted
+# runners; mirror.gcr.io serves the identical image (same index digest) and
+# Renovate looks updates up on Docker Hub (see renovate.json registryAliases).
+FROM mirror.gcr.io/library/python:3.14-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2 AS base
 
 # Pull latest OS-level security patches at build time. The python:3.14-slim
 # tag itself lags behind Debian's security repo by days when a CVE drops;
