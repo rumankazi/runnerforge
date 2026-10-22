@@ -50,6 +50,7 @@ Before pushing, run the pre-push check script (somewhat mirrors CI):
 ```bash
 ./scripts/pre-push-check.sh               # all checks
 ./scripts/pre-push-check.sh orchestrator  # or scope to one app
+./scripts/pre-push-check.sh web           # web only
 ```
 
 ## Project layout
