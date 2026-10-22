@@ -7,7 +7,7 @@ FROM ghcr.io/astral-sh/uv:0.12.23@sha256:61d393e44e249f2e4b526b6c7ddcecce2459468
 # Pinned by digest, same discipline as the SHA-pinned actions in .github: a
 # floating tag means two builds of the same commit can differ. Renovate keeps
 # the digest current (`docker.pinDigests` in renovate.json).
-FROM public.ecr.aws/docker/library/python:3.14-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2 AS base
+FROM python:3.14-slim@sha256:0b566a9f30a60730df33c26ac62dedb55393d8814645cd03543b67bf8987f3a1 AS base
 
 # Pull latest OS-level security patches at build time. The python:3.14-slim
 # tag itself lags behind Debian's security repo by days when a CVE drops;
