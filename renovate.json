@@ -7,6 +7,9 @@
   "docker": {
     "pinDigests": true
   },
+  "registryAliases": {
+    "mirror.gcr.io": "docker.io"
+  },
   "lockFileMaintenance": {
     "enabled": true,
     "autoApprove": true,
