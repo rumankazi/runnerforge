@@ -24,8 +24,10 @@ jobs:
         with:
           working_directory: apps/orchestrator
 
+      # --locked (not --frozen): fail if uv.lock doesn't match pyproject.toml,
+      # so a broken release-please uv.lock bump fails its own release PR here.
       - name: Sync
-        run: uv sync --frozen
+        run: uv sync --locked
 
       - name: Lint
         run: |
@@ -83,7 +85,10 @@ jobs:
 
       - name: Wait for /health
         run: |
-          for _ in {1..15}; do
+          # The container starts without GCP credentials in this job, so each
+          # GCP client init blocks until the metadata-server lookup times out.
+          # A cold start therefore takes ~40s; 15s is reliably too short.
+          for _ in {1..60}; do
             if curl -sf http://localhost:8000/health; then
               echo
               echo "Health check passed"
@@ -91,7 +96,7 @@ jobs:
             fi
             sleep 1
           done
-          echo "::error::Container did not respond to /health within 15s"
+          echo "::error::Container did not respond to /health within 60s"
           exit 1
 
       - name: Container logs
