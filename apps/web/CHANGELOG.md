@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.7.0](https://github.com/rumankazi/runnerforge/compare/web-v1.6.1...web-v1.7.0) (2026-10-23)
+
+
+### Features
+
+* **deps:** update web deps (minor) ([#254](https://github.com/rumankazi/runnerforge/issues/254)) ([4c61837](https://github.com/rumankazi/runnerforge/commit/4c618372b3bb70b100d8056b9cbc0214a61bd27c))
+
+
+### Bug Fixes
+
+* **deps:** lock file maintenance ([#221](https://github.com/rumankazi/runnerforge/issues/221)) ([50dd3e4](https://github.com/rumankazi/runnerforge/commit/50dd3e4cf477dfa811b39777544474bd391aaf15))
+* **deps:** update dependency fumadocs-mdx to v15.4.9 ([#261](https://github.com/rumankazi/runnerforge/issues/261)) ([77dcbef](https://github.com/rumankazi/runnerforge/commit/77dcbef67d916ae9ffa115908c08df5540889258))
+
 ## [1.6.1](https://github.com/rumankazi/runnerforge/compare/web-v1.6.0...web-v1.6.1) (2026-10-07)
 
 
