@@ -24,8 +24,10 @@ jobs:
         with:
           working_directory: apps/orchestrator
 
+      # --locked (not --frozen): fail if uv.lock doesn't match pyproject.toml,
+      # so a broken release-please uv.lock bump fails its own release PR here.
       - name: Sync
-        run: uv sync --frozen
+        run: uv sync --locked
 
       - name: Lint
         run: |
@@ -83,7 +85,10 @@ jobs:
 
       - name: Wait for /health
         run: |
-          for _ in {1..15}; do
+          # The container starts without GCP credentials in this job, so each
+          # GCP client init blocks until the metadata-server lookup times out.
+          # A cold start therefore takes ~40s; 15s is reliably too short.
+          for _ in {1..60}; do
             if curl -sf http://localhost:8000/health; then
               echo
               echo "Health check passed"
@@ -91,7 +96,7 @@ jobs:
             fi
             sleep 1
           done
-          echo "::error::Container did not respond to /health within 15s"
+          echo "::error::Container did not respond to /health within 60s"
           exit 1
 
       - name: Container logs
@@ -117,7 +122,7 @@ jobs:
 
       - name: Generate SBOM
         if: always()
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: orchestrator:probe
           format: cyclonedx-json

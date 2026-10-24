@@ -16,7 +16,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.63b1",
     "opentelemetry-instrumentation-httpx>=0.63b1",
     "opentelemetry-sdk>=1.42.1",
-    "pyjwt[crypto]>=2.13.0",
+    "pyjwt[crypto]>=2.15.0",
     "tenacity>=9.1.4",
 ]
 
@@ -42,7 +42,7 @@ dev = [
 asyncio_mode = "auto"
 pythonpath = ["src"]
 testpaths = ["tests"]
-addopts = "--cov=runnerforge --cov-branch --cov-report term-missing --cov-report html:cov_html"
+addopts = "--cov=runnerforge --cov-branch --cov-report term-missing --cov-report html:cov_html --cov-fail-under=100"
 
 filterwarnings = [
     "ignore:Using `httpx` with `starlette.testclient`:DeprecationWarning",

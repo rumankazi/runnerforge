@@ -7,6 +7,9 @@
   "docker": {
     "pinDigests": true
   },
+  "registryAliases": {
+    "mirror.gcr.io": "docker.io"
+  },
   "lockFileMaintenance": {
     "enabled": true,
     "autoApprove": true,
@@ -93,6 +96,11 @@
     {
       "groupName": "ci tooling deps",
       "matchManagers": ["github-actions"]
+    },
+    {
+      "description": "Keep the uv version in apps/orchestrator/mise.toml (packageName astral-sh/uv via the mise manager's aqua backend) and the uv image in apps/orchestrator/Dockerfile (packageName ghcr.io/astral-sh/uv via the dockerfile manager) in a single PR so they never diverge",
+      "groupName": "uv",
+      "matchPackageNames": ["astral-sh/uv", "ghcr.io/astral-sh/uv"]
     }
   ],
   "customManagers": [
