@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.17.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.16.6...orchestrator-v0.17.0) (2026-10-24)
+
+
+### Features
+
+* **deps:** update orchestrator deps (minor) ([#267](https://github.com/rumankazi/runnerforge/issues/267)) ([9f7784a](https://github.com/rumankazi/runnerforge/commit/9f7784a6f464679195df105b31b9f22d9dfcfc13))
+* **deps:** update uv to v0.13.5 ([#268](https://github.com/rumankazi/runnerforge/issues/268)) ([1a732e2](https://github.com/rumankazi/runnerforge/commit/1a732e2a62e9f74df94359adeb4ae238412a547e))
+
+
+### Bug Fixes
+
+* **deps:** bump pyjwt, urllib3 and certifi in orchestrator ([#270](https://github.com/rumankazi/runnerforge/issues/270)) ([71094cd](https://github.com/rumankazi/runnerforge/commit/71094cdc3fc70741484a8e275328c1f2ff0d1f5a))
+* **deps:** lock file maintenance ([#221](https://github.com/rumankazi/runnerforge/issues/221)) ([50dd3e4](https://github.com/rumankazi/runnerforge/commit/50dd3e4cf477dfa811b39777544474bd391aaf15))
+
 ## [0.16.6](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.16.5...orchestrator-v0.16.6) (2026-08-23)
 
 
