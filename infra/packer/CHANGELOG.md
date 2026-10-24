@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/rumankazi/runnerforge/compare/runner-image-v0.4.0...runner-image-v0.4.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* **deps:** update dependency actions/runner to v2.338.1 ([#272](https://github.com/rumankazi/runnerforge/issues/272)) ([7953015](https://github.com/rumankazi/runnerforge/commit/7953015e8d563c743662863255db7dea1a11c98e))
+
 ## [0.4.0](https://github.com/rumankazi/runnerforge/compare/runner-image-v0.3.0...runner-image-v0.4.0) (2026-10-07)
 
 
