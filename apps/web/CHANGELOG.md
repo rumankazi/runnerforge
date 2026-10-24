@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.1](https://github.com/rumankazi/runnerforge/compare/web-v1.7.0...web-v1.7.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* **deps:** update web deps (patch) ([#276](https://github.com/rumankazi/runnerforge/issues/276)) ([1e06aad](https://github.com/rumankazi/runnerforge/commit/1e06aadbcdfaf77061e63fda231311b0654f0278))
+
 ## [1.7.0](https://github.com/rumankazi/runnerforge/compare/web-v1.6.1...web-v1.7.0) (2026-10-23)
 
 
