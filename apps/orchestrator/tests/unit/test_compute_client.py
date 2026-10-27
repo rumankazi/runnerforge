@@ -190,6 +190,30 @@ def test_find_vms_by_job_id_returns_empty_when_no_match(monkeypatch, caplog):
     assert log.match_count == 0
 
 
+def test_get_vm_labels_by_job_returns_none_when_label_shape_unexpected(
+    monkeypatch, caplog
+):
+    """A VM from another revision (or a hand-made one) with an unexpected label
+    shape must not raise: callers would 500 the webhook and, on `completed`,
+    never reach delete_vm. GitHub doesn't retry, so the VM would leak."""
+    mock_client = MagicMock()
+    mock_vm = MagicMock()
+    mock_vm.name = "runnerforge-12"
+    mock_vm.labels = {"runner": "runnerforge", "job_id": "1"}  # missing required
+    mock_client.list.return_value = [mock_vm]
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
+
+    with caplog.at_level(logging.INFO):
+        result = asyncio.run(
+            get_vm_labels_by_job(job_id="1", run_id="2", run_attempt="3")
+        )
+
+    assert result is None
+    log = next(r for r in caplog.records if "unexpected shape" in r.message)
+    assert log.levelno == logging.WARNING
+    assert log.vm_name == "runnerforge-12"
+
+
 def test_get_vm_labels_by_job_returns_empty_when_no_match(monkeypatch, caplog):
     mock_client = MagicMock()
     mock_client.list.return_value = []
@@ -296,7 +320,6 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
             creation_timestamp=datetime(2026, 5, 31, 10, 0, 0, tzinfo=UTC),
             labels=RunnerForgeVmLabels(
                 runner="runnerforge",
-                repo="rumankazi_runnerforge",
                 job_id="1",
                 run_id="2",
                 run_attempt="2",

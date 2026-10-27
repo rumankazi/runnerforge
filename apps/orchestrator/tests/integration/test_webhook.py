@@ -25,7 +25,7 @@ _VALID_VM_LABELS_WITH_TRACE = {
     "job_id": "77678867086",
     "run_id": "26389905440",
     "run_attempt": "3",
-    "repo": "rumankazi_runnerforge",
+    "repository_id": "1229168154",
     "installation_id": "135399152",
     "webhook_trace_id": "0123456789abcdef0123456789abcdef",
     "webhook_span_id": "0123456789abcdef",
@@ -463,8 +463,8 @@ def test_webhook_queued_event_persists_queued_received_at_to_vm_labels(
     # Repo identity: numeric id as the label (always GCE-label-safe); the exact
     # owner/repo travels in metadata, where the sweep reads it.
     assert labels["repository_id"] == "1229168154"
-    # Deprecated compat label, still written for the previous revision.
-    assert labels["repo"] == "rumankazi_runnerforge"
+    # Lossy and not always GCE-label-safe; the exact repo lives in metadata.
+    assert "repo" not in labels
     metadata = create_vm_mock.call_args.kwargs["metadata"]
     assert metadata["repo-url"] == "https://github.com/rumankazi/runnerforge"
 

@@ -277,3 +277,28 @@ def test_run_sweep_continues_when_delete_raises(monkeypatch):
     assert len(result.errors) == 1
     assert "runnerforge-vm-3h-a" in result.errors[0]
     assert delete_mock.await_count == 2  # both attempted (per-VM exception isolated)
+
+
+def test_run_sweep_continues_when_installation_id_label_is_not_numeric(monkeypatch):
+    """A VM with a non-numeric installation_id label used to raise outside the
+    per-VM try and abort the whole sweep. It must be recorded as an error while
+    the other VMs are still swept."""
+    list_mock = AsyncMock(
+        return_value=[
+            _vm(age_hours=7, installation_id="abc", name_suffix="bad"),
+            _vm(age_hours=7, name_suffix="good"),
+        ]
+    )
+    delete_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.sweep.list_runnerforge_vms", list_mock)
+    monkeypatch.setattr("runnerforge.sweep.delete_vm", delete_mock)
+
+    result = asyncio.run(run_sweep())
+
+    assert result.checked == 2
+    assert result.deleted == 1
+    assert len(result.errors) == 1
+    assert "runnerforge-vm-7h-bad" in result.errors[0]
+    delete_mock.assert_awaited_once_with(
+        instance_name="runnerforge-vm-7h-good", reason="sweep"
+    )

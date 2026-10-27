@@ -24,9 +24,9 @@ async def run_sweep() -> SweepResult:
         age = now - vm.creation_timestamp
         age_minutes = int(age.total_seconds() / 60)
         log_extra = {"vm_name": vm.name, "age_minutes": age_minutes}
-        installation_id = int(vm.labels.installation_id)
 
         try:
+            installation_id = int(vm.labels.installation_id)
             if age < timedelta(hours=MAX_LIFETIME_HOURS):
                 # potentially active, webhook should handle it
                 skipped += 1
