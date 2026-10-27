@@ -470,6 +470,77 @@ def test_webhook_queued_event_persists_queued_received_at_to_vm_labels(
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    ("labels", "expected_machine_type", "expected_spot"),
+    [
+        # Real prod payload shape (GitHub's recommended form).
+        (["self-hosted", "runnerforge"], "n2-standard-4", False),
+        # Every default label, mixed case like a workflow author might write it.
+        (
+            ["Self-Hosted", "Linux", "X64", "RunnerForge", "Small", "Spot"],
+            "n2-standard-2",
+            True,
+        ),
+    ],
+    ids=["self-hosted", "defaults-mixed-case"],
+)
+def test_webhook_queued_accepts_github_default_labels(
+    fixtures_dir, monkeypatch, labels, expected_machine_type, expected_spot
+):
+    """GitHub applies self-hosted/linux/x64 to every runner we boot and matches
+    labels case-insensitively. Such jobs used to be rejected (`self-hosted` parsed
+    as a machine type) or skipped (`RunnerForge` missed the gate). The cache is
+    populated, as in prod: an empty cache lets any machine type through, which is
+    how the bug hid from the other tests."""
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload["workflow_job"]["labels"] = labels
+    body = json.dumps(payload).encode()
+
+    respx.post("https://api.github.com/app/installations/135399152/access_tokens").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "token": "ghs_installation_token",
+                "expires_at": "2026-05-30T11:00:00Z",
+                "permissions": {
+                    "actions": "read",
+                    "metadata": "read",
+                    "administration": "write",
+                },
+                "repository_selection": "selected",
+            },
+        )
+    )
+    respx.post(
+        "https://api.github.com/repos/rumankazi/runnerforge/actions/runners/registration-token"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "token": "ghs_registration_token",
+                "expires_at": "2026-05-30T11:00:00Z",
+            },
+        )
+    )
+    monkeypatch.setattr(
+        "runnerforge.compute_client._KNOWN_MACHINE_TYPES",
+        {"n2-standard-2", "n2-standard-4", "n2-standard-8"},
+    )
+    create_vm_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr("runnerforge.handlers.create_vm", create_vm_mock)
+
+    response = client.post(
+        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+    )
+
+    assert response.status_code == 200
+    create_vm_mock.assert_awaited_once()
+    kwargs = create_vm_mock.call_args.kwargs
+    assert kwargs["machine_type"] == expected_machine_type
+    assert kwargs["spot"] is expected_spot
+
+
+@respx.mock
 def test_webhook_in_progress_emits_runner_readiness_outcome_log(
     fixtures_dir, monkeypatch, caplog
 ):

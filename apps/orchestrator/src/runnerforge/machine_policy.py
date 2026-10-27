@@ -10,6 +10,11 @@ SIZE_TABLE = {
 }
 DEFAULT_MACHINE_TYPE = "n2-standard-4"
 LITERAL_RE = re.compile(r"^[a-z][a-z0-9]+-[a-z]+(?:-\d+)?$")
+# Labels GitHub applies to every self-hosted runner we boot (Linux x64; we don't
+# pass --no-default-labels). GitHub recommends `self-hosted` in runs-on, so
+# these must be accepted as no-ops. Other OS/arch labels (windows, macos,
+# arm64) stay unknown: we can't satisfy them.
+GITHUB_DEFAULT_LABELS = frozenset({"self-hosted", "linux", "x64"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +37,12 @@ def resolve_labels(labels: list[str]) -> MachinePolicy:
     chosen: str | None = None
     spot = False
     unknown: list[str] = []
-    for t in labels:
+    for raw in labels:
+        # GitHub matches labels case-insensitively; the payload keeps the
+        # author's spelling (e.g. `Linux`). GCE machine types are lowercase.
+        t = raw.lower()
+        if t in GITHUB_DEFAULT_LABELS:
+            continue
         if t in ("runnerforge", "spot"):
             if t == "spot":
                 spot = True
@@ -46,7 +56,7 @@ def resolve_labels(labels: list[str]) -> MachinePolicy:
             gce_type = None
 
         if gce_type is None:
-            unknown.append(t)
+            unknown.append(raw)
             continue
         if chosen is not None:
             raise MachinePolicyError(
