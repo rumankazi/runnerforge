@@ -14,7 +14,7 @@ A **log-based metric** counts or measures something derived from log entries mat
 | **Counter** | "this happened" (no value) | Counting occurrences — VM creations, errors, requests |
 | **Distribution** | A numeric value (e.g., a duration field) | Statistical summary — latency, size, time-to-event |
 
-**Example**: `create_vm_requests_submitted` is a counter (counts log entries containing `"Submitted VM creation"`). `time_to_runner_seconds` is a distribution (records the numeric value of `jsonPayload.time_to_runner_seconds` for each `"Time for runner to be picked up by github"` log entry).
+**Example**: `vm_creation_count` is a counter (counts log entries whose message is `"Submitted VM creation"`). `runner_readiness_seconds` is a distribution (records `jsonPayload.runner_readiness_seconds` from each `"Runner registration outcome"` log entry). Both are defined in [`infra/terraform/observability_metrics.tf`](https://github.com/rumankazi/runnerforge/blob/main/infra/terraform/observability_metrics.tf), along with the rest of RunnerForge's log-based metrics.
 
 The metric type determines which alignment functions are valid for that metric on charts.
 
@@ -46,7 +46,7 @@ Multiple series arise when:
 - You have label-based dimensions (e.g., per-revision, per-region)
 - Multiple deployments are active simultaneously (canary ramp with two revisions)
 
-Then grouping actually changes the line. For example, with revision-A at p95=70s and revision-B at p95=200s during a 50/50 canary:
+Then grouping actually changes the line. For example, with revision-A at p95=70s and revision-B at p95=200s while both serve traffic:
 
 | Grouping choice | Plots | When to use |
 |---|---|---|
@@ -120,7 +120,7 @@ A heatmap is a 2D histogram over time:
 
 A vertical column tells you "what was the spread of values during this time bucket." Bright cluster at one Y value = predictable. Tall column = wide variance. Multiple bright bands = bimodal distribution.
 
-**Heatmaps require dense data** (~50+ events per time bucket) to be readable. With sparse data (1-3 events per bucket), the heatmap is just a scatter plot of pixels — go back to line chart + percentiles instead.
+**Heatmaps require dense data** to be readable. With sparse data (a few events per bucket), the heatmap is just a scatter plot of pixels — go back to line chart + percentiles instead.
 
 ## Decision recipes
 
@@ -169,13 +169,19 @@ Plots rate per second. Bucket size affects the calculation: `count / bucket_seco
 
 For "how many requested → registered → completed" patterns:
 
-- Three counter metrics, one per stage (e.g., `create_vm_requests_submitted`, `runner_registrations`, `vm_deletions`)
-- One line chart with all three metrics
+- One counter metric per stage, e.g. `webhook_event_count` (filtered to `event_type="queued"`), `vm_creation_count`, `vm_deletion_count`
+- One line chart with all of them
 - All using `ALIGN_DELTA` + `SUM` for consistent comparison
 
-Healthy state: three lines track each other (offset by job duration). Divergence highlights where the pipeline is failing.
+The dashboard's "Lost-webhook ratio" panel is a two-stage version of this: `vm_creation_count` over queued `webhook_event_count`.
+
+Healthy state: the lines track each other (deletions lag by job duration). Divergence highlights where the pipeline is failing.
 
 ## How to create — step by step
+
+<Callout type="info" title="Explore in the console, ship in Terraform">
+  The console steps below are for experimenting. RunnerForge's metrics live in `infra/terraform/observability_metrics.tf` and the dashboard in `infra/terraform/dashboards/orchestrator_health.json`. A metric or panel that only exists in the console is drift, and is lost on rebuild.
+</Callout>
 
 ### Counter log-based metric
 
@@ -239,6 +245,6 @@ For SLO charts: add a threshold line at the target. The chart at a glance answer
 
 ## Where to go next
 
-- For metric definitions in code: see `infra/terraform/dashboards/` — the dashboards we ship are codified in Terraform and applied via `deploy-infra.yaml`.
-- For SLO concepts: see [Observability](../design/observability.mdx).
-- For specific alerts and what they mean: see [Runbooks](./runbooks/).
+- For what we ship: log-based metrics are in `infra/terraform/observability_metrics.tf`; the "RunnerForge — Orchestrator Health" dashboard is `infra/terraform/dashboards/orchestrator_health.json`, wired up by `observability_dashboards.tf`; SLOs and alerts are in `observability_slos.tf` and `observability_alerts.tf`. All of it is applied by `deploy-infra.yaml`. If you edit the dashboard in the console, `infra/terraform/sync-dashboards.sh` exports it back to JSON.
+- For SLO concepts: see [Observability](/docs/design/observability).
+- For specific alerts and what they mean: see [Runbooks](/docs/guides/runbooks).

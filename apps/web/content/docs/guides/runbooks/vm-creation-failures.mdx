@@ -1,0 +1,74 @@
+---
+title: VM creation failures
+description: Runbook for "VM creation failure ratio > 5% (5m)", GCE create operations failing or timing out.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Symptom
+
+Email from "RunnerForge Alerts": **VM creation failure ratio > 5% (5m)**, severity ERROR.
+
+After submitting a VM, the orchestrator polls the GCE operation in a background task (`wait_for_vm_creation`) and
+logs `VM creation outcome` with `outcome` = `success`, `failure` (the operation finished with an error) or
+`timeout` (not done within 300 s). The alert fires when `failure` + `timeout` exceed 5% of all outcomes in a
+5-minute window, for 5 minutes. At low volume, one failure out of fewer than 20 creations is enough.
+
+## Impact
+
+Each failed creation is a job with no runner: it stays queued, and GitHub won't resend the webhook. A `timeout`
+may still produce a VM later; if so, it registers and runs the job as normal.
+
+## Diagnose
+
+All commands are read-only.
+
+**1. List the failures.**
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  jsonPayload.message="VM creation outcome"
+  jsonPayload.outcome!="success"
+' --project=runnerforge --freshness=2h --limit=50 \
+  --format='table(timestamp, jsonPayload.outcome, jsonPayload.error_code, jsonPayload.machine_type, jsonPayload.spot, jsonPayload.error_message)'
+```
+
+**2. Read the error code.** `error_code` and `error_message` are the first error GCE reported on the operation.
+For full detail:
+
+```bash
+gcloud compute operations describe <op_name> --zone=europe-west4-a --project=runnerforge
+```
+
+| Pattern | Likely cause |
+|---|---|
+| Quota errors | Regional quota hit. `quotas.tf` holds the capacity notes: `SSD_TOTAL_GB` at 1500 GB is the binding limit, about 30 concurrent runners with 50 GB data disks. See [GCP Quota Management](/docs/guides/gcp-quota-management). |
+| Only `spot` = `true` fails, with a resource-availability error | No Spot capacity for that machine type in `europe-west4-a`. |
+| Machine type errors | A literal machine type GCE doesn't offer. Normally the policy rejects these first, unless the machine-types cache is degraded (`Failed to load machine types cache - validation in degraded mode` at startup). |
+| Image errors | The runner image or family can't be read. Check for `Runner image resolve failed` at orchestrator startup. |
+| `timeout` | GCE slow or stuck. Look for `Transient error polling operation` warnings for the same `op_name`. |
+
+**3. Check the trend** on the dashboard ("RunnerForge — Orchestrator Health"): Runner Fleet, "VM creation outcomes per
+minute by outcome", and Spot & Policy, "VM creation rate by spot".
+
+## Mitigate
+
+<Callout type="warn" title="Mutations">
+  Everything in this section changes production.
+</Callout>
+
+- **Quota:** raise `preferred_value` in `infra/terraform/quotas.tf` through a PR, then apply via
+  `deploy-infra.yaml`.
+- **Spot capacity:** temporary. Users can drop `spot` from `runs-on` for urgent jobs.
+- **Bad image:** roll back with **Deploy Runner Image** (`deploy-runner-image.yaml`), `action=rollback`,
+  `target=<bad image name>`. It deprecates that image so the family points at the next-newest one. Running
+  orchestrator instances keep the image they resolved at startup.
+- **Stuck jobs:** after the cause is fixed, redeliver the jobs' `queued` deliveries from the GitHub App's Recent
+  Deliveries, or ask users to re-run them. A redelivery creates a VM.
+
+## Escalate
+
+GCE errors that aren't quota or Spot capacity, with no change on our side: GCP support case with the operation
+names.

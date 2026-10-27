@@ -1,208 +1,162 @@
 ---
 title: Security
-description: Webhook validation, GitHub App authentication, IAM configuration, and data access boundaries.
+description: How the orchestrator authenticates requests, which identities it runs as, what each one is allowed to do, and the guardrails on infrastructure changes.
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
-import { Step, Steps } from 'fumadocs-ui/components/steps';
 
-<Callout type="info" title="Companion document">
-  This page covers the **implementation** of our security boundaries — validators, IAM roles, network configuration. For the **user-facing** view — what we ask for, what limits the damage if we're compromised, and how you can verify our claims — see [Trust & threat model](/docs/RunnerForge/design/trust).
+<Callout type="info" title="Audience">
+  This page is for contributors and security reviewers. It describes the controls as they exist in code and Terraform today, and names the source file for each. If you're deciding whether to install the GitHub App, read [Trust & threat model](/docs/design/trust) instead.
 </Callout>
 
-## Webhook signature validation
+## Request path: `/webhook`
 
-Every webhook POST from GitHub includes an `X-Hub-Signature-256` header containing an HMAC-SHA256 signature of the request body, computed with the webhook secret configured on the GitHub App.
+Cloud Run is public (`INGRESS_TRAFFIC_ALL`, `allUsers` as `roles/run.invoker` in `cloud_run.tf`) because GitHub delivers webhooks from changing IP addresses. All authentication happens in the app. A webhook goes through these checks in order (`main.py`, then `handlers.py` for the machine policy):
 
-The orchestrator validates every incoming request before processing:
+1. **HMAC signature.** The orchestrator computes `sha256=` + HMAC-SHA256 of the raw body with the webhook secret and compares it to `X-Hub-Signature-256` using `hmac.compare_digest` (`security.py`). A mismatch returns 401. The warning log keeps only the first 10 characters of the header.
+2. **Event type.** Dispatch is on the `X-GitHub-Event` header, never on payload shape. Only `workflow_job` is processed. `ping`, `installation` and every other event get a 200 and are ignored before the body is parsed.
+3. **RunnerForge label.** A job without the `runnerforge` label (case-insensitive) is acknowledged and skipped.
+4. **Installation allow-list.** For `queued` events, an installation not listed in `ALLOWED_INSTALLATION_IDS` gets a 200, an `Installation not allowed` warning, and no VM. `in_progress` and `completed` always pass, so VMs of an installation removed mid-job are still cleaned up. The `Webhook event received` log line is written after this gate, so rejected installations don't count toward the lost-webhook ratio.
+5. **Machine policy.** `machine_policy.py` resolves labels to a machine type. GitHub's default runner labels `self-hosted`, `linux` and `x64` are accepted as no-ops. Any other unknown label, including `windows`, `macos` and `arm64`, rejects the job. Literal machine types (for example `n2-standard-8`) are checked against the zone's machine-type list, which is loaded at startup. If that list can't be loaded, the check is permissive and GCE rejects an invalid type at create time.
 
-1. Read the raw request body (before any JSON parsing).
-2. Compute `HMAC-SHA256(webhook_secret, raw_body)`.
-3. Compare the result against the value in the `X-Hub-Signature-256` header using a constant-time comparison (to prevent timing attacks).
-4. If the signatures don't match, reject with HTTP 401 and log the attempt.
+### Allow-list semantics
 
-This prevents unauthorized actors from triggering VM creation by sending crafted POST requests to the endpoint.
+`ALLOWED_INSTALLATION_IDS` is parsed once at startup (`config.py`):
 
-## GitHub App authentication chain
+| Value | Effect |
+|---|---|
+| Unset | Every installation can create VMs. A startup warning is logged. This is meant for a self-hosted, private App. |
+| `""` (empty) | Nobody can create VMs. Works as a kill switch. |
+| `123,456` | Only those installation IDs can create VMs. |
+| Malformed ID | `config.py` raises at import, so the new revision fails to start and the deploy stops at the canary step. |
 
-The GitHub App authentication flow has multiple steps. Each produces a token with a different scope and lifetime.
+In production, Terraform sets it from `var.allowed_installation_ids` (`variables.tf`, `cloud_run.tf`), and the variable validates that every ID is numeric. CD builds each orchestrator revision from the current service template, while the revision Terraform creates gets no traffic. **A change to the list therefore takes effect with the next orchestrator release**, not with the Terraform apply.
 
-<Steps>
-  <Step>
-    **Generate a JWT.** Using the GitHub App's private key (stored securely, not in source control), generate a short-lived JSON Web Token:
+<Callout type="warn" title="No per-installation limits yet">
+  The allow-list is the only per-tenant gate today. Within it, a single installation can request any valid machine type and as many concurrent jobs as GitHub sends. The ceilings are project-wide GCE quotas in `europe-west4`, which every installation shares: the quota preferences in `quotas.tf` (200 instances, 1,500 GB SSD) and GCP's default per-family CPU quotas. Per-installation limits are planned.
+</Callout>
 
-    - **Issuer:** the GitHub App ID.
-    - **Issued at:** current time.
-    - **Expiration:** current time + 10 minutes (GitHub's maximum).
-    - **Algorithm:** RS256.
+## Request path: `/sweep`
 
-    This JWT identifies the app itself, not any specific installation.
-  </Step>
-  <Step>
-    **Exchange JWT for an installation access token.** Using the JWT, call the GitHub API:
+`/sweep` is called by the Cloud Scheduler job `runnerforge-sweep` daily at 00:12 UTC (`scheduler.tf`). The job sends a Google-signed OIDC token as the `runnerforge-scheduler` service account, with the Cloud Run URL as audience. `verify_oidc_token` (`security.py`) requires all of the following, and returns 401 otherwise:
 
-    ```
-    POST /app/installations/{installation_id}/access_tokens
-    Authorization: Bearer {jwt}
-    ```
+- a `Bearer` prefix
+- a valid Google signature, issuer and expiry, and an audience equal to `EXPECTED_AUDIENCE`
+- an `email` claim equal to `EXPECTED_SCHEDULER_SA_EMAIL`
+- `email_verified` set to true
 
-    This returns an installation access token scoped to the specific GitHub organization or user that installed the app. This token expires after 1 hour. The `installation_id` comes from the webhook payload (`installation.id` field).
-  </Step>
-  <Step>
-    **Request a registration token.** Using the installation access token, call the GitHub API:
+`/health` is unauthenticated and only returns `{"status": "ok"}`.
 
-    ```
-    POST /repos/{owner}/{repo}/actions/runners/registration-token
-    Authorization: Bearer {installation_access_token}
-    ```
+## VM lifecycle controls
 
-    This returns a one-time-use registration token that the runner uses to register itself with GitHub. The token expires after 1 hour.
-  </Step>
-</Steps>
+### Deleting on `completed`
 
-### Token lifecycle summary
+`runner_name` in a `completed` payload is chosen by whoever registered the runner, so the name alone proves nothing. `handlers.handle_completed` deletes a VM only when all of these hold:
 
-| Token | How it's created | Lifetime | Purpose |
+1. `runner_name` starts with `runnerforge-`. Other runners are normal traffic, so a non-matching name is logged at info level and skipped.
+2. The VM exists, which `compute_client.get_vm_labels_by_name` checks. A missing VM is an idempotent no-op.
+3. The VM's own labels have `runner=runnerforge` and an `installation_id` equal to the event's installation.
+
+Failing check 3 logs `Refusing to delete VM not owned by this installation` and deletes nothing. A signed webhook from installation A therefore can't delete installation B's VM.
+
+### Runtime cap
+
+Every VM is created with `scheduling.max_run_duration` of 6h15m and `instance_termination_action = DELETE` (`compute_client.MAX_VM_RUN_DURATION`). GCE deletes the VM itself, even if the orchestrator is down. 6h matches GitHub's default job timeout, and the extra 15 minutes covers boot and registration. Both disks are `auto_delete` and carry the instance's labels.
+
+### Sweep
+
+`sweep.run_sweep` lists VMs labeled `runner=runnerforge` and skips any whose labels don't validate. For each VM it decides as follows:
+
+| VM age | Decision |
+|---|---|
+| Under 1 hour | Skip. The webhook path owns it. |
+| Over `HARD_LIMIT` (the same 6h15m) | Delete, whatever the job's status. |
+| In between | Read the exact `owner/repo` from the VM's `repo-url` metadata and ask GitHub for the job's status. Delete if the job is completed or returns 404. If the repo can't be read, skip and never guess, so only the hard limit applies. |
+
+## GitHub App credentials
+
+`github_client.py` uses three tokens in sequence:
+
+| Token | Created by | Lifetime | Where it lives |
 |---|---|---|---|
-| JWT | Signed with private key | 10 minutes | Authenticate as the GitHub App |
-| Installation access token | JWT → GitHub API | 1 hour | Act on behalf of the installation |
-| Registration token | Installation token → GitHub API | 1 hour, single use | Runner self-registration |
+| App JWT | RS256 with the App private key, `iat` = now − 60s, `exp` = `iat` + 600s | about 9 minutes | In memory, per call |
+| Installation access token | `POST /app/installations/{id}/access_tokens` | 1 hour (set by GitHub) | In memory. Fetched for each `queued` job; the sweep caches one per installation for a single run. Never persisted. |
+| Runner registration token | `POST /repos/{owner}/{repo}/actions/runners/registration-token` | 1 hour (set by GitHub) | Written to the VM's `registration-token` metadata key for the startup script |
 
-### Private key storage
+The installation token response is validated against a model that requires the `actions`, `metadata` and `administration: write` permissions (`models.py`). Token requests are **not** narrowed to a single repository or permission subset, so each installation token carries everything the installation granted.
 
-The GitHub App private key must be stored securely. Options for GCP:
+The registration token stays in VM metadata for the VM's lifetime. Any process on the VM can read it from the metadata server, and so can any principal with `compute.instances.get` in the project.
 
-- **GCP Secret Manager** — the recommended approach. The Cloud Run service accesses the secret at runtime via the Secret Manager API or as a mounted volume. The secret is encrypted at rest and access is controlled via IAM.
-- **Environment variable** — simpler but less secure. The key is set as a Cloud Run environment variable. Visible in the Cloud Run configuration UI and in Terraform state unless marked as sensitive.
+## Secrets
 
-<Callout type="warn" title="Don't use env vars for the private key">
-  Env vars are visible in the Cloud Run UI and end up in Terraform state files. Use Secret Manager from the start — it's roughly the same setup effort and avoids ever needing a rotation/migration later.
-</Callout>
+Both secrets are in Secret Manager with automatic replication (`secrets.tf`):
 
-For the initial build, Secret Manager is the target. The Terraform configuration should create the secret and grant the Cloud Run service account read access.
+| Secret | How the orchestrator gets it |
+|---|---|
+| `github-app-private-key` | A Cloud Run secret volume, mounted as a file at `/secrets/github-app-private-key`. `GITHUB_APP_PRIVATE_KEY_PATH` points at that file. |
+| `github-webhook-secret` | The `GITHUB_WEBHOOK_SECRET` env var, using `value_source.secret_key_ref` (version `latest`). The Cloud Run config holds a reference, not the value. |
 
-## CI authentication (Workload Identity Federation)
+Terraform creates only the secret containers. No `google_secret_manager_secret_version` exists in the configuration, so secret values never enter Terraform state. The orchestrator has `roles/secretmanager.secretAccessor` on these two secrets only, not on the project.
 
-GitHub Actions workflows authenticate to GCP via short-lived federated tokens, never long-lived service account keys. See [ADR-007](/docs/RunnerForge/design/decisions#workload-identity-federation-over-service-account-keys-for-ci-auth) for the decision and trade-offs.
+## Runtime identities
 
-### Trust chain
-
-<Steps>
-  <Step>
-    **GitHub issues an OIDC token.** When a job runs with `permissions: id-token: write`, GitHub Actions signs a short-lived JWT (~10 minutes) asserting the run's identity: `repository`, `ref`, `workflow`, `actor`, `sub`. Signed by GitHub's OIDC issuer (`token.actions.githubusercontent.com`), verifiable via its public JWKS.
-  </Step>
-  <Step>
-    **GCP exchanges the OIDC token via STS.** A Workload Identity Pool + Provider trusts the GitHub issuer. The provider's `attribute_condition` is evaluated against the token's claims; only matches receive a federated identity.
-
-    Condition (Phase 2.1):
-
-    ```
-    assertion.repository_owner == 'rumankazi'
-      && assertion.repository == 'rumankazi/runnerforge'
-      && assertion.ref == 'refs/heads/main'
-    ```
-
-    Workflows on forks or feature branches fail the exchange at this layer.
-  </Step>
-  <Step>
-    **The federated identity impersonates a target SA.** Each CI service account has a `roles/iam.workloadIdentityUser` binding for the pool's principalSet. The workflow ends up holding a Google access token scoped to that SA, valid ~1 hour.
-  </Step>
-</Steps>
-
-### Service account split
-
-Two dedicated CI service accounts, each impersonatable by workflows that match the `attribute_condition`:
-
-| SA | Purpose | IAM roles (target state) |
+| Service account | Grants (source) | Notes |
 |---|---|---|
-| `ci-build` | Build container images, deploy Cloud Run | `roles/artifactregistry.writer`, `roles/run.developer`, `roles/iam.serviceAccountUser` on the orchestrator runtime SA |
-| `ci-terraform` | Run `terraform apply` | State bucket object access, IAM admin (project), Secret Manager admin, Cloud Scheduler admin |
+| `runnerforge-orchestrator` (Cloud Run) | Project: `compute.instanceAdmin.v1`, `compute.imageUser`, `logging.logWriter`, `cloudtrace.agent`, `logging.viewer`. Per secret: `secretmanager.secretAccessor` on the two secrets. Per SA: `iam.serviceAccountUser` on `runnerforge-runner-vm` (`iam.tf`, `runner_vm.tf`) | `logging.viewer` is for the spot-preemption audit-log cross-check. `instanceAdmin.v1` is project-wide, so the ownership rules above are enforced in code, not IAM. |
+| `runnerforge-runner-vm` (every runner VM) | Project: `logging.logWriter` only (`runner_vm.tf`) | The VM gets the `cloud-platform` scope, so IAM is the only limit. A job can get this SA's token from the metadata server, but can only write logs with it. |
+| `runnerforge-scheduler` | No role bindings in Terraform (`scheduler.tf`) | It exists only as the identity in the `/sweep` OIDC token. |
 
-Phase 2.1 ships both with `roles/viewer` only; permissions widen per subsequent sub-phase as workflows that need them are added.
+On the runner image, the `runner` user isn't in `sudo` but is in the `docker` group (`infra/packer/scripts/install-runner.sh`). That makes it effectively root on its VM. Treat the VM as fully controlled by the job it runs.
 
-<Callout type="success" title="No portable secret">
-  Nothing exfiltratable exists. The OIDC token is bound cryptographically to a specific repo + ref + run, and STS rejects exchanges that don't match `attribute_condition`. The downstream access token is ~1 hour. No signing key material lives outside Google's STS and GitHub's OIDC issuer; `gcloud iam service-accounts keys list` shows only Google-managed system keys.
-</Callout>
+## Network
 
-### Audit trail
+- **No external IPs.** `create_vm` attaches only the `default` network interface, with no access config (`compute_client.py`).
+- **Egress via Cloud NAT.** `runnerforge-nat` on `runnerforge-nat-router` (`network.tf`) NATs only the `default` subnetwork in `europe-west4`, using auto-allocated IPs, and logs errors only. See ADR-009 in [Decisions](/docs/design/decisions).
+- **No inbound path.** Nothing needs to reach a runner VM. Runners poll GitHub outbound.
+- **Firewall rules are not managed by Terraform.** All runner VMs, from every installation, share the project's `default` VPC, so network isolation between tenants is not enforced by RunnerForge config today.
 
-Every WIF exchange is logged in Cloud Audit Logs under the `sts.googleapis.com` service. The log entry includes the GitHub repository, workflow file, run ID, and the target SA that was impersonated — full traceability of which workflow run performed which action.
+## CI identity (Workload Identity Federation)
 
-## IAM and least privilege
+GitHub Actions authenticates to GCP with short-lived federated tokens. No service account keys exist (ADR-007 in [Decisions](/docs/design/decisions)). Everything here is in `wif.tf`, `terraform_ci.tf` and `runner_image.tf`.
 
-The Cloud Run service runs with a dedicated service account (not the default compute service account). This service account is granted only the permissions it needs.
+**Provider gate.** The pool `github` and provider `github` trust `https://token.actions.githubusercontent.com` with:
 
-### Required roles
+```hcl
+attribute_condition = "assertion.repository_owner == 'rumankazi' && assertion.repository == 'rumankazi/runnerforge'"
+```
 
-**For GCE VM management:**
-- `roles/compute.instanceAdmin.v1` — create, delete, and manage VM instances.
-- Scoped to the specific GCP project.
+A token from any other repository, including forks, fails the exchange. The provider also maps `attribute.workflow_path` from `assertion.job_workflow_ref.split('@')[0]`, which is the workflow file without its ref.
 
-**For reading the Packer image:**
-- `roles/compute.imageUser` — use custom images as boot disks for new VMs.
+**Per-SA bindings.** Each CI service account grants `roles/iam.workloadIdentityUser` to a narrower principal set:
 
-**For Secret Manager access:**
-- `roles/secretmanager.secretAccessor` — read the GitHub App private key.
-- Scoped to the specific secret, not all secrets in the project.
+| Service account | Who can impersonate it | Grants |
+|---|---|---|
+| `ci-build` | `workflow_path` = `.github/workflows/deploy-orchestrator.yaml` | `artifactregistry.writer` on the orchestrator repository, `run.developer` on the orchestrator service, `iam.serviceAccountUser` on the orchestrator SA |
+| `ci-terraform-plan` | `attribute.repository` = `rumankazi/runnerforge`, which means any workflow in the repo (used by `_qualify-infra.yaml` and `drift-detection.yaml`) | Project `viewer` and `iam.securityReviewer`; `storage.objectUser` on the state bucket |
+| `ci-terraform-apply` | `workflow_path` = `.github/workflows/deploy-infra.yaml`, which runs on push to `main` (or manual dispatch) in the `prod-infra` environment | Project `editor`, `iam.securityAdmin`, `iam.roleAdmin`, `secretmanager.admin`; `storage.objectAdmin` on the state bucket |
+| `ci-runner-image-build` | `workflow_path` = `.github/workflows/deploy-runner-image.yaml` | `compute.instanceAdmin.v1`, the custom `runnerImageManager` role, `logging.viewer`, `iam.serviceAccountUser` on `ci-vm-logger` |
+| `ci-vm-logger` | No WIF binding. `ci-runner-image-build` attaches it to the Packer build VM and smoke-test VMs. | `logging.logWriter` |
 
-**For Cloud Logging (automatic):**
-- Cloud Run services automatically write to Cloud Logging. No additional role needed.
+`runnerImageManager` is a project custom role that replaced `roles/compute.storageAdmin`. It holds exactly these permissions: `compute.images.create`, `delete`, `deprecate`, `get`, `list`, `setLabels`, `update` and `useReadOnly`.
 
-**For Firestore (Phase 4):**
-- `roles/datastore.user` — read and write documents.
-- Added when the user-facing dashboard is built.
+The `workflow_path` bindings pin a workflow **file**, not a branch. Which refs can run that file is controlled by the workflow's triggers and its GitHub environment: In `deploy-orchestrator.yaml`, the 5% canary runs without approval, while the 100% ramp and rollbacks are gated behind the `prod` environment. Orchestrator images are signed with keyless Cosign during the build.
 
-### What the service account cannot do
+## Infrastructure guardrails
 
-<Callout type="success" title="Intentionally restricted">
-  These boundaries are not accidental — they're enforced by IAM scoping and GitHub App permission scoping. None of the following are reachable by RunnerForge:
-</Callout>
+Every infra PR runs `conftest test` against the Terraform plan JSON in `_qualify-infra.yaml`, using the policies in `infra/policies/`. Each policy has a `*_test.rego`.
 
-- Access user source code, pull requests, or repository contents.
-- Read or modify GitHub Actions workflow files.
-- Access any GitHub data beyond `workflow_job` event payloads and registration tokens.
-- Access other GCP projects or resources outside the RunnerForge project.
+| Policy | Blocks |
+|---|---|
+| `no_basic_roles.rego` | Any IAM binding with `roles/owner`, `roles/editor` or `roles/viewer`, except for `ci-terraform-plan` and `ci-terraform-apply` |
+| `no_destroy_protected.rego` | Delete or replace of 14 critical resources, including the state bucket, the WIF pool and provider, every service account, the Cloud Run service and both secrets. Removing one takes three PRs. |
+| `no_wif_condition_modificaiton.rego` (sic) | Any change to the WIF provider's `attribute_condition`, tightening included |
 
-## Data access boundaries
+These resources also have `lifecycle { prevent_destroy = true }`. `.github/CODEOWNERS` names the owner for every path, with explicit entries for `/infra/`, `/.github/`, the orchestrator source and this directory.
 
-RunnerForge is designed to access the minimum data required for runner orchestration.
+## Known gaps
 
-### Data the system accesses
-
-- `workflow_job` webhook payloads: job ID, action (queued/completed), requested labels, repository name, installation ID, conclusion.
-- Registration tokens: short-lived, single-use tokens for runner authentication.
-- GCE VM metadata: instance names, labels, creation timestamps, status.
-
-### Data the system does not access
-
-- Repository source code.
-- Pull request contents or comments.
-- Workflow file definitions (`.github/workflows/*.yml`).
-- User credentials or personal access tokens.
-- Other GitHub events (push, pull_request, issues, etc.).
-
-The GitHub App is configured with permissions scoped exclusively to `workflow_job` events. Users can verify this in the app's permission settings before installation.
-
-<Callout type="info" title="Why we request Administration: Read & write">
-  GitHub bundles self-hosted-runner management inside the `Administration` permission. We use only one endpoint from it — the runner-registration-token endpoint. The user-facing discussion of this tradeoff, including what limits the damage and how users can verify our scope, lives in [Trust & threat model](/docs/RunnerForge/design/trust).
-</Callout>
-
-## Network security
-
-### Cloud Run ingress
-
-Cloud Run is configured to accept traffic from all sources (required for GitHub webhooks to reach the endpoint). The webhook signature validation serves as the authentication layer instead of network-level restrictions.
-
-### GCE VM egress
-
-Runner VMs need outbound internet access to:
-
-- Register with GitHub (api.github.com).
-- Download workflow dependencies (npm, pip, Docker Hub, etc.).
-- Report job results back to GitHub.
-
-VMs do not need to accept inbound connections. No external IP is strictly necessary if Cloud NAT is configured, but for simplicity in the initial build, VMs are created with ephemeral external IPs.
-
-### Internal communication
-
-Cloud Run communicates with the GCE API over Google's internal network (no public internet traversal). Authentication is via the service account's ambient credentials, not API keys or tokens stored in code.
+- Installation tokens aren't down-scoped to the job's repository.
+- There are no per-installation limits on concurrency or machine size. This is planned.
+- All tenants' VMs share one project, one zone and the `default` VPC. Per-tenant isolation is planned.
+- The orchestrator's `compute.instanceAdmin.v1` is project-wide.
+- `ci-terraform-apply` holds `roles/editor`. This is an explicit exception in `no_basic_roles.rego`.

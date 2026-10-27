@@ -1,147 +1,228 @@
 ---
 title: Observability
-description: Logging, metrics, monitoring, and the user-facing dashboard strategy.
+description: What the orchestrator logs and traces, the metrics derived from it, and the SLOs, alerts and dashboard on top.
 ---
 
-Observability is built in layers, starting with structured logging from day one and adding richer tooling as the system matures.
+import { Callout } from 'fumadocs-ui/components/callout';
 
-## Layer 1: Structured logging (Phase 1)
+Everything lives in Cloud Logging, Cloud Trace and Cloud Monitoring in the `runnerforge` project. There is no
+separate metrics pipeline: the orchestrator writes structured logs, and Terraform turns specific log messages
+into **log-based metrics**. SLOs, alert policies and the dashboard are built on those metrics and on Cloud Run's
+built-in ones. All of it is Terraform-managed in `infra/terraform/observability_*.tf`.
 
-Every webhook request logs a structured JSON object to stdout. Cloud Run automatically forwards stdout to Cloud Logging with no additional setup.
+<Callout type="warn" title="Log messages are an API">
+  Metrics match on the exact `message` string (for example `jsonPayload.message="VM creation outcome"`).
+  Renaming a message in the orchestrator silently empties the metric, and any alert or SLO built on it. Change
+  the message and the filter in `observability_metrics.tf` in the same release.
+</Callout>
 
-### Log schema for queued events
+## Logs
 
-```json
-{
-  "event": "queued",
-  "job_id": "12345",
-  "repo": "user/repo",
-  "labels": ["self-hosted", "linux", "large"],
-  "machine_type": "e2-standard-4",
-  "steps": {
-    "webhook_received": "2026-05-17T10:00:00Z",
-    "signature_validated_ms": 2,
-    "token_fetched_ms": 180,
-    "vm_created_ms": 3200,
-    "total_ms": 3382
-  },
-  "status": "success"
-}
+### Format
+
+`logger.py` picks the formatter at startup. On Cloud Run (`K_SERVICE` is set) it uses `JsonFormatter`, which writes
+one JSON object per line; Cloud Logging parses it into `jsonPayload`. Locally it uses `ColorFormatter` for
+human-readable lines. Every JSON line has:
+
+| Field | Source |
+|---|---|
+| `severity`, `message`, `timestamp`, `logger` | The Python log record. `severity` becomes the entry's severity. |
+| `logging.googleapis.com/sourceLocation` | File, line and function of the log call. |
+| `app_version`, `git_sha` | Package version and the first 7 characters of `GIT_SHA`. |
+| `logging.googleapis.com/trace`, `logging.googleapis.com/spanId` | Present when the line is written inside an active span. Links the entry to its trace in the console. |
+| `exception` | Formatted traceback, when the record has one. |
+
+Request-scoped context comes from a `ContextVar` (`LogContext` in `logger.py`) and is attached to every line written
+while it is set: `request_id` (a UUID per HTTP request), and, once a `workflow_job` event passes the label check,
+`repo`, `owner`, `sender`, `job_id`, `run_id`, `run_attempt`, `runner_name`, `runner_id`, `installation_id`.
+Background tasks (VM creation polling, the preemption check) re-install a snapshot of this context, so their logs
+keep the same `request_id`.
+
+The access-log middleware in `main.py` writes one line per request, with message `<METHOD> <path>` (for example
+`POST /webhook`) and an `httpRequest` object (`requestMethod`, `requestUrl`, `status`, `latency`, `remoteIp`,
+`userAgent`, `protocol`). Cloud Logging promotes it to the entry's `httpRequest`, so filters use
+`httpRequest.status`, not `jsonPayload.httpRequest.status`.
+
+<Callout type="info" title="Unhandled exceptions skip the access log">
+  If a handler raises, the middleware never writes its line. Uvicorn logs `Exception in ASGI application` at ERROR
+  with the traceback in `exception`, and the client gets a 500. The message ends in a newline, so match it with
+  `jsonPayload.message:"Exception in ASGI application"`, not `=`. To count 5xx, use Cloud Run's own request log
+  (`run.googleapis.com/requests`) or the availability SLO, not `webhook_request_count`.
+</Callout>
+
+### Messages that matter
+
+The lines operators filter on. Fields marked with a metric feed that log-based metric.
+
+| Message | Level | Where | Key fields | Metric |
+|---|---|---|---|---|
+| `POST /webhook` | INFO | `main.py` middleware | `httpRequest.status` | `webhook_request_count`, `webhook_rejection_count` |
+| `Webhook signature validation failed` | WARNING | `main.py` | `signature_prefix` (first 10 chars) | |
+| `Ignoring GitHub event` | INFO | `main.py` | `github_event` (non-`workflow_job` events) | |
+| `Installation not allowed` | WARNING | `main.py` | context `installation_id`, `repo`, `sender` | |
+| `Webhook event received` | INFO | `main.py` | `event_type` (`queued`, `in_progress`, `completed`) | `webhook_event_count` |
+| `Machine policy rejected` | WARNING | `handlers.py` | `reason`, `offending_tokens` | `machine_policy_reject_count` |
+| `Submitted VM creation` | INFO | `compute_client.py` | `vm_name`, `operation_id`, `machine_type`, `spot`, `image_version` | `vm_creation_count` |
+| `VM already exists` | WARNING | `compute_client.py` | `instance_name` | |
+| `VM creation outcome` | INFO / WARNING | `compute_client.py` | `outcome` (`success`, `failure`, `timeout`), `duration_ms`, `error_code`, `error_message` | `vm_creation_outcome_count` |
+| `Runner registration outcome` | INFO | `handlers.py` | `runner_readiness_seconds`, `github_queued_delivery_lag_seconds`, `github_in_progress_delivery_lag_seconds` | three distribution metrics |
+| `Time for runner to be picked up by github` | INFO | `handlers.py` | `time_to_runner_seconds` | `time_to_runner_seconds` |
+| `Refusing to delete VM not owned by this installation` | WARNING | `handlers.py` | `vm_installation_id` | |
+| `Submitted VM deletion` | INFO | `compute_client.py` | `vm_name`, `reason` (`webhook`, `sweep`) | `vm_deletion_count` |
+| `Job ended due to spot preemption` | WARNING | `compute_client.py` | `vm_name`, `job_id`, `conclusion` | `job_preempted_count` |
+| `VM list scan` | INFO | `compute_client.py` | `runnerforge_vm_count`, `skipped_malformed_count` | `runner_vm_count` |
+| `Sweep decision` | INFO / WARNING | `sweep.py` | `decision`, `reason`, `vm_name`, `age_minutes` | |
+| `Sweep failed for VM` | ERROR | `sweep.py` | `vm_name`, `error` | |
+| `Sweep completed` | INFO | `main.py` | `checked`, `deleted`, `skipped`, `error_count` | `sweep_*` |
+
+Startup lines worth knowing: `Resolved runner image` (`image_name`, `image_version`), `Loaded machine types cache`
+(`zone`, `count`), `Clients initialized`, and the admission mode: `Installation allow-list active`
+(`allowed_installation_count`) or the WARNING `ALLOWED_INSTALLATION_IDS unset: every installation can create VMs`.
+Degraded-mode warnings: `Runner image resolve failed — VMs will boot from family alias` and
+`Failed to load machine types cache - validation in degraded mode`.
+
+### Querying
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  jsonPayload.message="VM creation outcome"
+' --project=runnerforge --freshness=1h --limit=50 \
+  --format='table(timestamp, jsonPayload.outcome, jsonPayload.error_code, jsonPayload.job_id)'
 ```
 
-### Log schema for completed events
+To follow one webhook end to end, filter on its `jsonPayload.request_id`.
 
-```json
-{
-  "event": "completed",
-  "job_id": "12345",
-  "repo": "user/repo",
-  "conclusion": "success",
-  "steps": {
-    "webhook_received": "2026-05-17T10:05:00Z",
-    "vm_found": true,
-    "vm_deleted_ms": 1500,
-    "total_ms": 1520
-  },
-  "status": "success"
-}
-```
+### Runner VM logs
 
-### Log schema for sweep actions
+The Packer image installs the Cloud Ops Agent (`infra/packer/scripts/install-runner.sh`), and the runner VM service
+account has `roles/logging.logWriter`. The startup script tags its lines with `logger -t startup-script`. These land
+under `resource.type="gce_instance"`, not under the orchestrator's Cloud Run resource. While a VM still exists,
+`gcloud compute instances get-serial-port-output` also shows the boot.
 
-```json
-{
-  "event": "sweep",
-  "vms_checked": 3,
-  "vms_deleted": 1,
-  "deleted_vms": [
-    {
-      "vm_name": "runner-12345",
-      "job_id": "12345",
-      "age_minutes": 135,
-      "reason": "job_completed_vm_not_cleaned"
-    }
-  ],
-  "total_ms": 4200
-}
-```
+## Traces
 
-These logs are searchable in Cloud Logging immediately. Queries like "show me all requests where `token_fetched_ms > 500`" or "all sweep deletions in the last 24 hours" work out of the box.
+`tracing.py` enables OpenTelemetry only on Cloud Run. It samples every request (`ALWAYS_ON`), exports to Cloud Trace,
+and auto-instruments FastAPI (one server span per request, such as `POST /webhook`) and httpx (one client span per
+GitHub API call). Custom spans add the steps:
 
-## Layer 2: Cloud Monitoring dashboards (Phase 3–4)
+- `webhook.verify_github_signature`, `webhook.parse_github_response`
+- `webhook.handle_queued`, `webhook.handle_in_progress`, `webhook.handle_completed`
+- `github.get_installation_token`, `github.get_registration_token`, `github.get_job_status`
+- `compute.create_vm`, `compute.wait_for_vm_creation`, `compute.delete_vm`, `compute.get_vm_labels_by_job`,
+  `compute.get_vm_labels_by_name`, `compute.list_runnerforge_vms`
 
-Cloud Run automatically reports request count, latency percentiles, instance count, error rate, and memory/CPU usage. These dashboards exist without writing any code.
+Handler spans carry `repo`, `sender`, `job_id`, `installation_id`, `labels`, `run_id` and `run_attempt`.
 
-For custom metrics specific to RunnerForge, we use **log-based metrics** — Cloud Monitoring watches the structured logs and extracts numeric fields into time-series data. No additional infrastructure needed.
+**One trace per runner registration.** `handle_queued` stores the trace and span ID of its `POST /webhook` server
+span in the VM's labels (`webhook_trace_id`, `webhook_span_id`). When `in_progress` arrives, `handle_in_progress`
+reads those labels and starts its span under that parent, so queued and in_progress show as one trace, with
+`webhook.handle_in_progress` next to `webhook.handle_queued`.
 
-### Metrics to track
+**Completion is a separate trace with a link.** The job can run for hours, which would dominate a merged timeline.
+`webhook.handle_completed` adds a span link to the queued context instead, so you can jump from a completion to its
+registration trace.
 
-**System health:**
-- Webhook request rate (by event type)
-- Webhook processing latency (P50, P95, P99)
-- Error rate (failed webhook processing)
-- Active VMs (current count)
-- Cloud Run instance count over time
+If the VM is missing or its labels are malformed, `webhook.handle_in_progress` stays in its own request's trace and the completion gets no link.
 
-**Runner lifecycle:**
-- VM creation latency (`vm_created_ms`)
-- Registration token fetch latency (`token_fetched_ms`)
-- VM boot-to-ready time (measured from creation to first job execution, derived from GitHub API timestamps)
-- VM cleanup latency (`vm_deleted_ms`)
-- Orphaned VMs cleaned per sweep
+## Log-based metrics
 
-**Reliability:**
-- Webhook signature validation failures (potential security issue)
-- VM creation failures (GCE API errors, quota exhaustion)
-- VMs that failed to register (created but never picked up a job)
-- Sweep deletion count (higher than expected indicates webhook delivery issues)
+All 17 are in `observability_metrics.tf`. All but one scope to `resource.type="cloud_run_revision"` and
+`service_name="runnerforge-orchestrator"`.
 
-## Layer 3: Firestore for user-facing metrics (Phase 4)
+| Metric | Kind | Source | Labels |
+|---|---|---|---|
+| `webhook_request_count` | counter | `POST /webhook` | `response_status_code` |
+| `webhook_rejection_count` | counter | `POST /webhook` with status 400–499 | `response_status_code` |
+| `webhook_event_count` | counter | `Webhook event received` | `event_type` |
+| `vm_creation_count` | counter | `Submitted VM creation` | `machine_type`, `image_version`, `spot` |
+| `vm_creation_outcome_count` | counter | `VM creation outcome` | `outcome`, `machine_type`, `image_version`, `error_code`, `spot` |
+| `vm_deletion_count` | counter | `Submitted VM deletion` | `reason` |
+| `runner_readiness_seconds` | distribution (s) | `Runner registration outcome` | `machine_type`, `image_version` |
+| `github_queued_delivery_lag_seconds` | distribution (s) | `Runner registration outcome` | |
+| `github_in_progress_delivery_lag_seconds` | distribution (s) | `Runner registration outcome` | |
+| `time_to_runner_seconds` | distribution (s) | `Time for runner to be picked up by github` | `machine_type`, `image_version` |
+| `runner_vm_count` | distribution | `VM list scan` | |
+| `sweep_checked_count`, `sweep_deleted_count`, `sweep_error_count` | distribution | `Sweep completed` | |
+| `machine_policy_reject_count` | counter | `Machine policy rejected` | `reason` |
+| `job_preempted_count` | counter | `Job ended due to spot preemption` | `conclusion` |
+| `vm_preemption_count` | counter | GCE audit log `compute.instances.preempted` on `instances/runnerforge-*` | `zone` |
 
-When building the user-facing dashboard, add a lightweight Firestore write after each successful webhook processing. This is written asynchronously — fire and forget — so it does not slow down the critical path. If the Firestore write fails, the structured log still has the data.
+What the latency metrics measure (from `handlers.handle_in_progress`):
 
-### Firestore data model
+- `runner_readiness_seconds`: GitHub's `started_at` for the job minus the time the orchestrator received the
+  `queued` webhook (stored as the `queued_received_at` VM label). This is the latency on our side.
+- `github_queued_delivery_lag_seconds`: our `queued` receipt time minus the job's `created_at`.
+- `github_in_progress_delivery_lag_seconds`: our `in_progress` receipt time minus `started_at`.
+- `time_to_runner_seconds`: `started_at` minus `created_at`, so it includes GitHub's delivery delay.
 
-Collection: `jobs`
+The first three are floored at zero to absorb clock skew, and are only emitted when the VM created for that job
+still exists at `in_progress` time (its labels hold `queued_received_at`).
 
-```
-jobs/{job_id}
-  repo: "user/repo"
-  owner: "user"
-  labels: ["self-hosted", "linux", "large"]
-  machine_type: "e2-standard-4"
-  status: "completed"
-  conclusion: "success"
-  created_at: timestamp
-  completed_at: timestamp
-  vm_name: "runner-12345"
-  timings:
-    boot_ms: 34000
-    registration_ms: 2100
-    job_duration_ms: 185000
-    total_ms: 221100
-  cost_estimate: 0.0032
-```
+Things to know when reading them:
 
-### User dashboard queries
+- `machine_type` and `image_version` on the two latency metrics are always empty today: the log lines that feed them
+  don't carry those fields.
+- `runner_vm_count` only gets a sample when the sweep runs (once a day), so it isn't a live fleet gauge.
+- The `spot` label on the two VM creation metrics was added out of band with `gcloud logging metrics update`, to
+  avoid the provider destroying and recreating the metric.
+- New log-based metrics take several minutes to become queryable. Dependent SLOs and alerts wait behind
+  `time_sleep.wait_for_log_metrics` (120 s) on a fresh apply.
 
-- "My repos' runner usage this month" — query by `owner`, aggregate by `repo`.
-- "Job count by label" — query by `owner`, group by `labels`.
-- "Total runner-hours" — sum `job_duration_ms` by `owner`.
-- "Estimated cost" — sum `cost_estimate` by `owner` and `repo`.
-- "Success/failure rate" — count by `conclusion` grouped by `repo`.
+## SLOs
 
-### Admin dashboard queries
+Both hang off the `orchestrator` monitoring service (`observability_service.tf`, a `CLOUD_RUN` basic service for
+`runnerforge-orchestrator` in `europe-west4`). Defined in `observability_slos.tf`.
 
-Everything in the user dashboard, plus:
+| SLO | SLI | Goal | Period |
+|---|---|---|---|
+| Availability | Cloud Run `basic_sli` availability: 5xx is bad, everything else is good. Covers every route, not only `/webhook`. | 99.5% | Calendar month |
+| Time-to-Register | Windows-based on `runner_readiness_seconds`. A 5-minute window is good when at least 99.5% of its samples are ≤ 300 s. | 99.5% of windows | Calendar month |
 
-- Total system usage across all users.
-- Average boot time by machine type.
-- Failure rate by machine type (identifies problematic configurations).
-- Peak concurrent VMs over time.
-- Cost burn rate — total estimated cost per day/week/month.
-- Slowest steps — identify bottlenecks by looking at P95 timings per step.
+4xx responses, including HMAC failures and scanner probes, count as good for availability on purpose; the
+`webhook_rejection_count` alert covers them instead.
 
-## BigQuery (future consideration)
+Unless a 5-minute window holds at least 200 registrations, one registration over 300 s is enough to make it bad
+(199 of 200 is exactly 99.5%). The metric's exponential buckets have bounds at 256 s and 512 s, so
+samples in that range can't be split exactly at 300 s.
 
-For long-term historical analytics ("average boot time trend over 6 months", "cost per repo per quarter"), a log sink from Cloud Logging to BigQuery provides SQL-queryable access to all historical log data. This is serverless and pay-per-query — no infrastructure to manage. Not needed for the initial build, but the structured logging format is already compatible.
+## Alert policies
+
+Seven policies in `observability_alerts.tf`, all sent to one email notification channel, "RunnerForge Alerts"
+(`observability_channels.tf`). The policies have no `documentation` block, so alert emails don't link here: use
+the runbook column.
+
+| Policy (display name) | Fires when | Severity | Runbook |
+|---|---|---|---|
+| Availability SLO fast burn (10x over 1h) | Burn rate of the availability SLO over a 1 h lookback > 10. Auto-closes after 30 min. | CRITICAL | [Availability SLO](/docs/guides/runbooks/webhook-availability) |
+| Time-to-Register SLO fast burn (10x over 1h) | Burn rate of the time-to-register SLO over a 1 h lookback > 10. Auto-closes after 30 min. | CRITICAL | [Time-to-Register SLO](/docs/guides/runbooks/time-to-register) |
+| VM creation failure ratio > 5% (5m) | `failure` + `timeout` outcomes over all outcomes > 0.05, 5-minute alignment, held 5 min | ERROR | [VM creation failures](/docs/guides/runbooks/vm-creation-failures) |
+| Lost-webhook ratio &lt; 0.9 (5m) | `vm_creation_count` over queued `webhook_event_count` below 0.9, 5-minute alignment, held 5 min. Inactive when there's no data. | ERROR | [Lost webhooks](/docs/guides/runbooks/lost-webhooks) |
+| Webhook rejections > 5/min (10m) | More than 50 `webhook_rejection_count` in a 10-minute window, held 10 min | WARNING | [Webhook rejections](/docs/guides/runbooks/webhook-rejections) |
+| Cold-start latency p95 > 30s (5m) | Cloud Run `container/startup_latencies` p95 > 30 000 ms, 5-minute alignment, held 5 min. Inactive when there's no data. | WARNING | [Cold-start latency](/docs/guides/runbooks/cold-start-latency) |
+| Cloud Run instance count > 40 (80% of max=50) | Cloud Run `container/instance_count` max > 40, 1-minute alignment, held 10 min | WARNING | [Instance saturation](/docs/guides/runbooks/instance-saturation) |
+
+A burn rate of 10 means errors are using the monthly budget 10 times faster than sustainable: about 5% bad
+requests (or bad windows) over the last hour, which would use a month's budget in about 3 days.
+
+**No sweep liveness alert.** Cloud Monitoring caps an absence condition at 23 h 30 min, and the sweep runs once a
+day (Cloud Scheduler job `runnerforge-sweep`, `12 0 * * *` UTC, in `scheduler.tf`), so any absence alert would fire
+every night before the sweep. The "Sweep & cleanup" dashboard section is the check instead.
+
+## Dashboard
+
+"RunnerForge — Orchestrator Health", defined in `infra/terraform/dashboards/orchestrator_health.json` and applied by
+`observability_dashboards.tf`. If you edit it in the console, run `infra/terraform/sync-dashboards.sh` to export it
+back to the JSON, then commit. Sections:
+
+| Section | Panels |
+|---|---|
+| Orchestrator Health | Request rate by response code class, request latency p50/p95/p99, active instances and cold-start p95 by revision, memory p95 by revision |
+| Runner Fleet | VM creation rate by machine type, creation outcomes per minute, deletion rate by reason, active runner VMs, runner readiness p05/p50/p95 |
+| Sweep & cleanup | VMs checked, deleted, and errors per sweep run |
+| Webhook reliability | Webhook events by `event_type`, lost-webhook ratio |
+| Spot & Policy | VM creation rate by spot, preemptions (audit log vs job-confirmed), machine policy rejects by reason |
+| Webhook delivery latency | End-to-end time-to-runner p50/p95, GitHub delivery lag p50/p95 |
+
+For how the charts' aligners and reducers work, see [Cloud Monitoring charts](/docs/guides/cloud-monitoring-charts).

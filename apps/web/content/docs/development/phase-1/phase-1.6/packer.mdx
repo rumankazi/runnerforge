@@ -5,6 +5,10 @@ description: How the runnerforge-runner image is built
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
+<Callout type="info" title="Historical build log">
+  Historical snapshot from Phase 1. The code has changed since this was written. For the runner image today, see [Architecture](/docs/design/architecture). The current template is `infra/packer/runner-image.pkr.hcl`.
+</Callout>
+
 [HashiCorp Packer](https://www.packer.io/) builds machine images from a declarative template. Think "Dockerfile, but for VM disk snapshots." We use it to produce a custom GCE image with the GitHub Actions runner binary + Docker pre-installed, so VMs created from it are ready to register in under a minute.
 
 ## Why pre-bake an image

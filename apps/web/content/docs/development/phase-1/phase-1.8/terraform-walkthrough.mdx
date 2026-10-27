@@ -5,6 +5,10 @@ description: File-by-file, resource-by-resource explanation of infra/terraform/.
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
+<Callout type="info" title="Historical build log">
+  Historical snapshot from Phase 1. The code has changed since this was written. For the infrastructure today, see [Architecture](/docs/design/architecture) and the files in `infra/terraform/`. Terraform is now applied in CI by `.github/workflows/deploy-infra.yaml`, never from a laptop.
+</Callout>
+
 This is the reading-style guide to `infra/terraform/`. If you ever need to add a new resource, change an env var, or understand why the apply graph runs in a particular order, start here.
 
 ## File layout
@@ -378,7 +382,7 @@ Most common future change. Say you want to add `MAX_VM_LIFETIME_HOURS=6` for tun
 
    (Or if it's a per-deploy tunable: add to `variables.tf` + `terraform.tfvars`, reference as `var.max_vm_lifetime_hours`.)
 
-2. **Add to [`apps/orchestrator/.env`](https://github.com/rumankazi/runnerforge/blob/main/apps/orchestrator/.env)** for local dev:
+2. **Add to `apps/orchestrator/.env`** (template: [`.env.example`](https://github.com/rumankazi/runnerforge/blob/main/apps/orchestrator/.env.example)) for local dev:
 
    ```
    MAX_VM_LIFETIME_HOURS=6
@@ -445,4 +449,3 @@ If state is irrecoverable: each resource can be re-imported individually with `t
 - **`.env` for dev server only** — tests use `uv run pytest` without `--env-file`, conftest provides defaults.
 - **Cloud Run reserves `/healthz`** — use `/health` for the app's health endpoint.
 
-These are also written into the project's [conventions doc](https://github.com/rumankazi/runnerforge/blob/main/.claude/projects/-Users-rumankazi-Projects-runnerforge/memory/project_orchestrator_conventions.md) for future-you and future-AI assistants.

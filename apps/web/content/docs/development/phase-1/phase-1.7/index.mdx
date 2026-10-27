@@ -5,6 +5,10 @@ description: Sweep endpoint for orphan cleanup + Cloud Ops Agent for persistent 
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
+<Callout type="info" title="Historical build log">
+  Historical snapshot from Phase 1. The code has changed since this was written. For the current sweep, see [Webhook flow](/docs/design/webhook-flow).
+</Callout>
+
 After phase 1.6, the orchestrator creates and destroys runners on demand via webhooks — the **happy path**. Phase 1.7 adds the **safety net**: a sweep endpoint that periodically catches VMs whose cleanup webhook never arrived (dropped delivery, orchestrator crash, runner failure). Plus a small but important infrastructure change: VM-internal logs now ship to Cloud Logging persistently, surviving VM deletion.
 
 After this phase the orchestrator is **production-ready in terms of reliability + observability**. Phase 1.8 takes it the rest of the way — Terraform + Cloud Run deployment + Secret Manager.
@@ -56,7 +60,7 @@ Benefits:
 
 ### Job status, not runner status, as the cleanup signal
 
-Per [webhook-flow.mdx](/docs/RunnerForge/design/webhook-flow), the sweep checks **job status** via the GitHub API, not runner registration status. A runner can be "offline" but its job still queued; a runner can be "online" but its job already completed (race window). Job status directly answers "should this VM still exist?"
+Per [webhook-flow.mdx](/docs/design/webhook-flow), the sweep checks **job status** via the GitHub API, not runner registration status. A runner can be "offline" but its job still queued; a runner can be "online" but its job already completed (race window). Job status directly answers "should this VM still exist?"
 
 See [Sweep logic](/docs/development/phase-1/phase-1.7/sweep-logic) for the decision tree details.
 

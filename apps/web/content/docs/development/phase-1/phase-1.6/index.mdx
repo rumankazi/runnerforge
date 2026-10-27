@@ -5,6 +5,10 @@ description: Packer runner image + startup script
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
+<Callout type="info" title="Historical build log">
+  Historical snapshot from Phase 1. The code has changed since this was written. For the runner image today, see [Architecture](/docs/design/architecture). Images are now built and promoted by `.github/workflows/deploy-runner-image.yaml`.
+</Callout>
+
 After phase 1.5, our orchestrator creates real VMs — but the VMs boot stock Debian and do nothing. Phase 1.6 makes the VMs *useful*: a Packer-built image with the GitHub Actions runner pre-installed, and a startup script that registers the runner with GitHub on boot.
 
 End result: a real GitHub workflow push triggers a real VM that actually executes the job.

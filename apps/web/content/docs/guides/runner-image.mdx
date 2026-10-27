@@ -1,0 +1,70 @@
+---
+title: Runner image
+description: What's installed on a RunnerForge runner VM, and how the image is built, tested, and rolled out.
+---
+
+Every RunnerForge VM boots from one Compute Engine image built with Packer from `infra/packer/`.
+It's a small base, not a copy of GitHub's hosted `ubuntu-latest` image.
+
+## What's on it
+
+| Component | Version / detail | Source |
+|---|---|---|
+| OS | Debian 12, from the `debian-12` image family | `runner-image.pkr.hcl` |
+| GitHub Actions runner | `2.338.2`, linux-x64 | `RUNNER_VERSION` in `scripts/install-runner.sh` |
+| Docker Engine | Installed with Docker's `get.docker.com` script at build time | `scripts/install-runner.sh` |
+| Google Cloud Ops Agent | Ships VM logs to Cloud Logging for the maintainer | `scripts/install-runner.sh` |
+| Packages | `git`, `curl`, `ca-certificates`, `libicu-dev`, plus the runner's own dependencies | `scripts/install-runner.sh` |
+
+The current image release is `0.4.2` (see `infra/packer/CHANGELOG.md`).
+
+Jobs run as the unprivileged `runner` user:
+
+- **Docker works without sudo.** `runner` is in the `docker` group, so `docker` commands,
+  `container:` jobs, and service containers work.
+- **`sudo` does not.** `runner` has no sudo rights, so steps like `sudo apt-get install` fail.
+- **Other tools aren't preinstalled.** Bring them with a setup action or run the job in a container
+  image that already has them.
+
+## One VM, one job
+
+Runners are **ephemeral**. At boot, the VM's startup script (`startup_script.sh` in the orchestrator):
+
+1. formats the blank 50 GB work disk and mounts it at `/home/runner/actions-runner/_work`;
+2. reads a single-use registration token and your repository URL from the VM metadata;
+3. registers the runner on your repository with `--ephemeral` and the labels from your `runs-on`;
+4. runs exactly one job.
+
+The VM is deleted when GitHub reports the job as completed, or at the
+[runtime cap](/docs/guides/limits#runtime) at the latest. Nothing from one job is visible to the next.
+
+## How a new image ships
+
+The image is its own release stream (`runner-image` in release-please). Renovate opens PRs for new
+runner versions. Releasing a version runs `.github/workflows/deploy-runner-image.yaml`:
+
+1. **Build.** Packer boots a temporary VM from Debian 12, runs `install-runner.sh`, and saves a
+   candidate image.
+2. **Smoke test.** A VM boots from the candidate
+   (`.github/workflows/scripts/smoke-test.sh`). The test checks that the runner's `run.sh` and
+   `config.sh` are present and that `config.sh --help` runs as `runner`, and that the Ops Agent
+   delivers logs, each within 5 minutes. On failure the candidate is deleted.
+3. **Promote.** The candidate is copied into the `runnerforge-runner` image family, with the version's
+   dots replaced by dashes (for example `runnerforge-runner-image-0-4-2`).
+4. **Retain.** Every image older than the 5 newest in the family is deprecated and scheduled for
+   deletion 30 days later.
+
+Each time an orchestrator instance starts, it looks up the newest image in the family and uses that
+exact image for the VMs it creates.
+
+**Rollback** is a manual run of the same workflow with `action: rollback`. It deprecates the bad
+image, so the family falls back to the next-newest one, and orchestrator instances pick that one up
+when they next start.
+
+## Need something on the image?
+
+Prefer installing tools inside your job. If something is missing that most jobs would need, open an
+[issue](https://github.com/rumankazi/runnerforge/issues/new).
+
+See also: [Runner labels](/docs/guides/runner-labels) for VM sizes and
+[Limits](/docs/guides/limits) for disk and runtime limits.

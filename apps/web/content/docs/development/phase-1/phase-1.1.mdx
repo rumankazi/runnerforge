@@ -6,6 +6,10 @@ description: Github App, HMAC and /webhook endpoint
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 
+<Callout type="info" title="Historical build log">
+  Historical snapshot from Phase 1. The code has changed since this was written. For current webhook handling, see [Webhook flow](/docs/design/webhook-flow) and [Security](/docs/design/security).
+</Callout>
+
 We will start with preparing the backend first. We want to be able to create webhook using Github App so that we get the webhook events to our server. We will work on processing the data later. For phase 1.1, we will just validate the header is authenticated.
 
 ### Github App

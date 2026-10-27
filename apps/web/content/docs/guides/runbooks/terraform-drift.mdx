@@ -1,10 +1,11 @@
 ---
 title: Terraform Drift Detected
+description: The daily drift check found differences between the Terraform code and GCP.
 ---
 
 ## Symptom
 
-A GitHub issue opened by the `drift-detection.yaml` workflow, titled something like "Terraform drift detected in infra/terraform". The body contains the plan diff between current GCP state and the TF code on `main`.
+The tfaction drift issue for `infra/terraform` is reopened, with a comment from the `drift-detection.yaml` run that holds the plan result between current GCP state and the TF code on `main`. The issue itself is created by `create-drift-issues.yaml`; drift detection reopens it when the plan shows changes and closes it when the plan is clean.
 
 ## What this means
 
@@ -14,17 +15,19 @@ Drift = a difference between what the TF code declares and what's actually deplo
 - An out-of-band script that modified GCP resources
 - An aborted apply that left state partially updated
 
-Drift isn't necessarily harmful — it means "TF is no longer the source of truth" until reconciled. The drift issue stays open until the next scheduled run (daily at 08:17 UTC) detects no changes, then it auto-closes.
+Drift isn't necessarily harmful — it means "TF is no longer the source of truth" until reconciled. The drift issue stays open until a later run (scheduled daily at 08:17 UTC) detects no changes, then it auto-closes.
 
 ## First step — identify what drifted
 
-Open the issue. The body shows `~`, `+`, `-` markers for resources with changes. Examples to expect:
+Open the issue's latest comment. The plan shows `~`, `+`, `-` markers for resources with changes. Examples to expect:
 
 | Diff | Likely cause |
 |---|---|
 | `~ google_cloud_run_v2_service.orchestrator` with field-level changes | Someone changed Cloud Run via console (env vars, scaling, etc.) |
-| `+ google_compute_instance.runnerforge-...` | An orphan runner VM TF doesn't manage — sweep should catch eventually |
-| `- google_secret_manager_secret_version.*` | A secret version was deleted out-of-band |
+| `+` on a resource the code declares | It was deleted out-of-band; the next apply would recreate it |
+| `-/+` (replace) | A changed field forces replacement; read the `# forces replacement` line before applying |
+
+Runner VMs never show up here: the orchestrator creates them through the GCE API, and Terraform doesn't manage them.
 
 ## Recovery — two paths
 
@@ -32,7 +35,7 @@ Open the issue. The body shows `~`, `+`, `-` markers for resources with changes.
 
 If the change was intentional and should be kept:
 
-1. Look at the diff in the drift issue
+1. Look at the plan in the drift issue's latest comment
 2. Edit the TF code in a feature branch to match the deployed state
 3. PR the change. Plan-on-PR should show "no changes" if your TF code now matches reality.
 4. Merge. `deploy-infra.yaml` will apply (no-op, since state matches code).
@@ -54,7 +57,7 @@ To verify the fix without waiting until 08:17 UTC tomorrow:
 GitHub Actions → Drift Detection → workflow_dispatch → Run workflow
 ```
 
-The workflow takes ~1 minute. If clean, `update-drift-issue` closes the issue automatically.
+If clean, `update-drift-issue` closes the issue automatically. `tfaction-root.yaml` sets `minimum_detection_interval: 1`, so tfaction skips an issue that was checked less than an hour ago: wait an hour after the last run before dispatching.
 
 ## When NOT to act
 

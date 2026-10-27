@@ -1,0 +1,77 @@
+---
+title: Lost webhooks
+description: Runbook for "Lost-webhook ratio < 0.9 (5m)", queued jobs accepted without a VM being created.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Symptom
+
+Email from "RunnerForge Alerts": **Lost-webhook ratio &lt; 0.9 (5m)**, severity ERROR.
+
+The ratio is `vm_creation_count` (`Submitted VM creation`) over `webhook_event_count` for `event_type="queued"`
+(`Webhook event received`). The anchor line is written after the HMAC check, the RunnerForge label check and the
+installation allow-list, so ignored events and disallowed installations don't count. The alert fires when the ratio
+stays under 0.9 for 5 minutes, and stays quiet when no queued webhooks arrive.
+
+## Impact
+
+Each missing creation is a job GitHub thinks we accepted, with no runner coming. It stays queued; GitHub won't
+resend it.
+
+## Diagnose
+
+All commands are read-only.
+
+**1. Find which queued events didn't produce a VM.** These are the lines written between the anchor and VM creation:
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  (
+    (jsonPayload.message="Webhook event received" jsonPayload.event_type="queued")
+    OR jsonPayload.message="Submitted VM creation"
+    OR jsonPayload.message="Machine policy rejected"
+    OR jsonPayload.message="VM already exists"
+    OR jsonPayload.message:"Exception in ASGI application"
+  )
+' --project=runnerforge --freshness=1h --limit=100 \
+  --format='table(timestamp, jsonPayload.message, jsonPayload.job_id, jsonPayload.repo, jsonPayload.reason, jsonPayload.offending_tokens)'
+```
+
+| What you see after the anchor | Cause |
+|---|---|
+| `Machine policy rejected` | The job's labels can't be mapped to a machine. `reason` is `unknown_token`, `conflicting_machines` or `invalid_machine_type`; `offending_tokens` shows the labels. This is a user-side `runs-on` problem. |
+| `VM already exists` | The same job was delivered twice (often a manual redelivery). The VM from the first delivery serves it. |
+| `Exception in ASGI application` | The handler failed after the anchor (GitHub token call or GCE insert). The request got a 5xx; see [Availability SLO](/docs/guides/runbooks/webhook-availability). |
+| Nothing | Rare. Follow one `request_id` end to end (step 2). |
+
+**2. Follow one request.**
+
+```bash
+gcloud logging read 'jsonPayload.request_id="<REQUEST_ID>"' --project=runnerforge --freshness=1d \
+  --format='table(timestamp, severity, jsonPayload.message)'
+```
+
+**3. Check the trend** on the dashboard: Webhook reliability, "Lost-webhook ratio", and Spot & Policy, "Machine policy
+rejects by reason".
+
+## Mitigate
+
+<Callout type="warn" title="Mutations">
+  Redelivering changes production: it creates VMs.
+</Callout>
+
+- **Policy rejects:** tell the repo owner which labels were rejected. Label rules are in
+  [Webhook flow](/docs/design/webhook-flow#label-parsing). They need to fix `runs-on`, then cancel and re-run the
+  job.
+- **Duplicate deliveries:** no action.
+- **Handler exceptions:** fix the cause using the availability runbook, then redeliver the failed `queued`
+  deliveries from the GitHub App settings, Advanced, Recent Deliveries.
+
+## Escalate
+
+If neither policy rejects nor exceptions explain the gap, track it in a GitHub issue with the request IDs. The
+anchor log and the creation log are written in the same request, so a gap without an error line most likely means
+a code bug.

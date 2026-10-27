@@ -1,0 +1,91 @@
+---
+title: Limits
+description: What a RunnerForge runner can and can't do during the free beta, and how to ask for more.
+---
+
+These are the limits that exist in the code and infrastructure today. Per-installation limits are
+planned but not built yet; this page says so where it matters.
+
+## At a glance
+
+| Limit | Value | Source |
+|---|---|---|
+| OS and architecture | Linux x64 only (Debian 12) | `infra/packer/` |
+| Location | One zone: `europe-west4-a` | `GCP_ZONE` in `infra/terraform/cloud_run.tf` |
+| Max VM runtime | 6 hours 15 minutes, then the VM is deleted | `MAX_VM_RUN_DURATION` in `compute_client.py` |
+| Boot disk | 10 GB | `compute_client.py` |
+| Work disk | 50 GB `pd-balanced` | `compute_client.py` |
+| Jobs per VM | 1 (ephemeral runner) | `startup_script.sh` |
+| Public IP | None; outbound traffic goes through shared Cloud NAT | `compute_client.py`, `infra/terraform/network.tf` |
+| Who can use it | Approved installations only | `allowed_installation_ids` in `infra/terraform/variables.tf` |
+| SLA | None | |
+
+## Runtime
+
+Every VM is created with a Compute Engine runtime cap of **6 hours 15 minutes** and termination
+action `DELETE`. When the cap is reached, Compute Engine deletes the VM and its disks, even if your
+job is still running. The 6 hours match GitHub's default job timeout of 360 minutes; the extra 15
+minutes cover boot and runner registration.
+
+Normally the VM is deleted much sooner, as soon as GitHub reports the job as completed. A daily
+cleanup at 00:12 UTC (`infra/terraform/scheduler.tf`) also removes VMs that outlived their job.
+
+If you set `timeout-minutes` above 360, the job is still cut off at the VM cap.
+
+## Disks
+
+| Disk | Size | Mounted at | Holds |
+|---|---|---|---|
+| Boot | 10 GB | `/` | OS, runner, Docker's data (`/var/lib/docker`) |
+| Work | 50 GB `pd-balanced` | `/home/runner/actions-runner/_work` | Checkouts, build output, tool caches |
+
+Your workspace has 50 GB. Docker images and layers are stored on the 10 GB boot disk, because the
+image doesn't move Docker's data directory, so jobs that pull large images can run out of space.
+Both disks are created fresh for each job and deleted with the VM. Nothing carries over between jobs.
+
+## Network
+
+Runner VMs have no external IP address. They reach the internet through one Cloud NAT
+(`runnerforge-nat`) shared by every runner, with automatically assigned IPs. That means:
+
+- Nothing on the internet can connect in to a runner.
+- The outbound IP is not stable and is shared with other users, so you can't allow-list it in a
+  firewall.
+
+## Shared capacity
+
+All runners for all users run in one Google Cloud project and share its regional quotas for
+`europe-west4`. The numbers below are the ones recorded in `infra/terraform/quotas.tf` (checked
+2026-06-12):
+
+- `SSD_TOTAL_GB`: 1500 GB requested. At 50 GB of work disk per runner that's about **30 concurrent
+  runners in total**. It's the first limit hit for `small` and `medium`.
+- `N2_CPUS`: Google's default of 200 vCPUs, shared by every `n2-*` runner. On its own it allows
+  about 25 `large` (8 vCPUs) or 12 `xlarge` (16 vCPUs) at a time, which is hit before the disk limit.
+- Other machine families have small default CPU quotas, such as 24 vCPUs for E2 and 16 for N2D.
+
+When a quota is exhausted, Compute Engine refuses the VM and your job stays queued with no runner.
+RunnerForge doesn't retry the creation; re-run the job later.
+
+<Callout type="warn" title="Not enforced per installation yet">
+  Today there is no per-installation cap on concurrent runners, machine size, or total usage, and
+  [literal machine types](/docs/guides/runner-labels#literal-machine-types) are not restricted per
+  installation. One busy installation can use up the shared quota for everyone. Per-installation
+  limits are planned. Until they ship, approval is the control, and abuse gets an installation removed
+  from the allow-list.
+</Callout>
+
+## Not supported
+
+- Windows, macOS, Arm, and GPU runners (see [Runner labels](/docs/guides/runner-labels#not-supported)).
+- `sudo` in jobs: the `runner` user has no sudo rights (see [Runner image](/docs/guides/runner-image)).
+- Warm pools: every job waits for a fresh VM to boot.
+- Choosing a region or zone.
+
+## Asking for more
+
+If a limit blocks a real workload, such as a larger machine, a longer runtime, or more concurrent
+runners, open a
+[request-more-resources issue](https://github.com/rumankazi/runnerforge/issues/new?template=request-more-resources.yml).
+Say what you need and why. There is no promise it can be granted: many of these limits are shared
+by everyone.

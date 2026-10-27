@@ -1,0 +1,58 @@
+name: Request more resources
+description: Ask for a larger machine, a longer runtime, or more capacity than the beta limits allow.
+title: "Resource request: <what you need>"
+labels: ["resource-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read [Limits](https://github.com/rumankazi/runnerforge/blob/main/apps/web/content/docs/guides/limits.mdx) first. Many limits are shared by every user of the free beta, so there's no promise a request can be granted.
+
+        **This issue is public.** Don't include secrets.
+
+  - type: input
+    id: installation-id
+    attributes:
+      label: Installation ID
+      description: Your approved RunnerForge installation ID.
+      placeholder: "12345678"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: limit
+    attributes:
+      label: Which limit?
+      options:
+        - Machine size (larger than xlarge, or a specific machine type)
+        - Max runtime (longer than 6 hours 15 minutes)
+        - Concurrent runners
+        - Disk space
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: needed
+    attributes:
+      label: What do you need?
+      description: The machine type, runtime, number of concurrent runners, or disk size, and how often you'd use it.
+      placeholder: n2-standard-32 for a nightly build that takes about 2 hours.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why?
+      description: What fails or is too slow today, and what you've already tried.
+    validations:
+      required: true
+
+  - type: input
+    id: repositories
+    attributes:
+      label: Repositories affected
+      placeholder: octo-org/api
+    validations:
+      required: false

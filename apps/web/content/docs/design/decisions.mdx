@@ -3,7 +3,31 @@ title: Decisions
 description: Architecture Decision Records — the why behind every major technical choice.
 ---
 
-Each decision follows the ADR (Architecture Decision Record) format: context, options considered, decision, and consequences.
+Each decision follows the ADR (Architecture Decision Record) format: context, options considered, decision, and consequences. ADRs are numbered in the order they were made and are never renumbered. When a decision changes, the ADR gets a dated revision note or is marked `superseded` and points to its replacement. Other record types are explained on the [Records](/docs/records) page.
+
+The code is the source of truth. If an ADR here disagrees with `apps/orchestrator/` or `infra/terraform/`, the ADR is the bug.
+
+| ADR | Decision | Status |
+|---|---|---|
+| [001](#cloud-run-over-gke-for-the-orchestrator) | Cloud Run over GKE for the orchestrator | accepted |
+| [002](#gce-vms-over-kubernetes-pods-for-runners) | GCE VMs over Kubernetes pods for runners | accepted |
+| [003](#python-fastapi-over-rust-or-go-for-the-orchestrator) | Python (FastAPI) for the orchestrator | accepted |
+| [004](#gce-vm-labels-over-a-database-for-state-tracking) | VM labels and metadata instead of a database | accepted, revised |
+| [005](#on-demand-provisioning-over-warm-pools) | On-demand provisioning over warm pools | accepted |
+| [006](#structured-logging-over-firestore-for-initial-observability) | Structured logs and log-based metrics, no database | accepted, revised |
+| [007](#workload-identity-federation-over-service-account-keys-for-ci-auth) | Workload Identity Federation for CI auth | accepted |
+| [008](#scale-to-zero-orchestrator-with-skip-fast-on-non-runnerforge-webhooks) | Scale-to-zero with skip-fast | accepted |
+| [009](#self-observed-vm-provisioning-with-nat-based-egress) | Self-observed VM provisioning | accepted, revised |
+| [010](#spot-vms-and-the-runs-on-label-grammar) | Spot VMs and the `runs-on` label grammar | accepted |
+| [011](#cloud-nat-egress-with-no-external-ips) | Cloud NAT egress, no external IPs | accepted |
+| [012](#opentelemetry-traces-exported-to-cloud-trace) | OpenTelemetry traces to Cloud Trace | accepted |
+| [013](#runner-image-pinned-at-startup-with-deprecate-then-delete-retention) | Runner image pinned at startup, deprecate-then-delete retention | accepted |
+| [014](#gce-enforced-runtime-cap-with-delete) | GCE-enforced runtime cap with DELETE | accepted |
+| [015](#installation-allow-list-as-a-stop-gap-admission-control) | Installation allow-list as stop-gap admission control | accepted |
+| [016](#multi-tenancy-scope-installation-as-tenant) | Multi-tenancy scope: installation = tenant | accepted |
+| [017](#docs-site-hosting-as-a-static-export) | Docs site hosting as a static export | proposed |
+
+---
 
 <Record type="adr" id="001" status="accepted" />
 
@@ -11,24 +35,23 @@ Each decision follows the ADR (Architecture Decision Record) format: context, op
 
 ### Context
 
-The orchestrator needs to receive HTTP webhooks, process them, and call external APIs (GitHub, GCE). Traffic is bursty and unpredictable — long idle periods followed by bursts when developers push code.
+The orchestrator needs to receive HTTP webhooks, process them, and call external APIs (GitHub, GCE). Traffic is bursty and unpredictable: long idle periods followed by bursts when developers push code.
 
 ### Options considered
 
-- **GKE Autopilot** — managed Kubernetes with pay-per-pod pricing. Familiar ecosystem, but the control plane alone costs ~$72/month regardless of usage.
-- **Cloud Run** — fully managed, scales to zero, pay-per-request. No cluster to manage.
-- **Always-on VM** — a single small VM running the FastAPI app. Simple, but always costs money even when idle.
+- **GKE Autopilot**: managed Kubernetes with pay-per-pod pricing. Familiar ecosystem, but a cluster carries a management fee on top of the pods, whether or not anything runs.
+- **Cloud Run**: fully managed, scales to zero, pay-per-request. No cluster to manage.
+- **Always-on VM**: a single small VM running the FastAPI app. Simple, but always costs money even when idle.
 
 ### Decision
 
-Cloud Run. The zero-idle-cost model is the deciding factor for a portfolio project with sporadic usage. The orchestrator's workload (receive webhook, make a few API calls, return) is a natural fit for request-based serverless compute.
+Cloud Run. The zero-idle-cost model is the deciding factor for sporadic usage. The orchestrator's workload (receive webhook, make a few API calls, return) fits request-based serverless compute.
 
 ### Consequences
 
-- True zero cost when idle.
-- Each webhook request runs in an isolated container — no shared state, no race conditions.
-- Cold start adds ~1 second to the first request after idle, which is acceptable given the overall 35-second VM boot time.
-- Cannot run long-lived background processes. The orphan cleanup sweep is handled via Cloud Scheduler triggering a separate endpoint, not an in-process loop.
+- Zero compute cost when idle (`min_instance_count = 0` in `infra/terraform/cloud_run.tf`; see [ADR-008](#scale-to-zero-orchestrator-with-skip-fast-on-non-runnerforge-webhooks) for the cold-start trade-off).
+- Instances are **not** one-request-per-container. `max_instance_request_concurrency = 10`, so up to 10 webhooks share one Python process, and the service scales between 0 and 50 instances. What a process holds is limited to API clients and startup caches (the GCE machine-type list and the pinned runner image, see [ADR-013](#runner-image-pinned-at-startup-with-deprecate-then-delete-retention)). No job state lives in the process, so any instance can handle any event.
+- No long-lived background loops. Work that must outlive a request is either a FastAPI `BackgroundTasks` job tied to that request (the VM-creation watcher and the preemption cross-check) or the `/sweep` endpoint, which Cloud Scheduler calls once a day (`12 0 * * *` UTC in `infra/terraform/scheduler.tf`).
 
 ---
 
@@ -42,21 +65,21 @@ Runners need to execute arbitrary CI/CD workflows, which often include Docker bu
 
 ### Options considered
 
-- **Kubernetes pods on GKE** — fast startup (2–5 seconds), but Docker-in-Docker is messy and has security implications. Pods on the same node share a kernel. GKE also requires the ~$72/month control plane.
-- **GCE VMs** — full isolation (separate kernel per runner), Docker runs natively, but boot time is 30–45 seconds with a pre-baked image.
-- **Firecracker/gVisor** — micro-VM or sandboxed container runtimes. Strong isolation with near-container speed, but significantly more complex to set up and operate.
+- **Kubernetes pods on GKE**: pods start in seconds, but Docker-in-Docker is messy and has security implications. Pods on the same node share a kernel. GKE also adds a cluster to pay for and operate.
+- **GCE VMs**: a separate kernel per runner, Docker runs natively, but boot takes tens of seconds even with a pre-baked image.
+- **Firecracker/gVisor**: micro-VM or sandboxed container runtimes. Strong isolation with near-container speed, but much more complex to set up and operate.
 
 ### Decision
 
-GCE VMs with Packer-built images. Full isolation without kernel sharing, native Docker support, and zero idle cost (VMs only exist during job execution).
+GCE VMs booted from a Packer-built image (`infra/packer/`). One VM per job: the runner registers with `--ephemeral`, so it takes exactly one job and exits.
 
 ### Consequences
 
-- 30–45 second boot time vs 2–5 seconds for pods. Acceptable for the current use case.
-- No GKE control plane cost.
-- Docker runs natively — no Docker-in-Docker hacks needed.
-- Each VM is fully isolated. A malicious workflow cannot affect other jobs.
-- VM lifecycle management (creation, label tracking, deletion, orphan cleanup) is our responsibility.
+- Boot-to-ready is slower than a pod (about 35 seconds with the pre-baked image, measured in Phase 1).
+- No GKE cluster to pay for or operate.
+- Docker runs natively. No Docker-in-Docker.
+- Each job gets its own kernel and disks. VMs still share the project's `default` network and the `runnerforge-runner-vm` service account (which holds only `roles/logging.logWriter`), so isolation is per-VM, not per-network.
+- VM lifecycle (creation, labels, deletion, orphan cleanup) is our code's job. See [ADR-004](#gce-vm-labels-over-a-database-for-state-tracking) and [ADR-014](#gce-enforced-runtime-cap-with-delete).
 
 ---
 
@@ -66,23 +89,23 @@ GCE VMs with Packer-built images. Full isolation without kernel sharing, native 
 
 ### Context
 
-The orchestrator is an API choreography service — it receives webhooks, calls GitHub and GCE APIs, and returns. It is not compute-bound.
+The orchestrator is an API choreography service: it receives webhooks, calls GitHub and GCE APIs, and returns. It is not compute-bound.
 
 ### Options considered
 
-- **Rust** — excellent performance and memory safety, but a steep learning curve (borrow checker, async runtimes). Would consume weeks of the project timeline on language mechanics rather than platform engineering concepts.
-- **Go** — strong concurrency model, popular in platform tooling. Viable choice, but adds a new language to the learning scope.
-- **Python (FastAPI)** — already known, mature Kubernetes and GCP client libraries, async support, automatic OpenAPI documentation.
+- **Rust**: excellent performance and memory safety, but a steep learning curve (borrow checker, async runtimes). It would spend weeks on language mechanics rather than platform engineering.
+- **Go**: strong concurrency model, popular in platform tooling. Viable, but adds a new language to learn.
+- **Python (FastAPI)**: already known, mature GCP client libraries, async support, automatic OpenAPI docs.
 
 ### Decision
 
-Python with FastAPI. The project's value is in the platform engineering architecture, not the implementation language. Python lets us focus on the orchestration patterns, and it is the language most commonly found in platform tooling.
+Python with FastAPI. The value is in the orchestration design, not the implementation language.
 
 ### Consequences
 
-- Faster development — no time spent learning a new language.
-- FastAPI provides automatic OpenAPI docs, which is good for portfolio presentation.
-- Target roles expect Python fluency for platform tooling.
+- Faster development.
+- FastAPI generates OpenAPI docs for the routes.
+- `google-cloud-compute` ships only a synchronous client, so every GCE call is wrapped in `asyncio.to_thread` to keep the event loop free (see [ADR-009](#self-observed-vm-provisioning-with-nat-based-egress)).
 - If performance ever becomes a bottleneck (unlikely for this workload), the orchestrator could be rewritten in Go without changing the architecture.
 
 ---
@@ -91,26 +114,47 @@ Python with FastAPI. The project's value is in the platform engineering architec
 
 ## GCE VM labels over a database for state tracking
 
+<Callout type="info" title="Revised 2026-10-27 (orchestrator 0.17.4 and 0.17.5)">
+  The original text said the `completed` path finds the VM by its `job_id` label and that VMs carry a `repo` label. Neither is true any more. The `completed` path deletes the VM named in the payload's `runner_name`, and only after an ownership check. The `repo` label was replaced by the numeric `repository_id`, and the sweep reads the exact `owner/repo` from the `repo-url` metadata key. The decision itself (no database) is unchanged.
+</Callout>
+
 ### Context
 
-The orchestrator needs to track which VMs belong to which jobs, so it can clean them up on `completed`/`failed` webhooks and identify orphans during sweep.
+The orchestrator needs to know which VMs belong to which jobs, so it can delete them when a job finishes and find orphans during the sweep.
 
 ### Options considered
 
-- **Firestore or Cloud SQL** — a dedicated database storing job-to-VM mappings. Full query flexibility, but adds infrastructure, cost, and a write in the critical webhook path.
-- **Redis / Memorystore** — fast in-memory store. Always-on cost, and data is lost on restart.
-- **GCE VM labels and metadata** — attach `job_id`, `repo`, and `runner=runnerforge` as labels directly on the VM. Query via the GCE API's label filter.
+- **Firestore or Cloud SQL**: a dedicated database storing job-to-VM mappings. Full query flexibility, but adds infrastructure, cost, and a write in the critical webhook path.
+- **Redis / Memorystore**: fast in-memory store. Always-on cost, and data is lost on restart.
+- **GCE VM labels and metadata**: store the job's identity on the VM itself and query with the GCE API's label filter.
 
 ### Decision
 
-GCE VM labels. The VMs themselves are the source of truth. On `completed`: find VM with matching `job_id` label, delete it. On sweep: list all VMs with `runner=runnerforge`, check creation timestamps and job status.
+The VMs are the source of truth. `handle_queued` (`handlers.py`) names each VM `runnerforge-<run_id>-<job_id>-<run_attempt>`, and the startup script registers the runner under that same name.
+
+| Where | Key | Holds |
+|---|---|---|
+| Label | `runner` | Always `runnerforge`. The sweep's list filter. |
+| Label | `job_id`, `run_id`, `run_attempt` | Which job the VM was created for. |
+| Label | `repository_id` | Numeric GitHub repo id. Always a valid label value, unlike `owner/repo`. |
+| Label | `installation_id` | The GitHub App installation (the tenant, see [ADR-016](#multi-tenancy-scope-installation-as-tenant)). |
+| Label | `webhook_trace_id`, `webhook_span_id`, `queued_received_at` | Trace anchor and timestamp for [ADR-012](#opentelemetry-traces-exported-to-cloud-trace) and the readiness metric. |
+| Metadata | `repo-url` | `https://github.com/<owner>/<repo>`. Labels can't hold it: label values are lowercase-only and at most 63 characters. |
+
+Boot and data disks carry the same labels as the instance (since 0.17.8), so disk cost can be attributed to a job and installation.
+
+How each path finds its VM:
+
+- **`in_progress`**: list by `job_id` + `run_id` + `run_attempt` labels, read the trace anchor and `queued_received_at`.
+- **`completed`**: take `runner_name` from the payload. Skip unless it starts with `runnerforge-`. Fetch that VM's labels (`compute_client.get_vm_labels_by_name`). Delete only if `runner == runnerforge` and `installation_id` equals the event's installation; otherwise log `Refusing to delete VM not owned by this installation`. A missing VM is a no-op.
+- **Sweep**: list `labels.runner=runnerforge`, read `owner/repo` from `repo-url`. If the repo can't be read, skip the GitHub job-status check (a guessed repo would 404, and a 404 reads as "orphan"); the hard age limit still applies.
 
 ### Consequences
 
-- No database infrastructure to provision, manage, or pay for.
-- The Cloud Run orchestrator stays completely stateless — no writes to worry about in the critical path.
-- Query performance is fine for the expected scale (tens of VMs, not thousands).
-- At production scale with thousands of concurrent runners, this approach would need to be revisited — GCE API list calls aren't designed for high-frequency querying. A lightweight store (Firestore) would make sense at that point.
+- No database to provision, manage, or pay for. The orchestrator stays stateless.
+- `runner_name` is chosen by whoever registered the runner, so the name prefix proves nothing on its own. The label check is what stops one installation's `completed` event from deleting another installation's VM.
+- Labels are not authentication: anyone with `compute.instances.setLabels` in the project could forge them. Today that means the project's owners, the orchestrator SA, and the CI SAs that hold `roles/compute.instanceAdmin.v1` or `roles/editor` (`ci-runner-image-build`, `ci-terraform-apply`).
+- Fine at tens of VMs. GCE list calls aren't built for high-frequency querying at thousands of concurrent runners; revisit the store if scale gets there.
 
 ---
 
@@ -120,23 +164,23 @@ GCE VM labels. The VMs themselves are the source of truth. On `completed`: find 
 
 ### Context
 
-Runner startup latency is ~35 seconds with a Packer image. A warm pool of pre-booted runners could reduce this to near-zero, but at the cost of always-on infrastructure.
+A warm pool of pre-booted runners could make runner pickup near-instant, at the cost of always-on infrastructure.
 
 ### Options considered
 
-- **On-demand** — create a VM only when a `queued` webhook arrives. 35-second latency, zero idle cost.
-- **Warm pool** — maintain a minimum number of pre-booted, pre-registered runners per label set. Near-instant job assignment, but ongoing cost even when no jobs are running.
-- **Hybrid** — warm pool for common labels, on-demand for rare ones.
+- **On-demand**: create a VM only when a `queued` webhook arrives. Boot latency on every job, zero idle cost.
+- **Warm pool**: keep pre-booted, pre-registered runners per label set. Near-instant pickup, but ongoing cost even when nothing runs.
+- **Hybrid**: warm pool for common labels, on-demand for rare ones.
 
 ### Decision
 
-On-demand only for the initial build (Phases 1–4). The 35-second latency is well within the ≤ 1 minute requirement, and zero idle cost is a hard constraint for the project.
+On-demand only. Zero idle cost is a hard constraint, and boot latency fits within the Time-to-Register SLO (99.5% of runners ready in under 300 s per calendar month, `infra/terraform/observability_slos.tf`).
 
 ### Consequences
 
-- Every job waits ~35 seconds for a runner. Acceptable for the current scope.
+- Every job waits for a VM to boot and register.
 - Zero cost when no jobs are running.
-- The architecture supports adding warm pools later (Phase 5) without structural changes — the warm pool manager would simply pre-create VMs using the same Compute client module.
+- A warm pool could be added later without structural changes: it would pre-create VMs through the same `compute_client` module. Not currently planned.
 
 ---
 
@@ -144,27 +188,40 @@ On-demand only for the initial build (Phases 1–4). The 35-second latency is we
 
 ## Structured logging over Firestore for initial observability
 
+<Callout type="info" title="Revised 2026-10-27">
+  The original text promised Firestore "in Phase 4" for user-facing dashboards and listed log fields (`signature_validated_ms`, `token_fetched_ms`, `vm_created_ms`) that the orchestrator never emitted. Both are removed. Firestore is not planned. Tracing is covered separately in [ADR-012](#opentelemetry-traces-exported-to-cloud-trace).
+</Callout>
+
 ### Context
 
-We need observability from day one to understand boot times, failure rates, and system behavior. The question is where to store this data.
+We need to understand boot times, failure rates, and system behavior from day one. The question is where that data lives.
 
 ### Options considered
 
-- **Firestore from day one** — write a document per job with timing data. Full query flexibility for dashboards immediately.
-- **Structured JSON logs to Cloud Logging** — log structured data from the FastAPI app. Cloud Run automatically sends stdout to Cloud Logging. Use log-based metrics for dashboards.
-- **Both** — structured logs plus Firestore writes.
+- **Firestore**: write a document per job with timing data. Full query flexibility.
+- **Structured JSON logs to Cloud Logging**: Cloud Run sends stdout to Cloud Logging; dashboards come from log-based metrics.
+- **Both**.
 
 ### Decision
 
-Structured logging only for Phases 1–3. Add Firestore in Phase 4 when building user-facing dashboards.
+Structured JSON logs only (`logger.py`). Every metric is a log-based metric. All but one match a fixed orchestrator log message (`jsonPayload.message`) and extract fields from it; `vm_preemption_count` reads the GCE audit log (`compute.instances.preempted`) instead. Examples:
+
+| Log message | Metric (`observability_metrics.tf`) |
+|---|---|
+| `Submitted VM creation` | `vm_creation_count` |
+| `VM creation outcome` | `vm_creation_outcome_count` (by `outcome`, `machine_type`, `image_version`, `error_code`, `spot`) |
+| `Runner registration outcome` | `runner_readiness_seconds` (the Time-to-Register SLO source) |
+| `Webhook event received` | `webhook_event_count` |
+| `Sweep completed` | `sweep_checked_count`, `sweep_deleted_count`, `sweep_error_count` |
+
+The full surface (17 log-based metrics, 2 SLOs, 7 alert policies, the dashboard) is Terraform-managed in `infra/terraform/observability_*.tf`.
 
 ### Consequences
 
-- Zero additional infrastructure for observability in the early phases.
-- Every step is timed and logged: `signature_validated_ms`, `token_fetched_ms`, `vm_created_ms`.
-- Cloud Monitoring can create dashboards from log-based metrics without any database.
-- No database write in the critical webhook path — keeps the handler fast and simple.
-- Firestore is added later as a convenience layer for user-facing queries, not as the source of truth.
+- No observability infrastructure beyond what GCP provides.
+- No database write in the critical webhook path.
+- Log message strings are an API: renaming one silently breaks its metric. Change them together with `observability_metrics.tf`.
+- If a user-facing dashboard needs per-job queries that logs can't answer cheaply, revisit with a new ADR.
 
 ---
 
@@ -174,30 +231,38 @@ Structured logging only for Phases 1–3. Add Firestore in Phase 4 when building
 
 ### Context
 
-- CI workflows (qualify, build, deploy, terraform apply) need to authenticate to GCP - push images to AR (Artifact Registry), deploy Cloud Run, modify IAM/Secret Manager, manage state bucket.
-- Need a credential mechanism that lets GH Actions act on GCP resources without storing portable secrets
+CI workflows need to act on GCP: push images to Artifact Registry, deploy Cloud Run, build runner images, and run Terraform (state bucket, IAM, Secret Manager). We need a credential that lets GitHub Actions do this without storing a portable secret.
 
 ### Options considered
 
-- **Long-lived SA JSON keys in GH Secrets** - store a downloaded SA key as a GH Actions secret, `gcloud auth activate-service-account --key-file`. Simple to set up; familiar pattern.
-- **Workload Identity Federation** (chosen) — GCP trusts GitHub's OIDC issuer; workflows exchange a short-lived OIDC token for a federated identity that impersonates a target SA
-- **Cloud Build with GitHub trigger** — Cloud Build watches the repo; auth is implicit because builds run on GCP-side infra. Means qualify and build/deploy live in different systems.
+- **Long-lived SA JSON keys in GitHub Secrets**: simple and familiar.
+- **Workload Identity Federation** (chosen): GCP trusts GitHub's OIDC issuer; a workflow exchanges a short-lived OIDC token for a federated identity that impersonates a target SA.
+- **Cloud Build with a GitHub trigger**: auth is implicit, but qualify and deploy would live in different systems.
 
 ### Decision
 
-- WIF with two SAs from day one: ci-build (eventual: AR write + Cloud Run deploy) and ci-terraform (broader: state bucket + IAM + Secret Manager + scheduler).
-- Pool `github-actions`, provider `github`, attribute condition pinned to `repository == rumankazi/runnerforge && ref == refs/heads/main`.
-- For 2.1, both SAs hold only `roles/viewer`. Permissions widen per phase as workflows are added.
-- No `google_service_account_key` resource exists anywhere in TF.
+- Pool `github`, provider `github` (`infra/terraform/wif.tf`). The provider's attribute condition requires `repository_owner == 'rumankazi'` and `repository == 'rumankazi/runnerforge'`.
+- One SA per job, each bound to a single workflow file through `attribute.workflow_path`:
+
+| SA | Who can impersonate it |
+|---|---|
+| `ci-build` | `deploy-orchestrator.yaml` |
+| `ci-terraform-apply` | `deploy-infra.yaml` |
+| `ci-runner-image-build` | `deploy-runner-image.yaml` |
+| `ci-terraform-plan` (plan only: `roles/viewer`, `roles/iam.securityReviewer`, `roles/storage.objectUser` on the state bucket) | any workflow in the repo |
+
+- No `google_service_account_key` resource exists anywhere in Terraform.
 
 ### Consequences
 
-- **Pro**: no portable secret exists. Even a logged credential config file is useless without a fresh, validly-signed GitHub OIDC token. Tokens are ~1hr; OIDC tokens that originate them are ~10min.
-- **Pro**: every token exchange logged in Cloud Audit Logs (sts.googleapis.com); full traceability of which workflow run impersonated which SA.
-- **Pro**: rotation eliminated. There's nothing to rotate.
-- **Trade-off**: GCP-side setup is more involved (pool, provider, condition, bindings) than dropping a JSON key in GH Secrets. One-time cost.
-- **Trade-off**: locked into GitHub Actions as the OIDC issuer. Moving CI providers means re-doing the WIF pool/provider/conditions for the new issuer.
-- **Trade-off**: WIF auth assumes a green path through several layers (token issuance, attribute condition match, IAM binding, target API enabled). When it fails, the error often points at one layer while the cause is in another (we hit this with cloudresourcemanager.googleapis.com being disabled).
+- **Pro**: no portable secret exists. A leaked credential config is useless without a fresh, validly signed GitHub OIDC token.
+- **Pro**: nothing to rotate.
+- **Trade-off**: more GCP-side setup (pool, provider, condition, bindings) than a JSON key. One-time cost.
+- **Trade-off**: locked to GitHub Actions as the OIDC issuer.
+- **Trade-off**: when WIF fails, the error often points at one layer while the cause is in another (we hit this with `cloudresourcemanager.googleapis.com` disabled).
+- **Trade-off**: the apply SA can't grant itself a new class of permission in the same apply (for example creating custom roles needed `roles/iam.roleAdmin`). Such grants are bootstrapped out-of-band, then codified in `terraform_ci.tf`.
+
+---
 
 <Record type="adr" id="008" status="accepted" />
 
@@ -205,81 +270,335 @@ Structured logging only for Phases 1–3. Add Firestore in Phase 4 when building
 
 ### Context
 
-- The orchestrator is a GitHub App that subscribes to the `workflow_job` event. GitHub Apps deliver **all** subscribed events to a single webhook URL — no event-level filtering by label, no per-org/per-repo routing.
-- `workflow_job` fires for **every** job in any repo where the App is installed, including jobs that target GitHub-hosted runners (no `runnerforge` label). The orchestrator's label-check happens inside the handler — by the time we know we don't care, Cloud Run has already woken up.
-- This produces a steady trickle of irrelevant wakeups during developer work, each costing a ~3-5s cold start when the service had scaled to zero.
+- The orchestrator is a GitHub App subscribed to `workflow_job`. GitHub delivers every subscribed event to one webhook URL, with no filtering by label or repo.
+- `workflow_job` fires for **every** job in every repo where the App is installed, including jobs for GitHub-hosted runners. GitHub also sends `ping` and installation events whether or not they are subscribed.
+- By the time the orchestrator knows an event is irrelevant, Cloud Run has already woken up. When the service was at zero, that costs a cold start.
 
 ### Options considered
 
-- **Scale-to-zero + skip-fast** (chosen) — `min_instance_count=0`, HMAC verify, parse, label check, return 200 immediately for irrelevant events. Cold start on first wakeup per idle period; warm window (~15min) covers subsequent calls.
-- **Always-warm** — `min_instance_count=1`, no cold start ever. ~$5/mo flat for compute time mostly spent doing nothing.
-- **External pre-filter** — Cloud Function or API Gateway in front of Cloud Run, doing a cheap "is this a runnerforge job?" check before forwarding. Extra service to maintain; the actual orchestrator still needs to wake up for real work; same end result.
-- **GitHub App event filtering** — would solve this cleanly. Doesn't exist.
+- **Scale-to-zero + skip-fast** (chosen): `min_instance_count = 0`, and the handler returns 200 as early as possible for irrelevant events.
+- **Always-warm**: `min_instance_count = 1`, no cold starts, flat cost for an instance that mostly idles.
+- **External pre-filter**: a function in front of Cloud Run. Another service to run; the orchestrator still wakes for real work.
+- **GitHub App event filtering**: would solve this cleanly. Doesn't exist.
 
 ### Decision
 
-- Scale-to-zero with skip-fast. Accept the cold-start cost on irrelevant wakeups in exchange for $0 compute during idle periods (nights, weekends, between developer bursts).
-- Real runnerforge events benefit from the side effect: an irrelevant wakeup pre-warms the instance, so a real event arriving moments later lands on a hot container.
-- The label-check sequence in the webhook handler is: HMAC verify → JSON parse → Pydantic parse → label check → return 200 if no match. Returns to GitHub within ~1s wall-clock on a warm instance, well under the 10s webhook timeout even after a cold start (~3-5s startup + ~1s processing = ~5s p99).
+Scale-to-zero with skip-fast. The `/webhook` handler in `main.py` runs, in order:
+
+1. HMAC signature check (401 on failure).
+2. Dispatch on the `X-GitHub-Event` header: anything other than `workflow_job` gets 200 and is ignored.
+3. JSON and Pydantic parse.
+4. Label check: return 200 unless `runs-on` contains `runnerforge` (case-insensitive).
+5. Admission check for `queued` events ([ADR-015](#installation-allow-list-as-a-stop-gap-admission-control)).
+6. Log `Webhook event received`, then dispatch to the `queued` / `in_progress` / `completed` handler.
 
 ### Consequences
 
-- **Pro**: $0 compute when dormant. For a developer-driven workload that clusters during work hours and goes idle overnight/weekends, this is meaningfully cheaper than always-warm.
-- **Pro**: irrelevant wakeups effectively pre-warm the instance for clustered work — first real event after the first irrelevant one runs on a warm container.
-- **Pro**: simpler architecture than the pre-filter alternative. No extra service to deploy, monitor, or upgrade.
-- **Trade-off**: a fraction of CPU/cost goes to handling events we discard. At our volume, sub-penny per day; acceptable.
-- **Trade-off**: cold-start latency on the first real runnerforge event after an idle period (3-5s + handler time). Still well under the GitHub webhook 10s budget; orchestrator p99 has comfortable headroom.
-- **Future micro-optimization**: a byte-scan for `b"runnerforge"` on the raw request body before Pydantic parse would shave 5-15ms per irrelevant event. Not worth implementing until volume of irrelevant events justifies it — Cloud Run startup dominates the cost, not Pydantic.
+- **Pro**: zero compute cost while dormant (nights, weekends).
+- **Pro**: an irrelevant wakeup pre-warms the instance for a real event arriving shortly after.
+- **Pro**: no extra service to deploy or monitor.
+- **Trade-off**: some compute goes to events we discard.
+- **Trade-off**: the first real event after an idle period pays a cold start, which has to fit inside GitHub's 10-second webhook timeout. `startup_cpu_boost` is on (`cloud_run.tf`), and the `Cold-start latency p95 > 30s (5m)` alert watches startup latency.
+- **Trade-off**: ignored events return before `Webhook event received`, so they don't count in `webhook_event_count` or the lost-webhook ratio. They still appear in the `POST /webhook` access log (`webhook_request_count`) and as `Ignoring GitHub event` or `Skipping! Not a RunnerForge request` log lines.
+
+---
 
 <Record type="adr" id="009" status="accepted" />
 
 ## Self-observed VM provisioning with NAT-based egress
 
-> **Revised 2026-06-09**: original draft assumed `compute_v1.InstancesAsyncClient` existed; it does not (Compute is REST; GAPIC does not emit async clients for REST services). Mechanism updated to burst-polling with the sync client + a dedicated `ZoneOperationsClient`. The decision (observability + Cloud NAT) and consequences are unchanged.
+<Callout type="info" title="Revisions">
+  **2026-06-09**: the original draft assumed `compute_v1.InstancesAsyncClient` existed. It does not (Compute is a REST API and the generator emits no async client for it), so the watcher burst-polls with the sync client.
+
+  **2026-10-27**: corrected details that had drifted from the code: the watcher timeout is 300 s (not 120 s), the outcome log line is `VM creation outcome` (not `vm.create.outcome`), and the sweep runs daily (not hourly). The Cloud NAT half of this decision is restated on its own in [ADR-011](#cloud-nat-egress-with-no-external-ips).
+</Callout>
 
 ### Context
 
-- Burst test (2026-06-09): 18 jobs across 6 workflow runs in a ~20s window. The orchestrator handled all 18 webhooks correctly and logged `Submitted VM creation` for each.
-- But ~10 of 18 VMs failed silently during GCE provisioning with `QUOTA_EXCEEDED` on `IN_USE_ADDRESSES` (default external-IP quota is 8/region in europe-west4; each VM was claiming one via `ONE_TO_ONE_NAT`).
-- The orchestrator was unaware: the fire-and-forget pattern submits an insert, gets an operation handle, logs the submission, and walks away. The operation's actual outcome (DONE / failure / quota-exceeded) is never checked.
-- Diagnosis required cross-system log correlation: orchestrator logs + GCE audit logs + GitHub workflow status. Operational visibility was poor.
+- Burst test (2026-06-09): 18 jobs across 6 workflow runs in about 20 seconds. The orchestrator handled all 18 webhooks and logged `Submitted VM creation` for each.
+- About 10 of the 18 VMs then failed inside GCE with `QUOTA_EXCEEDED` on `IN_USE_ADDRESSES` (the default external-IP quota in europe-west4 was 8, and each VM claimed one).
+- The orchestrator never knew. It submitted the insert, logged it, and walked away without checking the operation's result.
+- Diagnosis took cross-system log correlation: orchestrator logs, GCE audit logs, and GitHub job status.
 
-Two coupled problems surfaced: a GCE-side quota constraint AND missing self-observability in the orchestrator.
+Two coupled problems: a GCE quota constraint, and no self-observability.
 
 ### Options considered
 
 **For visibility into VM creation outcomes**:
 
-- **Sweep-only detection** (status quo, extended): hourly poll of GCE state to find failed operations and orphan VMs. Cheap; detection latency up to 60 min — slower than the GitHub 10-min job timeout.
-- **Synchronous polling in webhook handler**: `await operation.result()` inside the handler. Blocks the webhook for 30-60s, blowing GitHub's 10s webhook delivery budget. Rejected.
-- **Single-thread blocking poll via `asyncio.to_thread(operation.result, timeout=120)`**: one OS thread occupied for 30–60s per VM. The default ThreadPoolExecutor caps at ~5 workers on 1 vCPU. At concurrency=10 the pool starves. Rejected.
-- **Burst-polling with sync client + FastAPI `BackgroundTasks`** (chosen): the watcher coroutine loops over `await asyncio.to_thread(_zone_ops_client.get, ...)` + `asyncio.sleep(1)`. Each thread hop is ~50ms; the executor is free between polls. Webhook returns immediately; the watcher emits a single structured outcome event on terminal state. Originally we planned to migrate to `InstancesAsyncClient` and drop the `to_thread` wrappers entirely — verified during PR B design that no such async client exists in `google-cloud-compute` (Compute is REST; GAPIC skips async generation for REST services), so the burst-poll pattern is the asyncio-friendly ceiling available without leaving the SDK.
-- **Cloud Tasks / Pub-Sub worker queue**: the "right cloud-native" pattern for async work, but vast overkill at one-operator scale. Reserved for any future SaaS-scale move.
-- **Retry / self-healing in the orchestrator**: explicitly rejected. Retry doesn't help with the failure mode we actually see (quota doesn't free up within the GitHub 10-min job timeout). Retry only helps with rare random transients (~0.1% of GCE provisions); the engineering cost (state tracking, retry counters, backoff, tests) far exceeds the benefit at our scale.
+- **Sweep-only detection**: cheap, but the sweep runs once a day, far too late to explain a job that never got a runner.
+- **Wait in the webhook handler**: blocks the response for the whole VM creation, blowing GitHub's 10-second webhook timeout. Rejected.
+- **One blocking thread per VM** (`asyncio.to_thread(operation.result, ...)`): parks a thread-pool worker for the whole creation; a burst starves the pool. Rejected.
+- **Burst-polling in a `BackgroundTasks` watcher** (chosen): the webhook returns immediately; the watcher polls the zone operation in short thread hops with `asyncio.sleep(1)` in between, so the pool is free between polls.
+- **Cloud Tasks / Pub/Sub worker queue**: the cloud-native answer, but overkill at this scale.
+- **Retry in the orchestrator**: rejected. Retrying doesn't help with the failure we actually saw (quota doesn't free up in time), and the state tracking costs more than rare transient failures justify.
 
-**For the underlying quota constraint**:
-
-- **Per-VM external IPs** (status quo): each VM claims one external IP via `access_configs ONE_TO_ONE_NAT`. Bounded by region's `IN_USE_ADDRESSES` quota.
-- **Cloud NAT egress** (chosen): one shared NAT gateway provides outbound connectivity for all runner VMs. VMs become private-only. Self-hosted GH runners only need outbound (poll GitHub for jobs); inbound connectivity is unnecessary. Removes the quota constraint entirely.
-- **Quota increase request only**: temporary fix; doesn't change the architecture and still leaves us bounded by whatever new ceiling we negotiate.
+**For the quota constraint**: per-VM external IPs (status quo), Cloud NAT (chosen, see [ADR-011](#cloud-nat-egress-with-no-external-ips)), or only asking for more quota.
 
 ### Decision
 
-- Keep `_compute_client: compute_v1.InstancesClient` as-is (sync, bridged via `asyncio.to_thread`). Add a second lifespan-managed client `_zone_ops_client: compute_v1.ZoneOperationsClient` for operation polling.
-- Webhook handler schedules a `BackgroundTasks` watcher per VM creation. The watcher snapshots `LogContext` before yielding and re-installs it at task start (Starlette's PEP 567 ContextVar inheritance is implementation-detail; explicit propagation is the contract). It then loops `await asyncio.to_thread(_zone_ops_client.get, ...)` + `asyncio.sleep(1)` until `Operation.Status.DONE` or a 120s timeout. On terminal state, emits one structured `vm.create.outcome` event with `outcome`, `op_name`, `duration_ms`, `error_code`, `error_message`.
-- Cloud NAT IP allocation: `nat_ip_allocate_option = "AUTO_ONLY"`. We have no allowlisted egress destinations (public github.com, Docker Hub, public Artifact Registry — none restrict client IPs). A reserved static NAT IP would only matter if we onboarded a self-hosted GitHub Enterprise Server or another allowlist-gated destination. Swap to `MANUAL_ONLY` + `google_compute_address` is a ~5-line TF change if that ever lands.
-- New log-based metric `vm_creation_outcome_count` labeled by `outcome={success,failure,timeout}` → alert on failure rate > 5%.
-- Sweep stays as a backup safety net for edge cases (deploy-time rolling restart, OOM, manual termination — all of which can interrupt in-flight background tasks).
-- Provision Cloud NAT in `infra/terraform/`: `google_compute_router` + `google_compute_router_nat` in europe-west4. Remove `access_configs` from VM `network_interfaces` in `compute_client.py`. All VM egress (GitHub API, Artifact Registry) routes through the NAT gateway.
+- Keep the sync `compute_v1.InstancesClient` bridged with `asyncio.to_thread`, plus a `ZoneOperationsClient` for polling. Both are created in the FastAPI lifespan.
+- After `handle_queued` returns an `OperationHandle`, `main.py` schedules `compute_client.wait_for_vm_creation` as a background task. The task re-installs a snapshot of the request's log context (`logger.with_log_context`) so `request_id`, `job_id`, and `repo` stay on its logs.
+- The watcher polls until the operation is `DONE` or until its 300 s timeout, then logs one `VM creation outcome` line with `outcome` (`success`, `failure`, or `timeout`), `op_name`, `zone`, `duration_ms`, `machine_type`, `spot`, `image_version`, and on failure `error_code` and `error_message`.
+- The `vm_creation_outcome_count` metric feeds the `VM creation failure ratio > 5% (5m)` alert.
+- The sweep stays as the safety net for watchers lost to a redeploy, OOM, or manual termination.
 
 ### Consequences
 
-- **Pro — operational visibility**: every VM creation outcome is captured in structured logs. Failure rate becomes a metric, alertable, queryable. Root-cause analysis no longer requires cross-system log correlation.
-- **Pro — detection latency**: drops from up to 60 minutes (sweep) to ~60 seconds (background polling). Stays well inside the GitHub 10-minute job timeout.
-- **Pro — quota removed**: Cloud NAT eliminates `IN_USE_ADDRESSES` as a constraint on VM provisioning. The burst that caused this incident would succeed in full under the new architecture.
-- **Pro — coroutine economics**: burst-polling keeps the ThreadPoolExecutor free between polls (each `.get()` hop is ~50ms). At concurrency=10 with 30s mean watcher lifetime, peak thread occupancy is well under the ~5-worker default. A naïve `to_thread(operation.result, timeout=120)` would have parked all 5 workers for the full poll window — the rejected alternative.
-- **Pro — Cloud NAT cost is trivial**: ~$1.40/month per gateway + a small per-GB processing fee. Negligible at our scale.
-- **Trade-off — VMs lose inbound connectivity**: acceptable because self-hosted GH runners are outbound-only. We have no use case for inbound.
-- **Trade-off — edge-case visibility loss**: background tasks interrupted by deploy / OOM / manual termination won't emit their outcome event. Sweep remains the catcher for these rare cases. Acceptable.
-- **Trade-off — request concurrency ceiling unchanged**: container memory (512 MB) still caps in-flight webhook requests around ~25 (each holds ~10-20 MB of state). Background tasks are cheap; webhook requests are not. Raising `max_instance_request_concurrency` beyond ~30 doesn't deliver real capacity gain — the bottleneck is downstream APIs (GitHub installation token rate limit, GCE INSTANCES quota), not our threading model.
-- **Trade-off — no auto-recovery**: we observe but don't retry. If GCE rejects a VM creation, the corresponding GitHub job times out at the 10-minute mark. Acceptable because the failure modes we see (quota, code bugs) wouldn't benefit from retry. If we ever see meaningful transient-failure patterns, revisit.
+- **Pro**: every VM creation outcome is a structured log line and a metric. Root cause no longer needs cross-system correlation.
+- **Pro**: a failed creation is visible within the watcher's 300 s window instead of at the next sweep.
+- **Pro**: the thread pool is only busy during each short poll.
+- **Trade-off**: a watcher interrupted by a deploy, OOM, or manual termination never logs its outcome. The sweep catches the VM; the metric misses it.
+- **Trade-off**: no auto-recovery. If GCE rejects a VM, the GitHub job waits without a runner. Revisit if transient failures become common.
+
+---
+
+<Record type="adr" id="010" status="accepted" date="2026-06-11" />
+
+## Spot VMs and the runs-on label grammar
+
+### Context
+
+Phase 1 used one fixed machine type. Jobs differ a lot in what they need, and many CI jobs tolerate being interrupted, which makes Spot VMs (much cheaper, but GCE can reclaim them at any time) attractive. Users need a way to ask for a size and for Spot from `runs-on`, which is the only input a workflow gives us.
+
+### Options considered
+
+- **Fixed machine type**: simple, but wastes money on small jobs and starves big ones.
+- **Named sizes only** (`small`, `medium`, ...): easy to read, but closes off every other GCE type.
+- **Literal GCE machine types only**: flexible, but verbose, and typos fail at VM creation time.
+- **Named sizes plus a literal escape hatch, Spot as an opt-in flag** (chosen).
+
+### Decision
+
+`machine_policy.resolve_labels` turns `runs-on` labels into a machine type and a Spot flag. Matching is case-insensitive.
+
+| Label | Meaning |
+|---|---|
+| `runnerforge` | Required. Routes the job to RunnerForge. |
+| `spot` | Create a Spot VM. |
+| `self-hosted`, `linux`, `x64` | GitHub's default runner labels. Accepted and ignored. |
+| `small` / `medium` / `large` / `xlarge` | `n2-standard-2` / `-4` / `-8` / `-16` |
+| A literal type such as `n2-highmem-4` | Must match `^[a-z][a-z0-9]+-[a-z]+(?:-\d+)?$` and exist in the zone. |
+| (no size) | `n2-standard-4` |
+
+- At most one size token. Two sizes (named or literal) are rejected as `conflicting_machines`. A label that is neither a known label nor shaped like a machine type (for example `windows`, `macos`, `arm64`) is rejected as `unknown_token`. A hyphenated label such as `ubuntu-latest` has the literal shape, so it is treated as a machine type and rejected as `invalid_machine_type` when the zone has no such type.
+- Literal types are checked against the zone's machine-type list, loaded once at orchestrator startup. If that list can't be loaded, the check is skipped and GCE rejects bad types at insert.
+- A rejected job logs `Machine policy rejected` (metric `machine_policy_reject_count`) and gets no VM.
+- Spot VMs use `provisioning_model = SPOT`, `automatic_restart = false`, `on_host_maintenance = TERMINATE`.
+- When a job ends `failure` or `cancelled`, a background task queries the audit log for `compute.instances.preempted` on that VM and, on a match, logs `Job ended due to spot preemption` (metric `job_preempted_count`).
+
+### Consequences
+
+- Spot is opt-in per job, so nobody gets interrupted without asking for it.
+- A preempted job fails. There is no automatic retry; the user re-runs it. The preemption log line tells them why.
+- Spot VMs consume the same family CPU quota as on-demand ones (`N2_CPUS` for n2), not `PREEMPTIBLE_CPUS` (verified in `infra/terraform/quotas.tf`).
+- A typo in `runs-on` leaves the job queued with no runner. The only signal is the rejection log, which users can't see yet.
+- The orchestrator SA needs `roles/logging.viewer` for the audit-log query.
+
+---
+
+<Record type="adr" id="011" status="accepted" date="2026-06-10" />
+
+## Cloud NAT egress with no external IPs
+
+### Context
+
+Runner VMs originally each claimed an ephemeral external IP. The `IN_USE_ADDRESSES` quota capped concurrent VMs and caused the failed burst in [ADR-009](#self-observed-vm-provisioning-with-nat-based-egress). Self-hosted runners only make outbound connections (to GitHub and whatever the job downloads); nothing needs to reach them.
+
+### Options considered
+
+- **Per-VM external IPs**: status quo, bounded by quota, and every runner is reachable from the internet.
+- **Quota increase only**: moves the ceiling without changing the design.
+- **Cloud NAT** (chosen): one regional gateway for all outbound traffic; VMs have private IPs only.
+
+### Decision
+
+- `compute_client.create_vm` attaches the VM to `global/networks/default` with no access config, so it has no external IP.
+- `infra/terraform/network.tf` defines router `runnerforge-nat-router` and gateway `runnerforge-nat` in europe-west4, covering only the `default` subnetwork (`LIST_OF_SUBNETWORKS`), with `nat_ip_allocate_option = "AUTO_ONLY"` and errors-only logging.
+
+### Consequences
+
+- `IN_USE_ADDRESSES` no longer limits how many VMs can run.
+- Runners can't be reached from the internet.
+- The egress IP is not fixed. Allow-listing RunnerForge's egress at a destination (for example a self-hosted GitHub Enterprise Server) would need a reserved address and `MANUAL_ONLY`.
+- NAT adds a small gateway and per-GB processing cost.
+
+---
+
+<Record type="adr" id="012" status="accepted" date="2026-06-08" />
+
+## OpenTelemetry traces exported to Cloud Trace
+
+### Context
+
+Logs say what happened; they don't show where the time went inside a webhook (GitHub token fetch, GCE insert, label lookups) or tie the `queued` and `in_progress` webhooks of one job together.
+
+### Options considered
+
+- **Logs only**: already in place, but timing across calls means hand-correlating timestamps.
+- **Self-hosted tracing backend** (Jaeger, Tempo): another service to run.
+- **OpenTelemetry SDK exporting to Cloud Trace** (chosen): vendor-neutral instrumentation, a managed backend in the same project, IAM-based auth.
+
+### Decision
+
+- `tracing.setup_tracing` runs only on Cloud Run (when `K_SERVICE` is set). It uses the `ALWAYS_ON` sampler, a `BatchSpanProcessor`, and `CloudTraceSpanExporter`, with service name `runnerforge-orchestrator`.
+- FastAPI and HTTPX are auto-instrumented. Handlers and `compute_client` add manual spans (`webhook.handle_queued`, `compute.create_vm`, `compute.wait_for_vm_creation`, and others).
+- `queued` stores its outer request span's ids in the VM labels `webhook_trace_id` and `webhook_span_id`. `in_progress` parents its span under that anchor, so registration renders as one trace. `completed` starts its own trace and adds a span link back, because hours of job runtime would swamp a merged timeline.
+- The orchestrator SA has `roles/cloudtrace.agent`.
+
+### Consequences
+
+- One trace shows the full runner registration for a job.
+- Sampling everything is fine at current volume; revisit the sampler if trace cost grows.
+- Instrumentation is OpenTelemetry, so changing backend means changing the exporter, not the spans.
+- Tests and local runs don't export traces.
+
+---
+
+<Record type="adr" id="013" status="accepted" date="2026-06-10" />
+
+## Runner image pinned at startup with deprecate-then-delete retention
+
+### Context
+
+Runner images are built by Packer and published into the image family `runnerforge-runner`. Booting from the family alias means every VM resolves "latest" separately, so a promotion mid-burst mixes images and logs can't say which image a VM ran. Old images also pile up, and deleting them outright loses forensics and makes rollback harder.
+
+### Options considered
+
+- **Boot every VM from the family alias**: always newest, but no stable per-instance version and nothing to attribute failures to.
+- **Pin an image in config**: exact, but every image release would need an orchestrator change.
+- **Resolve the family once per orchestrator instance, then pin by name** (chosen).
+- **Retention by hard delete**: simple, but irreversible.
+- **Deprecate first, delete later** (chosen).
+
+### Decision
+
+- On startup (since orchestrator 0.11.0), `compute_client.init_runner_image` calls `get_from_family` for `runnerforge-runner` in `RUNNER_IMAGE_PROJECT` (defaults to `GCP_PROJECT_ID`) and boots every VM from `projects/<project>/global/images/<name>`. The parsed version is logged and becomes the `image_version` label on `vm_creation_count` and `vm_creation_outcome_count`.
+- If the lookup fails, VMs boot from the family alias and a warning is logged.
+- The `Retention` step of `.github/workflows/deploy-runner-image.yaml` keeps the five newest non-deprecated images in the family and deprecates the rest with `delete-on` 30 days out. Rollback also deprecates (with the same 30-day `delete-on`) instead of deleting; the family then serves the next-newest non-deprecated image.
+- The `ci-runner-image-build` SA uses the custom role `runnerImageManager` (8 `compute.images.*` permissions, `infra/terraform/runner_image.tf`) instead of `roles/compute.storageAdmin`.
+
+### Consequences
+
+- Every VM from one orchestrator instance uses one known image, and failures can be sliced by `image_version`.
+- A newly promoted image reaches an orchestrator instance only when that instance starts (new revision, scale-up, or restart). Long-lived instances keep the older pin until then.
+- Deprecated images stay available for 30 days for forensics and rollback.
+- The retention step is `continue-on-error`, so a failure there doesn't fail an image release; it needs a look at the workflow log.
+
+---
+
+<Record type="adr" id="014" status="accepted" date="2026-10-27" />
+
+## GCE-enforced runtime cap with DELETE
+
+### Context
+
+A runner VM that never gets its `completed` webhook (lost delivery, a stuck job, a crashed orchestrator) keeps billing until something deletes it. The only backstop was the sweep, which runs once a day, so a stuck VM could bill for up to a day.
+
+### Options considered
+
+- **Sweep more often**: shortens the window, costs more Cloud Run and GitHub API calls, and still depends on our code being healthy.
+- **Shutdown timer inside the VM**: relies on the guest, which is what is broken in the cases that matter.
+- **GCE `max_run_duration` with `STOP`**: GCE enforces it, but a stopped VM's disks keep billing.
+- **GCE `max_run_duration` with `DELETE`** (chosen).
+
+### Decision
+
+- Every VM gets `scheduling.max_run_duration = MAX_VM_RUN_DURATION` (6 h 15 min, `compute_client.py`) and `instance_termination_action = "DELETE"`. The action is always set explicitly, because it defaults to `STOP` for Spot.
+- 6 hours matches GitHub's default job timeout of 360 minutes. The extra 15 minutes covers boot and registration.
+- The sweep's hard limit (`sweep.HARD_LIMIT`) reuses the same constant. The sweep stays as the backstop for VMs created before this shipped (0.17.8) and for any lag in GCE's termination.
+
+### Consequences
+
+- A runaway VM can't bill longer than 6 h 15 min of running time, even if the orchestrator is down.
+- Jobs that set `timeout-minutes` above 360 are cut off when their VM reaches 6 h 15 min.
+- Boot and data disks are `auto_delete`, so deleting the VM removes them.
+- The cap is global today. The code comment marks it to become a per-tenant limit; that is planned, not built.
+
+---
+
+<Record type="adr" id="015" status="accepted" date="2026-10-27" />
+
+## Installation allow-list as a stop-gap admission control
+
+### Context
+
+Any GitHub account that installs the App gets its `workflow_job` events sent to the orchestrator, and each `queued` event with `runnerforge` in `runs-on` creates a VM on RunnerForge's GCP project. The App is private today, but the plan is a free hosted beta with manual approval ([ADR-016](#multi-tenancy-scope-installation-as-tenant)). We need a way to decide who gets VMs before building a tenant system.
+
+### Options considered
+
+- **Rely on the App being private**: works only while it stays private, and gives no kill switch.
+- **Tenant database with approval flow and limits**: the long-term answer, but a lot to build before the first external user.
+- **Allow-list of installation IDs in config** (chosen): small, reviewable, applied through Terraform.
+
+### Decision
+
+- Terraform variable `allowed_installation_ids` (`infra/terraform/variables.tf`) becomes the Cloud Run env var `ALLOWED_INSTALLATION_IDS`, a comma-separated list.
+- `config.parse_installation_ids`: unset allows every installation (`main.py` logs a warning at startup); an empty string allows nobody (a kill switch); a malformed ID raises at import, so a bad revision fails its canary. The Terraform variable also rejects non-numeric IDs before they reach Cloud Run.
+- Only `queued` events are gated. A rejected installation gets 200, an `Installation not allowed` warning, and no VM. `in_progress` and `completed` always pass, so an installation removed mid-job still has its VMs cleaned up.
+- `Webhook event received` is logged after the gate, so rejected installations don't trip the lost-webhook alert.
+
+### Consequences
+
+- Approving a tenant is a Terraform change plus an orchestrator release: production traffic is pinned to a named revision, and the revision Terraform creates gets no traffic, so the new value takes effect with the next CD deploy (see the comment in `cloud_run.tf`).
+- No per-installation limits yet. An approved installation can use as much capacity as the project quotas allow.
+- This is a stop-gap. It goes away or becomes a seed list once a real tenant store exists.
+
+---
+
+<Record type="adr" id="016" status="accepted" date="2026-10-27" />
+
+## Multi-tenancy scope: installation as tenant
+
+### Context
+
+RunnerForge started as a single-owner tool. Opening it up raises a set of questions: what a tenant is, whose GCP project VMs run in, and who pays.
+
+### Options considered
+
+- **Tenant = GitHub App installation** (chosen) vs. tenant = repository or tenant = RunnerForge account.
+- **Where VMs run**: RunnerForge's own project (hosted), the user's own deployment of the whole backend (self-host), or the user's GCP project driven by our orchestrator (bring-your-own-project).
+- **Billing**: free beta vs. paid plans.
+
+### Decision
+
+- **A tenant is one GitHub App installation**, which means one GitHub user or organization. Personal accounts and organizations are both supported. VMs carry `installation_id` as a label, and the delete path checks it ([ADR-004](#gce-vm-labels-over-a-database-for-state-tracking)).
+- **Hosted, free beta**: VMs run in RunnerForge's GCP project. Access is by manual approval through the allow-list ([ADR-015](#installation-allow-list-as-a-stop-gap-admission-control)). Per-installation limits are planned.
+- **Self-hosting the whole backend** is planned as the other way to run RunnerForge. `RUNNER_IMAGE_PROJECT` (0.17.8) already decouples the image project from the project VMs run in.
+- **Deferred**: bring-your-own-GCP-project mode and paid billing. Neither is being built.
+
+### Consequences
+
+- The isolation boundary between tenants is the VM ([ADR-002](#gce-vms-over-kubernetes-pods-for-runners)) plus the installation check on deletes. All tenants share one project, network, runner SA, and quota.
+- Capacity is shared: until per-installation limits exist, one tenant's burst can use up the project quota for everyone.
+- Labelling disks with `installation_id` (0.17.8) makes per-tenant cost attribution possible from the billing export.
+- The App is private today. The allow-list is what makes opening it up safe: a new installation gets no VMs until its ID is added.
+
+---
+
+<Record type="adr" id="017" status="proposed" date="2026-10-27" />
+
+## Docs site hosting as a static export
+
+<Callout type="warn" title="Proposed, not decided">
+  Nothing in this ADR is built. It records the direction under discussion so the trade-offs are written down before work starts.
+</Callout>
+
+### Context
+
+- The docs site (`apps/web`, Next.js + Fumadocs) is deployed on Vercel today (`AGENTS.md`).
+- The docs are public, read-only content. Nothing on them needs a server at request time except the features listed under Consequences.
+- A user-facing dashboard is also planned. It is an authenticated app with different needs, so it is out of scope here and gets its own ADR when that work starts.
+
+### Options considered
+
+- **Stay on Vercel**: no migration work; keeps the server features as they are.
+- **Static export served from Cloudflare**: no server to run; the server features must become build-time output or go.
+
+### Proposal
+
+Build the docs as static output and serve them from Cloudflare.
+
+### Consequences (if accepted)
+
+- The docs site has server code that a static export can't run as-is: `app/api/search/route.ts`, `app/og/docs/[...slug]/route.tsx`, the `llms.txt`, `llms-full.txt` and `llms.mdx` routes under `app/`, and the Markdown content negotiation in `proxy.ts`. Each has to be pre-rendered at build time or dropped.
