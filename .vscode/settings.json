@@ -6,7 +6,7 @@
 
   "ruff.path": ["${workspaceFolder}/apps/orchestrator/.venv/bin/ruff"],
   "ruff.nativeServer": "on",
-
+  "ruff.configuration": { "src": ["apps/orchestrator/src"] },
   "python.terminal.activateEnvironment": false,
   "python.terminal.useEnvFile": true,
   "[python]": {
