@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.5](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.4...orchestrator-v0.17.5) (2026-10-27)
+
+
+### Bug Fixes
+
+* **orchestrator:** drop legacy repo label and harden sweep/label lookups ([#294](https://github.com/rumankazi/runnerforge/issues/294)) ([19f93db](https://github.com/rumankazi/runnerforge/commit/19f93db6929f9dc3b4a8638416bfcdb042618691))
+
 ## [0.17.4](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.3...orchestrator-v0.17.4) (2026-10-27)
 
 
