@@ -1,5 +1,4 @@
 import logging
-import re
 
 from opentelemetry import trace
 from opentelemetry.trace import (
@@ -26,13 +25,6 @@ from runnerforge.models import RunnerForgeVmLabels, WorkflowJobEvent
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
-
-
-def _legacy_repo_label(full_name: str) -> str:
-    """GCE-safe stand-in for the deprecated `repo` label (lowercase, only
-    [a-z0-9_-], max 63 chars). Lossy on purpose; never used for API calls.
-    Remove together with RunnerForgeVmLabels.repo in the next release."""
-    return re.sub(r"[^a-z0-9_-]", "-", full_name.lower().replace("/", "_"))[:63]
 
 
 def _webhook_span_context(
@@ -117,7 +109,6 @@ async def handle_queued(
             job_id=str(event.workflow_job.id),
             run_id=str(event.workflow_job.run_id),
             run_attempt=str(event.workflow_job.run_attempt),
-            repo=_legacy_repo_label(event.repository.full_name),
             repository_id=str(event.repository.id),
             installation_id=str(event.installation.id),
             webhook_trace_id=webhook_trace_id,

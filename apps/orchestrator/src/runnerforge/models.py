@@ -76,11 +76,6 @@ class RunnerForgeVmLabels(BaseModel):
     run_id: str
     run_attempt: str
     installation_id: str
-    # DEPRECATED, remove in the release after this one. Still written (GCE-safe,
-    # lossy) only because the previous revision requires it: during a canary or
-    # rollback it handles events for VMs this revision creates. Never read it
-    # for API calls — the exact repo comes from repo-url metadata.
-    repo: str = ""
     # Numeric GitHub repo id (always a valid GCE label value, unlike the
     # owner/repo name). Default empty for VMs created before this field
     # shipped (they carry the old `repo` label instead, ignored here).

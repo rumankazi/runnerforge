@@ -567,7 +567,20 @@ async def get_vm_labels_by_job(
                 "match_count": len(result),
             },
         )
-        labels = RunnerForgeVmLabels.model_validate(dict(instances[0].labels))
+        try:
+            labels = RunnerForgeVmLabels.model_validate(dict(instances[0].labels))
+        except ValidationError:
+            # Callers only use these labels for trace links and the readiness
+            # metric. A shape mismatch (e.g. a VM from another revision during a
+            # canary) must degrade those, not 500 the webhook and block a delete.
+            logger.warning(
+                "VM labels have unexpected shape",
+                extra={
+                    "vm_name": instances[0].name,
+                    "raw_labels": dict(instances[0].labels),
+                },
+            )
+            return None
 
         return labels.model_dump()
 
