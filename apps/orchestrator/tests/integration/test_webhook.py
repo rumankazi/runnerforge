@@ -38,6 +38,10 @@ def _sign(body: bytes) -> str:
     return "sha256=" + hmac.new(SECRET, body, hashlib.sha256).hexdigest()
 
 
+def _headers(body: bytes, event: str = "workflow_job") -> dict[str, str]:
+    return {"X-Hub-Signature-256": _sign(body), "X-GitHub-Event": event}
+
+
 @respx.mock
 def test_webhook_queued_event_triggers_github_auth_chain(
     fixtures_dir, monkeypatch, caplog
@@ -90,9 +94,7 @@ def test_webhook_queued_event_triggers_github_auth_chain(
     wait_mock = AsyncMock()
     monkeypatch.setattr("runnerforge.main.wait_for_vm_creation", wait_mock)
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     assert install_route.called
@@ -165,9 +167,7 @@ def test_webhook_queued_event_does_not_schedule_polling_when_vm_already_exists(
     wait_mock = AsyncMock()
     monkeypatch.setattr("runnerforge.main.wait_for_vm_creation", wait_mock)
 
-    response = client.post(
-        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-    )
+    response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     # No operation to poll → no background task fired
@@ -209,7 +209,12 @@ def test_webhook_rejects_invalid_signature_without_calling_github(fixtures_dir, 
 
     with caplog.at_level(logging.INFO):
         response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": "wrong-signature"}
+            "/webhook",
+            content=body,
+            headers={
+                "X-Hub-Signature-256": "wrong-signature",
+                "X-GitHub-Event": "workflow_job",
+            },
         )
 
     assert response.status_code == 401
@@ -237,7 +242,7 @@ def test_webhook_queued_event_does_not_create_vm_when_labels_are_invalid(
         response = client.post(
             "/webhook",
             content=body,
-            headers={"X-Hub-Signature-256": _sign(body)},
+            headers=_headers(body),
         )
 
     assert response.status_code == 200
@@ -279,7 +284,7 @@ def test_webhook_queued_event_rejects_when_machine_type_not_in_cache(
         response = client.post(
             "/webhook",
             content=body,
-            headers={"X-Hub-Signature-256": _sign(body)},
+            headers=_headers(body),
         )
 
     assert response.status_code == 200
@@ -312,9 +317,7 @@ def test_webhook_in_progress_event_does_not_call_github(
     monkeypatch.setattr("runnerforge.handlers.get_vm_labels_by_job", get_labels_mock)
 
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     assert any(
@@ -353,9 +356,7 @@ def test_webhook_in_progress_event_adds_span_link_when_queued_trace_present(
     monkeypatch.setattr("runnerforge.handlers.get_vm_labels_by_job", get_labels_mock)
 
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     get_labels_mock.assert_awaited_once()
@@ -387,9 +388,7 @@ def test_webhook_in_progress_skips_time_log_when_started_at_missing(
     )
 
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     assert not any(
@@ -451,9 +450,7 @@ def test_webhook_queued_event_persists_queued_received_at_to_vm_labels(
     monkeypatch.setattr("runnerforge.handlers.create_vm", create_vm_mock)
     monkeypatch.setattr("runnerforge.main.wait_for_vm_creation", AsyncMock())
 
-    response = client.post(
-        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-    )
+    response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     labels = create_vm_mock.call_args.kwargs["labels"]
@@ -529,9 +526,7 @@ def test_webhook_queued_accepts_github_default_labels(
     create_vm_mock = AsyncMock(return_value=None)
     monkeypatch.setattr("runnerforge.handlers.create_vm", create_vm_mock)
 
-    response = client.post(
-        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-    )
+    response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     create_vm_mock.assert_awaited_once()
@@ -567,9 +562,7 @@ def test_webhook_in_progress_emits_runner_readiness_outcome_log(
     )
 
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     outcome_log = next(
@@ -613,9 +606,7 @@ def test_webhook_in_progress_floors_negative_delivery_lag_at_zero(
     )
 
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     outcome_log = next(
@@ -658,9 +649,7 @@ def test_webhook_in_progress_skips_outcome_log_when_queued_received_at_missing(
     )
 
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     # New log gated off
@@ -692,9 +681,7 @@ def test_webhook_in_progress_emits_no_outcome_log_when_vm_labels_missing(
     )
 
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     assert not any("Runner registration outcome" in r.message for r in caplog.records)
@@ -726,9 +713,7 @@ def test_webhook_in_progress_with_empty_trace_id_skips_parent_context(
         AsyncMock(return_value=labels_legacy),
     )
 
-    response = client.post(
-        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-    )
+    response = client.post("/webhook", content=body, headers=_headers(body))
     # Span construction must not raise. Handler returns 200, the legacy log
     # is the only metric emitted.
     assert response.status_code == 200
@@ -759,9 +744,7 @@ def test_webhook_completed_adds_cross_trace_link_when_labels_present(
     delete_mock = AsyncMock(return_value="op-completed")
     monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
 
-    response = client.post(
-        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-    )
+    response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     # Labels lookup ran BEFORE delete (need labels to build the cross-trace link)
@@ -792,9 +775,7 @@ def test_webhook_in_progress_outcome_log_omits_queued_lag_when_created_at_missin
     )
 
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     outcome_log = next(
@@ -835,9 +816,7 @@ def test_webhook_completed_skips_link_when_labels_have_empty_trace_id(
     delete_mock = AsyncMock(return_value="op-legacy")
     monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
 
-    response = client.post(
-        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-    )
+    response = client.post("/webhook", content=body, headers=_headers(body))
     # Doesn't raise on missing trace context; delete still fires.
     assert response.status_code == 200
     delete_mock.assert_awaited_once()
@@ -861,9 +840,7 @@ def test_webhook_completed_no_labels_lookup_when_runner_name_missing(
     delete_mock = AsyncMock()
     monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
 
-    response = client.post(
-        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-    )
+    response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     get_labels_mock.assert_not_awaited()
@@ -890,9 +867,7 @@ def test_webhook_completed_event_triggers_vm_deletion(
     monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
 
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     assert any("VM deletion submitted" in r.message for r in caplog.records)
@@ -910,9 +885,7 @@ def test_webhook_completed_event_logs_when_no_vm_found(
     delete_mock = AsyncMock()
     monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
 
-    response = client.post(
-        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-    )
+    response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     delete_mock.assert_not_awaited()
@@ -947,9 +920,7 @@ def test_webhook_completed_failure_logs_preemption_when_audit_log_says_so(
     monkeypatch.setattr("runnerforge.compute_client.was_preempted", was_preempted_mock)
 
     with caplog.at_level(logging.WARNING):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     # BackgroundTask ran the cross-check
@@ -987,9 +958,7 @@ def test_webhook_completed_failure_skips_preemption_log_when_audit_log_empty(
     was_preempted_mock = AsyncMock(return_value=False)
     monkeypatch.setattr("runnerforge.compute_client.was_preempted", was_preempted_mock)
 
-    response = client.post(
-        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-    )
+    response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     was_preempted_mock.assert_awaited_once_with("runnerforge-test-runner-real-fail")
@@ -1022,9 +991,7 @@ def test_webhook_completed_success_does_not_schedule_preemption_check(
     was_preempted_mock = AsyncMock(return_value=False)
     monkeypatch.setattr("runnerforge.compute_client.was_preempted", was_preempted_mock)
 
-    response = client.post(
-        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-    )
+    response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     # Reached the conclusion check (not an early return before it)
@@ -1057,9 +1024,7 @@ def test_webhook_completed_skips_delete_for_non_runnerforge_runner(
     monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
 
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     labels_by_name_mock.assert_not_awaited()
@@ -1084,9 +1049,7 @@ def test_webhook_completed_noop_when_target_vm_already_gone(
     monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
 
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     delete_mock.assert_not_awaited()
@@ -1126,9 +1089,7 @@ def test_webhook_completed_refuses_delete_when_vm_not_owned(
     monkeypatch.setattr("runnerforge.compute_client.was_preempted", was_preempted_mock)
 
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     # Still 200: GitHub doesn't retry, and a refusal isn't a server error.
     assert response.status_code == 200
@@ -1152,9 +1113,7 @@ def test_webhook_unknown_action_logs_warning(fixtures_dir, caplog):
     payload["action"] = "deleted"  # not in our match arms
     body = json.dumps(payload).encode()
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
     assert response.status_code == 200
     assert any(
         r.levelno == logging.WARNING and "ignoring unknown action" in r.message.lower()
@@ -1169,9 +1128,7 @@ def test_webhook_without_runnerforge_label_skips_processing(fixtures_dir, caplog
     workflow_job["labels"] = ["not-runnerforge-label"]  # not in our match arms
     body = json.dumps(payload).encode()
     with caplog.at_level(logging.INFO):
-        response = client.post(
-            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-        )
+        response = client.post("/webhook", content=body, headers=_headers(body))
     assert response.status_code == 200
     assert any(
         r.levelno == logging.INFO
@@ -1186,9 +1143,7 @@ def test_webhook_without_runnerforge_label_skips_processing(fixtures_dir, caplog
 def test_webhook_with_malformed_json_body():
     # malformed json body
     body = b"not a valid json"
-    response = client.post(
-        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
-    )
+    response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Failed to load request body"
@@ -1274,12 +1229,12 @@ async def test_concurrent_webhooks_keep_per_request_context_isolated(
                 client.post(
                     "/webhook",
                     content=body_a,
-                    headers={"X-Hub-Signature-256": _sign(body_a)},
+                    headers=_headers(body_a),
                 ),
                 client.post(
                     "/webhook",
                     content=body_b,
-                    headers={"X-Hub-Signature-256": _sign(body_b)},
+                    headers=_headers(body_b),
                 ),
             )
 
@@ -1294,3 +1249,60 @@ async def test_concurrent_webhooks_keep_per_request_context_isolated(
     assert records_b
     assert all(getattr(r, "repo", None) == "alice/repo-a" for r in records_a)
     assert all(getattr(r, "repo", None) == "bob/repo-b" for r in records_b)
+
+
+@pytest.mark.parametrize(
+    ("event", "payload"),
+    [
+        # Sent once when the App's webhook is configured.
+        ("ping", {"zen": "Keep it logically awesome.", "hook_id": 1}),
+        # Every GitHub App receives these by default, subscribed or not.
+        ("installation", {"action": "created", "installation": {"id": 135399152}}),
+        (
+            "installation_repositories",
+            {"action": "added", "installation": {"id": 135399152}},
+        ),
+    ],
+    ids=["ping", "installation", "installation_repositories"],
+)
+def test_webhook_acknowledges_non_workflow_job_events(
+    monkeypatch, caplog, event, payload
+):
+    """These used to be parsed as workflow_job and 500'd. They must get a 200
+    without touching any handler or the lost-webhook metric anchor."""
+    body = json.dumps(payload).encode()
+    queued_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.main.handle_queued", queued_mock)
+
+    with caplog.at_level(logging.INFO):
+        response = client.post("/webhook", content=body, headers=_headers(body, event))
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    queued_mock.assert_not_awaited()
+    log = next(r for r in caplog.records if r.message == "Ignoring GitHub event")
+    assert log.github_event == event
+    assert not any("Webhook event received" in r.message for r in caplog.records)
+
+
+def test_webhook_rejects_non_workflow_job_event_with_bad_signature(caplog):
+    """Signature is checked before dispatch: an unsigned caller can't get a 200
+    (or a log line) for any event type."""
+    body = b'{"zen": "hi"}'
+    response = client.post(
+        "/webhook",
+        content=body,
+        headers={"X-Hub-Signature-256": "sha256=bad", "X-GitHub-Event": "ping"},
+    )
+
+    assert response.status_code == 401
+    assert not any("Ignoring GitHub event" in r.message for r in caplog.records)
+
+
+def test_webhook_requires_github_event_header():
+    body = b"{}"
+    response = client.post(
+        "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+    )
+
+    assert response.status_code == 422
