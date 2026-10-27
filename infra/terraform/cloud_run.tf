@@ -75,6 +75,13 @@ resource "google_cloud_run_v2_service" "orchestrator" {
         name  = "EXPECTED_AUDIENCE"
         value = var.cloud_run_url
       }
+      # Read by the orchestrator to gate VM creation. Takes effect with the
+      # next orchestrator release: CD builds each revision from this template,
+      # while the revision Terraform creates here gets no traffic.
+      env {
+        name  = "ALLOWED_INSTALLATION_IDS"
+        value = join(",", var.allowed_installation_ids)
+      }
       # --- File mount for the PEM private key ---
       volume_mounts {
         name       = "github-app-private-key"
