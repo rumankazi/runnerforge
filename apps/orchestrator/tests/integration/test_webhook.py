@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import httpx
+import pytest
 import respx
 from fastapi.testclient import TestClient
 
@@ -666,12 +667,17 @@ def test_webhook_completed_adds_cross_trace_link_when_labels_present(
     payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
     payload["action"] = "completed"
     payload["workflow_job"]["conclusion"] = "success"
-    payload["workflow_job"]["runner_name"] = "test-runner-completed"
+    payload["workflow_job"]["runner_name"] = "runnerforge-test-runner-completed"
     payload["workflow_job"]["runner_id"] = 4242
     body = json.dumps(payload).encode()
 
     get_labels_mock = AsyncMock(return_value=_VALID_VM_LABELS_WITH_TRACE)
     monkeypatch.setattr("runnerforge.handlers.get_vm_labels_by_job", get_labels_mock)
+    target_labels_mock = AsyncMock(return_value=_VALID_VM_LABELS_WITH_TRACE)
+    monkeypatch.setattr(
+        "runnerforge.handlers.get_vm_labels_by_name", target_labels_mock
+    )
+
     delete_mock = AsyncMock(return_value="op-completed")
     monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
 
@@ -733,7 +739,7 @@ def test_webhook_completed_skips_link_when_labels_have_empty_trace_id(
     payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
     payload["action"] = "completed"
     payload["workflow_job"]["conclusion"] = "success"
-    payload["workflow_job"]["runner_name"] = "test-runner-legacy"
+    payload["workflow_job"]["runner_name"] = "runnerforge-test-runner-legacy"
     payload["workflow_job"]["runner_id"] = 5555
     body = json.dumps(payload).encode()
 
@@ -743,6 +749,10 @@ def test_webhook_completed_skips_link_when_labels_have_empty_trace_id(
     monkeypatch.setattr(
         "runnerforge.handlers.get_vm_labels_by_job",
         AsyncMock(return_value=labels_no_trace),
+    )
+    target_labels_mock = AsyncMock(return_value=_VALID_VM_LABELS_WITH_TRACE)
+    monkeypatch.setattr(
+        "runnerforge.handlers.get_vm_labels_by_name", target_labels_mock
     )
     delete_mock = AsyncMock(return_value="op-legacy")
     monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
@@ -790,11 +800,14 @@ def test_webhook_completed_event_triggers_vm_deletion(
     payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
     payload["action"] = "completed"
     payload["workflow_job"]["conclusion"] = "success"
-    payload["workflow_job"]["runner_name"] = "test-runner-name"
+    payload["workflow_job"]["runner_name"] = "runnerforge-test-runner-name"
     payload["workflow_job"]["runner_id"] = 1234
     body = json.dumps(payload).encode()
     # Mock delete_vm, to we don't hit real GCP
-
+    target_labels_mock = AsyncMock(return_value=_VALID_VM_LABELS_WITH_TRACE)
+    monkeypatch.setattr(
+        "runnerforge.handlers.get_vm_labels_by_name", target_labels_mock
+    )
     delete_mock = AsyncMock(return_value="op-test-delete")
     monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
 
@@ -841,10 +854,13 @@ def test_webhook_completed_failure_logs_preemption_when_audit_log_says_so(
     payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
     payload["action"] = "completed"
     payload["workflow_job"]["conclusion"] = "failure"
-    payload["workflow_job"]["runner_name"] = "test-runner-preempted"
+    payload["workflow_job"]["runner_name"] = "runnerforge-test-runner-preempted"
     payload["workflow_job"]["runner_id"] = 1234
     body = json.dumps(payload).encode()
-
+    target_labels_mock = AsyncMock(return_value=_VALID_VM_LABELS_WITH_TRACE)
+    monkeypatch.setattr(
+        "runnerforge.handlers.get_vm_labels_by_name", target_labels_mock
+    )
     monkeypatch.setattr(
         "runnerforge.handlers.delete_vm", AsyncMock(return_value="op-test")
     )
@@ -859,12 +875,12 @@ def test_webhook_completed_failure_logs_preemption_when_audit_log_says_so(
 
     assert response.status_code == 200
     # BackgroundTask ran the cross-check
-    was_preempted_mock.assert_awaited_once_with("test-runner-preempted")
+    was_preempted_mock.assert_awaited_once_with("runnerforge-test-runner-preempted")
     # Structured event fired with the right payload
     assert any(
         r.levelno == logging.WARNING
         and "Job ended due to spot preemption" in r.message
-        and getattr(r, "vm_name", None) == "test-runner-preempted"
+        and getattr(r, "vm_name", None) == "runnerforge-test-runner-preempted"
         and getattr(r, "conclusion", None) == "failure"
         for r in caplog.records
     )
@@ -880,10 +896,13 @@ def test_webhook_completed_failure_skips_preemption_log_when_audit_log_empty(
     payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
     payload["action"] = "completed"
     payload["workflow_job"]["conclusion"] = "failure"
-    payload["workflow_job"]["runner_name"] = "test-runner-real-fail"
+    payload["workflow_job"]["runner_name"] = "runnerforge-test-runner-real-fail"
     payload["workflow_job"]["runner_id"] = 5678
     body = json.dumps(payload).encode()
-
+    target_labels_mock = AsyncMock(return_value=_VALID_VM_LABELS_WITH_TRACE)
+    monkeypatch.setattr(
+        "runnerforge.handlers.get_vm_labels_by_name", target_labels_mock
+    )
     monkeypatch.setattr(
         "runnerforge.handlers.delete_vm", AsyncMock(return_value="op-test")
     )
@@ -895,7 +914,7 @@ def test_webhook_completed_failure_skips_preemption_log_when_audit_log_empty(
     )
 
     assert response.status_code == 200
-    was_preempted_mock.assert_awaited_once_with("test-runner-real-fail")
+    was_preempted_mock.assert_awaited_once_with("runnerforge-test-runner-real-fail")
     # No preemption event emitted
     assert not any(
         "Job ended due to spot preemption" in r.message for r in caplog.records
@@ -912,13 +931,16 @@ def test_webhook_completed_success_does_not_schedule_preemption_check(
     payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
     payload["action"] = "completed"
     payload["workflow_job"]["conclusion"] = "success"
-    payload["workflow_job"]["runner_name"] = "test-runner-ok"
+    payload["workflow_job"]["runner_name"] = "runnerforge-test-runner-ok"
     payload["workflow_job"]["runner_id"] = 9999
     body = json.dumps(payload).encode()
 
     monkeypatch.setattr(
-        "runnerforge.handlers.delete_vm", AsyncMock(return_value="op-test")
+        "runnerforge.handlers.get_vm_labels_by_name",
+        AsyncMock(return_value=_VALID_VM_LABELS_WITH_TRACE),
     )
+    delete_mock = AsyncMock(return_value="op-test")
+    monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
     was_preempted_mock = AsyncMock(return_value=False)
     monkeypatch.setattr("runnerforge.compute_client.was_preempted", was_preempted_mock)
 
@@ -927,8 +949,123 @@ def test_webhook_completed_success_does_not_schedule_preemption_check(
     )
 
     assert response.status_code == 200
+    # Reached the conclusion check (not an early return before it)
+    delete_mock.assert_awaited_once()
     # Cross-check NOT scheduled for successful jobs
     was_preempted_mock.assert_not_awaited()
+
+
+def _completed_payload(fixtures_dir, runner_name: str) -> bytes:
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload["action"] = "completed"
+    payload["workflow_job"]["conclusion"] = "success"
+    payload["workflow_job"]["runner_name"] = runner_name
+    payload["workflow_job"]["runner_id"] = 7777
+    return json.dumps(payload).encode()
+
+
+@respx.mock
+def test_webhook_completed_skips_delete_for_non_runnerforge_runner(
+    fixtures_dir, monkeypatch, caplog
+):
+    """Users may run their own runners alongside ours. A completed event for
+    one of those must never trigger a GCE lookup or delete."""
+    body = _completed_payload(fixtures_dir, "my-own-laptop-runner")
+    labels_by_name_mock = AsyncMock()
+    monkeypatch.setattr(
+        "runnerforge.handlers.get_vm_labels_by_name", labels_by_name_mock
+    )
+    delete_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
+
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+        )
+
+    assert response.status_code == 200
+    labels_by_name_mock.assert_not_awaited()
+    delete_mock.assert_not_awaited()
+    assert any(
+        r.levelno == logging.INFO
+        and "runner is not a RunnerForge VM" in r.message
+        and getattr(r, "runner_name", None) == "my-own-laptop-runner"
+        for r in caplog.records
+    )
+
+
+@respx.mock
+def test_webhook_completed_noop_when_target_vm_already_gone(
+    fixtures_dir, monkeypatch, caplog
+):
+    body = _completed_payload(fixtures_dir, "runnerforge-gone")
+    monkeypatch.setattr(
+        "runnerforge.handlers.get_vm_labels_by_name", AsyncMock(return_value=None)
+    )
+    delete_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
+
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+        )
+
+    assert response.status_code == 200
+    delete_mock.assert_not_awaited()
+    assert any(
+        r.levelno == logging.INFO
+        and "VM already deleted" in r.message
+        and getattr(r, "vm_name", None) == "runnerforge-gone"
+        for r in caplog.records
+    )
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("target_labels", "expected_vm_installation_id"),
+    [
+        # Attack shape: another installation registered a runner named after
+        # our VM. Labels are ours, installation is not.
+        ({**_VALID_VM_LABELS_WITH_TRACE, "installation_id": "999"}, "999"),
+        # A runnerforge-prefixed VM we didn't create (no runner label).
+        ({"installation_id": "135399152"}, "135399152"),
+        # No labels at all.
+        ({}, None),
+    ],
+    ids=["foreign-installation", "missing-runner-label", "no-labels"],
+)
+def test_webhook_completed_refuses_delete_when_vm_not_owned(
+    fixtures_dir, monkeypatch, caplog, target_labels, expected_vm_installation_id
+):
+    body = _completed_payload(fixtures_dir, "runnerforge-1-2-1")
+    monkeypatch.setattr(
+        "runnerforge.handlers.get_vm_labels_by_name",
+        AsyncMock(return_value=target_labels),
+    )
+    delete_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
+    was_preempted_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.compute_client.was_preempted", was_preempted_mock)
+
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/webhook", content=body, headers={"X-Hub-Signature-256": _sign(body)}
+        )
+
+    # Still 200: GitHub doesn't retry, and a refusal isn't a server error.
+    assert response.status_code == 200
+    delete_mock.assert_not_awaited()
+    was_preempted_mock.assert_not_awaited()
+    log = next(
+        r
+        for r in caplog.records
+        if "Refusing to delete VM not owned by this installation" in r.message
+    )
+    assert log.levelno == logging.WARNING
+    # From the request log context, so both installation ids sit side by side.
+    assert log.runner_name == "runnerforge-1-2-1"
+    assert log.installation_id == 135399152
+    assert log.vm_installation_id == expected_vm_installation_id
 
 
 @respx.mock

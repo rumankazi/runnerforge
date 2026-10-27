@@ -505,6 +505,32 @@ async def find_vms_by_job_id(
     return result
 
 
+async def get_vm_labels_by_name(
+    instance_name: str,
+    zone: str = GCP_ZONE,
+    project_id: str = GCP_PROJECT_ID,
+) -> dict[str, str] | None:
+    """Returns the raw labels of the named VM, or None if it doesn't exist.
+
+    Raw dict on purpose: callers use this to decide whether a VM is ours, so
+    a VM with foreign/missing labels must come back as data, not raise a
+    ValidationError like RunnerForgeVmLabels.model_validate would.
+    """
+    assert _compute_client is not None
+    with tracer.start_as_current_span("compute.get_vm_labels_by_name") as span:
+        span.set_attribute("instance_name", instance_name)
+        try:
+            instance = await asyncio.to_thread(
+                _compute_client.get,
+                project=project_id,
+                zone=zone,
+                instance=instance_name,
+            )
+        except NotFound:
+            return None
+        return dict(instance.labels)
+
+
 async def get_vm_labels_by_job(
     job_id: str,
     run_id: str,
