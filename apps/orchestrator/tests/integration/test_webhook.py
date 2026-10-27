@@ -460,6 +460,13 @@ def test_webhook_queued_event_persists_queued_received_at_to_vm_labels(
     assert labels["queued_received_at"]
     # Digits-only string — must round-trip as an int (no '.', no scientific notation)
     assert int(labels["queued_received_at"]) > 0
+    # Repo identity: numeric id as the label (always GCE-label-safe); the exact
+    # owner/repo travels in metadata, where the sweep reads it.
+    assert labels["repository_id"] == "1229168154"
+    # Deprecated compat label, still written for the previous revision.
+    assert labels["repo"] == "rumankazi_runnerforge"
+    metadata = create_vm_mock.call_args.kwargs["metadata"]
+    assert metadata["repo-url"] == "https://github.com/rumankazi/runnerforge"
 
 
 @respx.mock

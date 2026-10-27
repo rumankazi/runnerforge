@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from google.api_core.exceptions import AlreadyExists, GoogleAPIError
 from google.auth.exceptions import DefaultCredentialsError
+from google.cloud import compute_v1
 
 from runnerforge import compute_client
 from runnerforge.compute_client import (
@@ -240,31 +241,44 @@ def test_get_vm_labels_by_job_returns_labels_when_matched(monkeypatch, caplog):
     assert log.run_id == "2"
 
 
+def _metadata(repo_url: str | None):
+    """GCE returns metadata as a Metadata message with a list of key/value items."""
+    items = (
+        [] if repo_url is None else [compute_v1.Items(key="repo-url", value=repo_url)]
+    )
+    return compute_v1.Metadata(items=items)
+
+
 def test_list_runnerforge_vms(monkeypatch, caplog):
     mock_client = MagicMock()
+    # Old shape (created before repository_id shipped): `repo` label, no
+    # repository_id. Must still list, or in-flight VMs leak across the deploy.
     mock_vm_1 = MagicMock()
     mock_vm_1.name = "runnerforge-1"
     mock_vm_1.creation_timestamp = "2026-05-31T10:00:00Z"
     mock_vm_1.labels = {
         "runner": "runnerforge",
-        "repo": "rumankazi/runnerforge",
+        "repo": "rumankazi_runnerforge",
         "job_id": "1",
         "run_id": "2",
         "run_attempt": "2",
         "installation_id": "123",
     }
+    mock_vm_1.metadata = _metadata("https://github.com/rumankazi/runnerforge")
 
+    # New shape, with a repo name that no GCE label could hold.
     mock_vm_2 = MagicMock()
     mock_vm_2.name = "runnerforge-2"
     mock_vm_2.creation_timestamp = "2026-05-31T12:00:00Z"
     mock_vm_2.labels = {
         "runner": "runnerforge",
-        "repo": "rumankazi/runnerforge",
+        "repository_id": "42",
         "job_id": "2",
         "run_id": "3",
         "run_attempt": "3",
         "installation_id": "124",
     }
+    mock_vm_2.metadata = _metadata("https://github.com/RumanKazi/Foo.js")
     mock_client.list.return_value = [mock_vm_1, mock_vm_2]
     monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
     with caplog.at_level(logging.INFO):
@@ -282,24 +296,26 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
             creation_timestamp=datetime(2026, 5, 31, 10, 0, 0, tzinfo=UTC),
             labels=RunnerForgeVmLabels(
                 runner="runnerforge",
-                repo="rumankazi/runnerforge",
+                repo="rumankazi_runnerforge",
                 job_id="1",
                 run_id="2",
                 run_attempt="2",
                 installation_id="123",
             ),
+            repo_full_name="rumankazi/runnerforge",
         ),
         VmInfo(
             name="runnerforge-2",
             creation_timestamp=datetime(2026, 5, 31, 12, 0, 0, tzinfo=UTC),
             labels=RunnerForgeVmLabels(
                 runner="runnerforge",
-                repo="rumankazi/runnerforge",
+                repository_id="42",
                 job_id="2",
                 run_id="3",
                 run_attempt="3",
                 installation_id="124",
             ),
+            repo_full_name="RumanKazi/Foo.js",
         ),
     ]
 
@@ -333,6 +349,7 @@ def test_list_runnerforge_vms_with_malformed_labels(monkeypatch, caplog):
         "run_attempt": "4",
         "installation_id": "124",
     }
+    mock_vm_2.metadata = _metadata("https://github.com/rumankazi/runnerforge")
     mock_client.list.return_value = [mock_vm_1, mock_vm_2]
     monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
     with caplog.at_level(logging.INFO):
@@ -359,6 +376,38 @@ def test_list_runnerforge_vms_with_malformed_labels(monkeypatch, caplog):
     assert summary_log is not None
     assert summary_log.runnerforge_vm_count == 1
     assert summary_log.skipped_malformed_count == 1
+
+
+@pytest.mark.parametrize(
+    "repo_url",
+    [None, "", "https://gitlab.com/rumankazi/runnerforge"],
+    ids=["missing", "empty", "foreign-host"],
+)
+def test_list_runnerforge_vms_marks_repo_unknown_when_repo_url_unusable(
+    monkeypatch, repo_url
+):
+    """An unusable repo-url must not drop the VM (the sweep's hard-limit delete
+    still needs to see it), but it must not yield a guessed repo either."""
+    mock_client = MagicMock()
+    mock_vm = MagicMock()
+    mock_vm.name = "runnerforge-1"
+    mock_vm.creation_timestamp = "2026-05-31T10:00:00Z"
+    mock_vm.labels = {
+        "runner": "runnerforge",
+        "repository_id": "42",
+        "job_id": "1",
+        "run_id": "2",
+        "run_attempt": "3",
+        "installation_id": "123",
+    }
+    mock_vm.metadata = _metadata(repo_url)
+    mock_client.list.return_value = [mock_vm]
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
+
+    vms = asyncio.run(list_runnerforge_vms())
+
+    assert [vm.name for vm in vms] == ["runnerforge-1"]
+    assert vms[0].repo_full_name is None
 
 
 def test_get_vm_labels_by_name_returns_raw_labels(monkeypatch):

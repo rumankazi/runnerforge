@@ -48,6 +48,15 @@ async def run_sweep() -> SweepResult:
                 continue
 
             # Age is between MAX_LIFETIME and HARD_LIMIT — check job status
+            if vm.repo_full_name is None:
+                # Without the exact repo, GitHub would 404 and a 404 reads as
+                # "orphan" — never delete on a guess. The hard limit still applies.
+                skipped += 1
+                logger.warning(
+                    "Sweep decision",
+                    extra={**log_extra, "decision": "skip", "reason": "unknown_repo"},
+                )
+                continue
             if installation_id not in installation_token_cache:
                 installation_token_cache[
                     installation_id
@@ -56,7 +65,7 @@ async def run_sweep() -> SweepResult:
 
             job_status = await get_job_status(
                 installation_token=token,
-                repo_full_name=vm.labels.repo,
+                repo_full_name=vm.repo_full_name,
                 job_id=vm.labels.job_id,
             )
 

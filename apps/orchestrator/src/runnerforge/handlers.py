@@ -1,4 +1,5 @@
 import logging
+import re
 
 from opentelemetry import trace
 from opentelemetry.trace import (
@@ -9,6 +10,7 @@ from opentelemetry.trace import (
 )
 
 from runnerforge.compute_client import (
+    GITHUB_REPO_URL_PREFIX,
     OperationHandle,
     PreemptionCheckRequest,
     create_vm,
@@ -24,6 +26,13 @@ from runnerforge.models import RunnerForgeVmLabels, WorkflowJobEvent
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
+
+
+def _legacy_repo_label(full_name: str) -> str:
+    """GCE-safe stand-in for the deprecated `repo` label (lowercase, only
+    [a-z0-9_-], max 63 chars). Lossy on purpose; never used for API calls.
+    Remove together with RunnerForgeVmLabels.repo in the next release."""
+    return re.sub(r"[^a-z0-9_-]", "-", full_name.lower().replace("/", "_"))[:63]
 
 
 def _webhook_span_context(
@@ -92,7 +101,7 @@ async def handle_queued(
 
         metadata = {
             "registration-token": registration_token,
-            "repo-url": f"https://github.com/{event.repository.full_name}",
+            "repo-url": f"{GITHUB_REPO_URL_PREFIX}{event.repository.full_name}",
             "runner-labels": ",".join(event.workflow_job.labels),
             "startup-script": STARTUP_SCRIPT,
         }
@@ -108,7 +117,8 @@ async def handle_queued(
             job_id=str(event.workflow_job.id),
             run_id=str(event.workflow_job.run_id),
             run_attempt=str(event.workflow_job.run_attempt),
-            repo=event.repository.full_name.replace("/", "_"),
+            repo=_legacy_repo_label(event.repository.full_name),
+            repository_id=str(event.repository.id),
             installation_id=str(event.installation.id),
             webhook_trace_id=webhook_trace_id,
             webhook_span_id=webhook_span_id,

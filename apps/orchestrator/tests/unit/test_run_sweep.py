@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -6,7 +7,12 @@ from runnerforge.models import JobStatusResponse, RunnerForgeVmLabels, VmInfo
 from runnerforge.sweep import run_sweep
 
 
-def _vm(age_hours: int, installation_id: str = "100", name_suffix: str = "") -> VmInfo:
+def _vm(
+    age_hours: int,
+    installation_id: str = "100",
+    name_suffix: str = "",
+    repo_full_name: str | None = "foo/bar",
+) -> VmInfo:
     """Helper to construct a VmInfo with a specific age + optional name suffix to disambiguate."""
     name = f"runnerforge-vm-{age_hours}h" + (f"-{name_suffix}" if name_suffix else "")
     return VmInfo(
@@ -17,9 +23,10 @@ def _vm(age_hours: int, installation_id: str = "100", name_suffix: str = "") -> 
             job_id="12",
             run_id="23",
             run_attempt="33",
-            repo="foo/bar",
+            repository_id="42",
             installation_id=installation_id,
         ),
+        repo_full_name=repo_full_name,
     )
 
 
@@ -91,6 +98,70 @@ def test_run_sweep_does_not_delete_vm_with_running_job(monkeypatch):
     delete_mock.assert_not_awaited()
     job_status_mock.assert_awaited_once()
     installation_token_mock.assert_awaited_once_with(100)  # int, not str
+
+
+def test_run_sweep_queries_github_with_exact_repo_full_name(monkeypatch):
+    """Regression: the sweep used to send the lossy `owner_repo` label to
+    GitHub, got a 404, treated it as an orphan and deleted running VMs. The
+    repo must reach the jobs API exactly as GitHub knows it — mixed case and
+    dots included (neither survives a GCE label)."""
+    list_mock = AsyncMock(
+        return_value=[_vm(age_hours=3, repo_full_name="RumanKazi/Foo.js")]
+    )
+    job_status_mock = AsyncMock(
+        return_value=JobStatusResponse(status="in_progress", conclusion=None)
+    )
+    monkeypatch.setattr("runnerforge.sweep.list_runnerforge_vms", list_mock)
+    monkeypatch.setattr("runnerforge.sweep.delete_vm", AsyncMock())
+    monkeypatch.setattr("runnerforge.sweep.get_job_status", job_status_mock)
+    monkeypatch.setattr(
+        "runnerforge.sweep.get_installation_token", AsyncMock(return_value="tok")
+    )
+
+    asyncio.run(run_sweep())
+
+    job_status_mock.assert_awaited_once_with(
+        installation_token="tok", repo_full_name="RumanKazi/Foo.js", job_id="12"
+    )
+
+
+def test_run_sweep_skips_job_check_when_repo_unknown(monkeypatch, caplog):
+    """No exact repo → no GitHub call (a 404 would read as 'orphan'). The VM is
+    left alone until the hard limit."""
+    list_mock = AsyncMock(return_value=[_vm(age_hours=3, repo_full_name=None)])
+    delete_mock = AsyncMock()
+    job_status_mock = AsyncMock()
+    token_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.sweep.list_runnerforge_vms", list_mock)
+    monkeypatch.setattr("runnerforge.sweep.delete_vm", delete_mock)
+    monkeypatch.setattr("runnerforge.sweep.get_job_status", job_status_mock)
+    monkeypatch.setattr("runnerforge.sweep.get_installation_token", token_mock)
+
+    with caplog.at_level(logging.INFO):
+        result = asyncio.run(run_sweep())
+
+    assert result.skipped == 1
+    assert result.deleted == 0
+    delete_mock.assert_not_awaited()
+    job_status_mock.assert_not_awaited()
+    token_mock.assert_not_awaited()
+    log = next(r for r in caplog.records if getattr(r, "reason", "") == "unknown_repo")
+    assert log.levelno == logging.WARNING
+    assert log.vm_name == "runnerforge-vm-3h"
+
+
+def test_run_sweep_hard_limit_applies_even_when_repo_unknown(monkeypatch):
+    list_mock = AsyncMock(return_value=[_vm(age_hours=7, repo_full_name=None)])
+    delete_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.sweep.list_runnerforge_vms", list_mock)
+    monkeypatch.setattr("runnerforge.sweep.delete_vm", delete_mock)
+
+    result = asyncio.run(run_sweep())
+
+    assert result.deleted == 1
+    delete_mock.assert_awaited_once_with(
+        instance_name="runnerforge-vm-7h", reason="sweep"
+    )
 
 
 def test_run_sweep_deletes_vm_with_job_not_found(monkeypatch):
