@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.17.2](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.1...orchestrator-v0.17.2) (2026-10-27)
+
+
+### Bug Fixes
+
+* **deps:** update dependency python to v3.15.2 ([#281](https://github.com/rumankazi/runnerforge/issues/281)) ([9b2507c](https://github.com/rumankazi/runnerforge/commit/9b2507c765398989a132883b57b580136edaa827))
+* **deps:** update dependency python to v3.15.2 ([#286](https://github.com/rumankazi/runnerforge/issues/286)) ([d59841a](https://github.com/rumankazi/runnerforge/commit/d59841acc33bd03b4453f679283fe1833b8eba5e))
+
 ## [0.17.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.0...orchestrator-v0.17.1) (2026-10-26)
 
 
