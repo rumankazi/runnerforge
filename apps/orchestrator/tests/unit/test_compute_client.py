@@ -13,6 +13,7 @@ from runnerforge.compute_client import (
     delete_vm,
     find_vms_by_job_id,
     get_vm_labels_by_job,
+    get_vm_labels_by_name,
     list_runnerforge_vms,
 )
 from runnerforge.config import GCP_PROJECT_ID, RUNNER_VM_SA_EMAIL
@@ -358,6 +359,32 @@ def test_list_runnerforge_vms_with_malformed_labels(monkeypatch, caplog):
     assert summary_log is not None
     assert summary_log.runnerforge_vm_count == 1
     assert summary_log.skipped_malformed_count == 1
+
+
+def test_get_vm_labels_by_name_returns_raw_labels(monkeypatch):
+    mock_client = MagicMock()
+    # Deliberately NOT a valid RunnerForgeVmLabels shape: the caller decides
+    # ownership, so foreign labels must come back as data, not raise.
+    mock_client.get.return_value.labels = {"installation_id": "999"}
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
+
+    result = asyncio.run(get_vm_labels_by_name("runnerforge-1-2-1"))
+
+    assert result == {"installation_id": "999"}
+    kwargs = mock_client.get.call_args.kwargs
+    assert kwargs["project"] == "test-project"  # from conftest env
+    assert kwargs["zone"] == "europe-west4-a"  # from conftest env
+    assert kwargs["instance"] == "runnerforge-1-2-1"
+
+
+def test_get_vm_labels_by_name_returns_none_when_vm_missing(monkeypatch):
+    from google.api_core.exceptions import NotFound
+
+    mock_client = MagicMock()
+    mock_client.get.side_effect = NotFound("not found")
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
+
+    assert asyncio.run(get_vm_labels_by_name("runnerforge-gone")) is None
 
 
 def test_delete_vm_returns_none_when_vm_already_gone(monkeypatch, caplog):

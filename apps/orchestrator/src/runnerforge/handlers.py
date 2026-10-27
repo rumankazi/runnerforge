@@ -14,6 +14,7 @@ from runnerforge.compute_client import (
     create_vm,
     delete_vm,
     get_vm_labels_by_job,
+    get_vm_labels_by_name,
     is_valid_machine_type,
 )
 from runnerforge.config import STARTUP_SCRIPT
@@ -271,7 +272,36 @@ async def handle_completed(event: WorkflowJobEvent) -> PreemptionCheckRequest | 
             )
             return None
         span.set_attribute("runner_name", runner_name)
-
+        # Users may run their own (non-RunnerForge) runners alongside ours;
+        # their completed events are normal traffic, not a threat.
+        if not runner_name.startswith("runnerforge-"):
+            logger.info(
+                "Skipping delete: runner is not a RunnerForge VM",
+                extra={"runner_name": runner_name},
+            )
+            return None
+        # runner_name is chosen by whoever registered the runner, so the
+        # prefix alone proves nothing. Only delete a VM whose own labels say
+        # we created it for the installation that sent this event.
+        target_labels = await get_vm_labels_by_name(runner_name)
+        if target_labels is None:
+            logger.info(
+                "VM already deleted (idempotent no-op)",
+                extra={"vm_name": runner_name, "reason": "webhook"},
+            )
+            return None
+        installation_id = str(event.installation.id)
+        if (
+            target_labels.get("runner") != "runnerforge"
+            or target_labels.get("installation_id") != installation_id
+        ):
+            # runner_name + installation_id are already on the record via the
+            # request log context (main.py update_context).
+            logger.warning(
+                "Refusing to delete VM not owned by this installation",
+                extra={"vm_installation_id": target_labels.get("installation_id")},
+            )
+            return None
         operation_id = await delete_vm(runner_name, reason="webhook")
         logger.info(
             "VM deletion submitted",
