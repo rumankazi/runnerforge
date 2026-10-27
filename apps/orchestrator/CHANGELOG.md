@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.7](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.6...orchestrator-v0.17.7) (2026-10-27)
+
+
+### Bug Fixes
+
+* **orchestrator:** dispatch webhooks on X-GitHub-Event ([#298](https://github.com/rumankazi/runnerforge/issues/298)) ([6669c2c](https://github.com/rumankazi/runnerforge/commit/6669c2c2c84a731e0c490fa4d55a7fccf3b96ea2))
+
 ## [0.17.6](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.5...orchestrator-v0.17.6) (2026-10-27)
 
 
