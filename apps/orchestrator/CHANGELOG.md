@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.17.4](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.3...orchestrator-v0.17.4) (2026-10-27)
+
+
+### Bug Fixes
+
+* **orchestrator:** sweep reads exact repo from VM metadata ([#293](https://github.com/rumankazi/runnerforge/issues/293)) ([eadb30c](https://github.com/rumankazi/runnerforge/commit/eadb30ce1612a08e878ffc288c6170462857ba61))
+* runnerforge owned vms are deleted ([#291](https://github.com/rumankazi/runnerforge/issues/291)) ([4d4a3f3](https://github.com/rumankazi/runnerforge/commit/4d4a3f3e545a5b5a6ba858984d9fb9712d69aa49))
+
 ## [0.17.3](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.2...orchestrator-v0.17.3) (2026-10-27)
 
 
