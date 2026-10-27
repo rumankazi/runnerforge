@@ -133,3 +133,35 @@ def test_machine_policy_error_str_includes_reason_and_tokens():
     err = MachinePolicyError(reason="unknown_token", offending_tokens=["gigantic"])
     assert "unknown_token" in str(err)
     assert "gigantic" in str(err)
+
+
+@pytest.mark.parametrize(
+    ("labels", "expected"),
+    [
+        (["self-hosted", "runnerforge"], MachinePolicy("n2-standard-4", False)),
+        (
+            ["self-hosted", "linux", "x64", "runnerforge", "small", "spot"],
+            MachinePolicy("n2-standard-2", True),
+        ),
+        # GitHub matches labels case-insensitively; authors write `Linux`/`X64`.
+        (
+            ["runnerforge", "Linux", "X64", "Small"],
+            MachinePolicy("n2-standard-2", False),
+        ),
+        (["RunnerForge", "N2-Standard-8"], MachinePolicy("n2-standard-8", False)),
+    ],
+    ids=["self-hosted", "all-defaults", "mixed-case-defaults", "mixed-case-literal"],
+)
+def test_github_default_labels_and_case_are_accepted(labels, expected):
+    assert resolve_labels(labels) == expected
+
+
+@pytest.mark.parametrize("label", ["arm64", "ARM64", "windows", "macOS"])
+def test_os_and_arch_labels_we_cannot_serve_stay_unknown(label):
+    """We only run Linux x64. Accepting these would boot a VM that can never
+    take the job (or run it on the wrong platform)."""
+    with pytest.raises(MachinePolicyError) as excinfo:
+        resolve_labels(["self-hosted", "runnerforge", label])
+    assert excinfo.value.reason == "unknown_token"
+    # Reported in the author's spelling, so the log matches their workflow file.
+    assert excinfo.value.offending_tokens == [label]

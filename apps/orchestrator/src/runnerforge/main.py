@@ -129,9 +129,11 @@ async def webhook(
         )
         span.set_attribute("event_type", event.action)
     # Stop fast for non-runnerforge requests
+    # Case-insensitive, like GitHub's own label matching: `RunnerForge` in
+    # runs-on still routes to our runners, so it must not be skipped here.
+    job_labels = {label.lower() for label in event.workflow_job.labels}
     if not any(
-        runnerforge_label in event.workflow_job.labels
-        for runnerforge_label in RUNNERFORGE_LABELS
+        runnerforge_label in job_labels for runnerforge_label in RUNNERFORGE_LABELS
     ):
         logger.info("Skipping! Not a RunnerForge request")
         return {"ok": True}
