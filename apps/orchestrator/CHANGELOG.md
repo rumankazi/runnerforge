@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.8...orchestrator-v0.18.0) (2026-10-27)
+
+
+### Features
+
+* **orchestrator:** installation allow-list for VM creation ([#303](https://github.com/rumankazi/runnerforge/issues/303)) ([5934ce3](https://github.com/rumankazi/runnerforge/commit/5934ce3086171762aba632b1b3bf6be7925b26cb))
+
 ## [0.17.8](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.7...orchestrator-v0.17.8) (2026-10-27)
 
 
