@@ -40,8 +40,8 @@ def parse_installation_ids(value: str | None) -> frozenset[int] | None:
     return frozenset(int(part) for part in value.split(",") if part.strip())
 
 
-# GitHub App installations allowed to get VMs. Must be set in prod: the App is
-# public, so anyone can install it and spend our GCP budget.
+# GitHub App installations allowed to get VMs. Must be set in prod before the
+# App is made public: otherwise anyone could install it and spend our budget.
 ALLOWED_INSTALLATION_IDS = parse_installation_ids(
     os.environ.get("ALLOWED_INSTALLATION_IDS")
 )

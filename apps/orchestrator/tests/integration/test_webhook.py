@@ -1322,7 +1322,7 @@ def _job_payload(fixtures_dir, action: str) -> bytes:
 def test_webhook_queued_from_installation_not_on_allow_list_is_rejected(
     fixtures_dir, monkeypatch, caplog
 ):
-    """The App is public: anyone can install it. Only allow-listed
+    """Once the App is public, anyone can install it. Only allow-listed
     installations may create VMs on our billing account."""
     monkeypatch.setattr("runnerforge.main.ALLOWED_INSTALLATION_IDS", frozenset({999}))
     queued_mock = AsyncMock()
