@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2](https://github.com/rumankazi/runnerforge/compare/runner-image-v0.4.1...runner-image-v0.4.2) (2026-10-27)
+
+
+### Bug Fixes
+
+* **deps:** update dependency actions/runner to v2.338.2 ([#285](https://github.com/rumankazi/runnerforge/issues/285)) ([8f3d7e7](https://github.com/rumankazi/runnerforge/commit/8f3d7e789cd9779bb8ecb888a404c80acc99c484))
+* **deps:** update dependency python to v3.15.2 ([#281](https://github.com/rumankazi/runnerforge/issues/281)) ([9b2507c](https://github.com/rumankazi/runnerforge/commit/9b2507c765398989a132883b57b580136edaa827))
+
 ## [0.4.1](https://github.com/rumankazi/runnerforge/compare/runner-image-v0.4.0...runner-image-v0.4.1) (2026-10-24)
 
 
