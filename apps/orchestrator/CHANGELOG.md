@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.8](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.7...orchestrator-v0.17.8) (2026-10-27)
+
+
+### Bug Fixes
+
+* **orchestrator:** cap VM runtime, label disks, decouple image and op project ([#300](https://github.com/rumankazi/runnerforge/issues/300)) ([cdfdf01](https://github.com/rumankazi/runnerforge/commit/cdfdf01bc121222d7381bba7671849f394df97cf))
+
 ## [0.17.7](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.6...orchestrator-v0.17.7) (2026-10-27)
 
 
