@@ -25,6 +25,7 @@ class User(BaseModel):
 
 
 class Repository(BaseModel):
+    id: int
     full_name: str
     owner: User
 
@@ -74,8 +75,16 @@ class RunnerForgeVmLabels(BaseModel):
     job_id: str
     run_id: str
     run_attempt: str
-    repo: str
     installation_id: str
+    # DEPRECATED, remove in the release after this one. Still written (GCE-safe,
+    # lossy) only because the previous revision requires it: during a canary or
+    # rollback it handles events for VMs this revision creates. Never read it
+    # for API calls — the exact repo comes from repo-url metadata.
+    repo: str = ""
+    # Numeric GitHub repo id (always a valid GCE label value, unlike the
+    # owner/repo name). Default empty for VMs created before this field
+    # shipped (they carry the old `repo` label instead, ignored here).
+    repository_id: str = ""
     # Outer `POST /webhook` server span IDs for the queued event, persisted
     # so handle_in_progress can re-parent under the same anchor — merges
     # the two webhooks into one trace.
@@ -94,6 +103,8 @@ class VmInfo(BaseModel):
     name: str
     creation_timestamp: datetime
     labels: RunnerForgeVmLabels
+    # Exact owner/repo from the VM's repo-url metadata; None if unreadable.
+    repo_full_name: str | None = None
 
 
 class SweepResult(BaseModel):

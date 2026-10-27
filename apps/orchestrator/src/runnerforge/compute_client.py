@@ -22,6 +22,9 @@ _RUNNER_IMAGE_VERSION: str | None = None  # dotted semver, used in logs/metrics
 _BOOT_IMAGE_FAMILY = "projects/runnerforge/global/images/family/runnerforge-runner"
 _BOOT_DISK_SIZE_GB = 10
 _DATA_DISK_SIZE_GB = 50
+# handle_queued writes repo-url with this prefix; the sweep strips it to get
+# the exact owner/repo for the GitHub jobs API.
+GITHUB_REPO_URL_PREFIX = "https://github.com/"
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -637,12 +640,25 @@ async def list_runnerforge_vms(
                 )
                 skipped_malformed += 1
                 continue
+            # The exact owner/repo lives in metadata (written by handle_queued for
+            # the startup script). Labels can't hold it: GCE label values are
+            # lowercase-only and max 63 chars.
+            metadata = {item.key: item.value for item in i.metadata.items}
+            repo_url = metadata.get("repo-url", "")
+            # None (not "") when unknown, so the sweep can still apply the
+            # hard-limit delete but must never ask GitHub about a guessed repo.
+            repo_full_name = (
+                repo_url.removeprefix(GITHUB_REPO_URL_PREFIX)
+                if repo_url.startswith(GITHUB_REPO_URL_PREFIX)
+                else None
+            )
             valid_vms.append(
                 VmInfo.model_validate(
                     {
                         "name": i.name,
                         "creation_timestamp": i.creation_timestamp,
                         "labels": labels,
+                        "repo_full_name": repo_full_name,
                     }
                 )
             )
