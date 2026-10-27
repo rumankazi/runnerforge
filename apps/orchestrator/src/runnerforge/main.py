@@ -11,6 +11,7 @@ from opentelemetry import trace
 from runnerforge import compute_client, github_client
 from runnerforge.compute_client import cross_check_preemption, wait_for_vm_creation
 from runnerforge.config import (
+    ALLOWED_INSTALLATION_IDS,
     EXPECTED_AUDIENCE,
     EXPECTED_SCHEDULER_SA_EMAIL,
     RUNNERFORGE_LABELS,
@@ -34,9 +35,22 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+def log_admission_mode() -> None:
+    if ALLOWED_INSTALLATION_IDS is None:
+        logger.warning(
+            "ALLOWED_INSTALLATION_IDS unset: every installation can create VMs"
+        )
+    else:
+        logger.info(
+            "Installation allow-list active",
+            extra={"allowed_installation_count": len(ALLOWED_INSTALLATION_IDS)},
+        )
+
+
 # Setup client context lifespan and FastAPI App
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    log_admission_mode()
     await github_client.init_http_client()
     compute_client.init_compute_client()
     compute_client.init_runner_image()
@@ -160,6 +174,20 @@ async def webhook(
         runner_id=event.workflow_job.runner_id,
         installation_id=event.installation.id,
     )
+    # Admission: only `queued` creates VMs, so only `queued` is gated.
+    # in_progress/completed always pass — VMs of an installation removed from
+    # the list mid-job must still be deleted when their jobs finish.
+    if (
+        event.action == "queued"
+        and ALLOWED_INSTALLATION_IDS is not None
+        and event.installation.id not in ALLOWED_INSTALLATION_IDS
+    ):
+        # installation_id/repo/sender are on the record via the log context.
+        logger.warning("Installation not allowed")
+        return {"ok": True}
+
+    # After admission on purpose: rejected installations must not count as
+    # "received but no VM", or the lost_webhook_ratio alert would fire on them.
     # Anchor for the "lost webhook" ratio alert: counts every RunnerForge
     # webhook the handler actually accepts, sliced by event_type. When the
     # ratio of vm_creation_count over queued-events drops, the orchestrator

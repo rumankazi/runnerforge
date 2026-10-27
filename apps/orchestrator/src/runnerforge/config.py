@@ -28,3 +28,20 @@ EXPECTED_AUDIENCE = os.environ["EXPECTED_AUDIENCE"]
 
 # Detect as runnerforge request if one of the labels found
 RUNNERFORGE_LABELS = ["runnerforge"]
+
+
+def parse_installation_ids(value: str | None) -> frozenset[int] | None:
+    """None (unset) means "allow every installation" — the self-host default,
+    where the App is private to its owner. A set value is a comma-separated
+    list; an empty string allows nobody (a deliberate kill switch). A
+    malformed id raises at import, so a bad deploy fails at startup."""
+    if value is None:
+        return None
+    return frozenset(int(part) for part in value.split(",") if part.strip())
+
+
+# GitHub App installations allowed to get VMs. Must be set in prod: the App is
+# public, so anyone can install it and spend our GCP budget.
+ALLOWED_INSTALLATION_IDS = parse_installation_ids(
+    os.environ.get("ALLOWED_INSTALLATION_IDS")
+)

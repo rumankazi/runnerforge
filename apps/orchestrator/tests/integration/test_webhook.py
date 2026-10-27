@@ -1309,3 +1309,62 @@ def test_webhook_requires_github_event_header():
     )
 
     assert response.status_code == 422
+
+
+def _job_payload(fixtures_dir, action: str) -> bytes:
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload["action"] = action
+    payload["workflow_job"]["runner_name"] = "runnerforge-1-2-1"
+    payload["workflow_job"]["conclusion"] = "success"
+    return json.dumps(payload).encode()
+
+
+def test_webhook_queued_from_installation_not_on_allow_list_is_rejected(
+    fixtures_dir, monkeypatch, caplog
+):
+    """The App is public: anyone can install it. Only allow-listed
+    installations may create VMs on our billing account."""
+    monkeypatch.setattr("runnerforge.main.ALLOWED_INSTALLATION_IDS", frozenset({999}))
+    queued_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.main.handle_queued", queued_mock)
+    body = _job_payload(fixtures_dir, "queued")
+
+    with caplog.at_level(logging.INFO):
+        response = client.post("/webhook", content=body, headers=_headers(body))
+
+    assert response.status_code == 200  # not an error from GitHub's side
+    queued_mock.assert_not_awaited()
+    log = next(r for r in caplog.records if r.message == "Installation not allowed")
+    assert log.levelno == logging.WARNING
+    assert log.installation_id == 135399152  # from the request log context
+    # Must not count as "received but no VM" for the lost_webhook_ratio alert.
+    assert not any("Webhook event received" in r.message for r in caplog.records)
+
+
+def test_webhook_queued_from_allowed_installation_proceeds(fixtures_dir, monkeypatch):
+    monkeypatch.setattr(
+        "runnerforge.main.ALLOWED_INSTALLATION_IDS", frozenset({135399152})
+    )
+    queued_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr("runnerforge.main.handle_queued", queued_mock)
+    body = _job_payload(fixtures_dir, "queued")
+
+    response = client.post("/webhook", content=body, headers=_headers(body))
+
+    assert response.status_code == 200
+    queued_mock.assert_awaited_once()
+
+
+@pytest.mark.parametrize("action", ["in_progress", "completed"])
+def test_webhook_non_queued_events_bypass_allow_list(fixtures_dir, monkeypatch, action):
+    """Removing an installation mid-job must not strand its VMs: completed
+    still has to delete them (and in_progress still records readiness)."""
+    monkeypatch.setattr("runnerforge.main.ALLOWED_INSTALLATION_IDS", frozenset())
+    handler_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(f"runnerforge.main.handle_{action}", handler_mock)
+    body = _job_payload(fixtures_dir, action)
+
+    response = client.post("/webhook", content=body, headers=_headers(body))
+
+    assert response.status_code == 200
+    handler_mock.assert_awaited_once()
