@@ -96,6 +96,7 @@ async def webhook(
     request: Request,
     background_tasks: BackgroundTasks,
     x_hub_signature_256: Annotated[str, Header()],
+    x_github_event: Annotated[str, Header()],
 ):
     # Captured as close to the wire as possible so the resulting
     # runner_readiness_seconds metric reflects "time since we owned the
@@ -115,6 +116,15 @@ async def webhook(
         )
         raise HTTPException(status_code=401, detail="Invalid signature provided")
 
+    # Dispatch on the event header, never on payload shape. GitHub Apps get
+    # `installation`/`installation_repositories` whether subscribed or not, and
+    # `ping` on webhook setup; parsing those as workflow_job used to 500 them.
+    # Acknowledge with 200 so GitHub's delivery log stays clean. Returns before
+    # the "Webhook event received" anchor, so lost_webhook_ratio is unaffected.
+    if x_github_event != "workflow_job":
+        logger.info("Ignoring GitHub event", extra={"github_event": x_github_event})
+        return {"ok": True}
+
     with tracer.start_as_current_span("webhook.parse_github_response") as span:
         try:
             json_body = json.loads(body)
@@ -124,7 +134,7 @@ async def webhook(
         event = parse_github_response(
             WorkflowJobEvent,
             data=json_body,
-            cause_hint="Webhook payload did not match the expected WorkflowJob schema. GitHub may have changed their payload format, or a non-workflow_job event was delivered.",
+            cause_hint="workflow_job payload did not match the expected WorkflowJob schema. GitHub may have changed their payload format.",
             logger=logger,
         )
         span.set_attribute("event_type", event.action)
