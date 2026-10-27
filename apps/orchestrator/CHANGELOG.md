@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.6](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.5...orchestrator-v0.17.6) (2026-10-27)
+
+
+### Bug Fixes
+
+* **orchestrator:** accept GitHub default runner labels case-insensitively ([#296](https://github.com/rumankazi/runnerforge/issues/296)) ([f0b50e2](https://github.com/rumankazi/runnerforge/commit/f0b50e2cb1e03d861315e366e2310d3022bd5c88))
+
 ## [0.17.5](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.4...orchestrator-v0.17.5) (2026-10-27)
 
 
