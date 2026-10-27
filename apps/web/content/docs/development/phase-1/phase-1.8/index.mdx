@@ -5,6 +5,10 @@ description: Terraform-managed production deployment — Cloud Run, Secret Manag
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
+<Callout type="info" title="Historical build log">
+  Historical snapshot from Phase 1. The code has changed since this was written. For the deployed system today, see [Architecture](/docs/design/architecture) and [Security](/docs/design/security). Terraform is now applied in CI by `.github/workflows/deploy-infra.yaml`.
+</Callout>
+
 After phase 1.7, the orchestrator was functionally complete — webhook-driven runner lifecycle plus a safety-net sweep — but it still ran as `fastapi dev` locally with smee.io tunneling. Phase 1.8 is the final step of Phase 1: **the orchestrator becomes a real, deployed service in production GCP, managed end-to-end by Terraform.**
 
 After this phase, Phase 1 is done.
@@ -67,7 +71,7 @@ The Google provider exposes both `google_cloud_run_service` (v1, legacy) and `go
 max_instance_request_concurrency = 1
 ```
 
-Per the [ADR](/docs/RunnerForge/design/architecture), each instance serves one request at a time. With `max_instance_count = 10`, the service can handle 10 simultaneous webhooks via horizontal scaling. The tradeoff:
+Per the [ADR](/docs/design/architecture), each instance serves one request at a time. With `max_instance_count = 10`, the service can handle 10 simultaneous webhooks via horizontal scaling. The tradeoff:
 
 - **Cost**: each request gets its own container; throughput requires more instances.
 - **Isolation**: no in-process state bleed between requests; one slow GCP call can't block others.
@@ -257,9 +261,9 @@ Full lifecycle in ~88 seconds. Zero orphan VMs. Cloud Scheduler /sweep job runs 
 Phase 1 is done. Phase 2 is production hardening:
 
 - **CI/CD** — GitHub Actions workflows for orchestrator + Packer image builds. Replace `gcloud builds submit` with automatic pipeline triggers on commits to main.
-- **OpenTelemetry** — distributed tracing (Layer 2 + Layer 3 per [observability.mdx](/docs/RunnerForge/design/observability)).
+- **OpenTelemetry** — distributed tracing (Layer 2 + Layer 3 per [observability.mdx](/docs/design/observability)).
 - **Cloud Monitoring dashboards + alerts** — RED-method dashboards from existing structured logs, SLO alerts on p95 webhook latency.
 - **Dedicated runner-vm service account** — replace default compute SA (broad `editor` perms) with a minimal `runnerforge-runner-vm` SA holding only `logging.logWriter`. Requires a code change in [compute_client.py](https://github.com/rumankazi/runnerforge/blob/main/apps/orchestrator/src/runnerforge/compute_client.py) to specify the SA on `create_vm`.
 - **Automated secret rotation** — Cloud Function + Cloud Scheduler + GitHub API integration. Phase 1.8 shipped the slots + a documented manual procedure; Phase 2 automates the lifecycle.
 
-After Phase 2 hardening, the orchestrator is genuinely production-grade. Phase 3+ adds user-facing dashboards and warm pools — see [the Phase 1 roadmap](/docs/RunnerForge/design/architecture#phases) for the full picture.
+After Phase 2 hardening, the orchestrator is genuinely production-grade. Phase 3+ adds user-facing dashboards and warm pools — see [the phase tracker](/docs/development) for the full picture.

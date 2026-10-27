@@ -1,0 +1,75 @@
+---
+title: Instance saturation
+description: Runbook for "Cloud Run instance count > 40 (80% of max=50)", the orchestrator nearing its instance cap.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Symptom
+
+Email from "RunnerForge Alerts": **Cloud Run instance count > 40 (80% of max=50)**, severity WARNING.
+
+The alert fires when Cloud Run's `run.googleapis.com/container/instance_count` for `runnerforge-orchestrator`
+stays above 40 for 10 minutes. `cloud_run.tf` caps the service at `max_instance_count = 50` with
+`max_instance_request_concurrency = 10`, so about 500 requests in flight at once.
+
+## Impact
+
+None yet. Past the cap, Cloud Run can't add instances, and new requests are delayed or fail. A failed webhook is not
+redelivered by GitHub, so saturation turns into lost jobs and leftover VMs.
+
+## Diagnose
+
+All commands are read-only.
+
+**1. More requests, or slower requests?** On the dashboard ("RunnerForge — Orchestrator Health"), Orchestrator
+Health, compare "Request rate by response_code_class" with "Request latency p50/p95/p99". Instances grow with
+requests in flight, which is rate times latency.
+
+**2. If the rate is up, find out who is sending.**
+
+```bash
+gcloud logging read '
+  logName="projects/runnerforge/logs/run.googleapis.com%2Frequests"
+  resource.labels.service_name="runnerforge-orchestrator"
+' --project=runnerforge --freshness=30m --limit=200 \
+  --format='table(timestamp, httpRequest.requestUrl, httpRequest.status, httpRequest.remoteIp, httpRequest.userAgent)'
+```
+
+- `GitHub-Hookshot/...` on `/webhook`: a real burst of jobs, such as a large matrix. Webhook events by
+  `event_type` on the dashboard confirm it.
+- Anything else: probe or flood traffic. Nothing in front of Cloud Run filters it; the orchestrator rejects it, but each
+  request still uses an instance slot.
+
+**3. If latency is up, find the slow step.** Slow requests hold their slot for longer:
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  jsonPayload.message="POST /webhook"
+' --project=runnerforge --freshness=30m --limit=50 \
+  --format='table(timestamp, httpRequest.status, httpRequest.latency, jsonPayload.request_id)'
+```
+
+Open the trace for a slow one (the log entry links to it), or filter `POST /webhook` spans by latency in Cloud Trace.
+GitHub API calls get up to 3 attempts with backoff and a 10 s timeout each (`github_client.py`), so a slow GitHub API
+shows up as long `github.*` spans; slow GCE calls show up as long `compute.*` spans.
+
+**4. Check upstream:** githubstatus.com and status.cloud.google.com.
+
+## Mitigate
+
+<Callout type="warn" title="Mutations">
+  Everything in this section changes production.
+</Callout>
+
+- **GitHub or GCE slowness:** wait. Instances drain once calls are fast again.
+- **Sustained real growth:** raise `max_instance_count` in `cloud_run.tf`. It is a revision template change, so it
+  only takes effect with the next orchestrator release. A large burst of jobs also needs VM capacity; see the
+  capacity notes in `quotas.tf` and [VM creation failures](/docs/guides/runbooks/vm-creation-failures).
+- **Flood traffic:** no filter exists in front of the service today. Track it in a GitHub issue if it persists.
+
+## Escalate
+
+Saturation without matching traffic or latency changes: GCP support case with the time range.

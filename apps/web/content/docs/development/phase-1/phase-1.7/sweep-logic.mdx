@@ -5,6 +5,10 @@ description: The decision tree, age windows, token caching, and edge cases for r
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
+<Callout type="info" title="Historical build log">
+  Historical snapshot from Phase 1. The code has changed since this was written. For the current sweep, see [Webhook flow](/docs/design/webhook-flow) and `apps/orchestrator/src/runnerforge/sweep.py`. The hard limit is now the VM's own runtime cap (`compute_client.MAX_VM_RUN_DURATION`).
+</Callout>
+
 The sweep handler at [`sweep.py`](https://github.com/rumankazi/runnerforge/blob/main/apps/orchestrator/src/runnerforge/sweep.py) iterates every RunnerForge-labeled VM in the project and decides per-VM whether to delete it. This page is the algorithm in detail.
 
 ## The decision tree
@@ -92,7 +96,7 @@ for vm in vms:
     token = installation_token_cache[labels.installation_id]
 ```
 
-Auto-evicted when `run_sweep` returns. No cross-request state, no Redis, no concerns about stale tokens lingering — matches the "stateless serverless" design from [ADR-001](/docs/RunnerForge/design/decisions).
+Auto-evicted when `run_sweep` returns. No cross-request state, no Redis, no concerns about stale tokens lingering — matches the "stateless serverless" design from [ADR-001](/docs/design/decisions).
 
 ## Race: webhook + sweep both deleting
 

@@ -1,5 +1,6 @@
 ---
 title: Terraform Stale State Lock
+description: Plan or apply fails with "Error acquiring the state lock".
 ---
 
 ## Symptom
@@ -22,13 +23,15 @@ Lock Info:
 
 Terraform's GCS backend acquires a state lock via a `.tflock` object before plan/apply, releases on exit. If a previous run **crashed or was force-cancelled mid-execution** (worker died, GH Actions timeout, manual cancel during apply), the lock object remains and blocks subsequent runs.
 
-`-lock-timeout=5m` (set in `tfaction-root.yaml`) already handles legitimate concurrent operations by waiting. A failure after that timeout means the lock is genuinely stale.
+Cancellation is built into two workflows: `qualify.yaml` and `drift-detection.yaml` both set `cancel-in-progress: true`, so a new push to a PR (or a newer drift run) cancels a plan that may be holding the lock. `deploy-infra.yaml` does not cancel in-progress applies.
+
+Nothing in this repo sets a lock timeout (`tfaction-root.yaml` has none). A legitimate concurrent run looks exactly like a stale lock in the error, which is why the next step matters.
 
 ## First step — confirm it's actually stale
 
 Before force-unlocking, verify no other operation is in progress:
 
-1. Check **GitHub Actions** for any currently-running `deploy-infra` or `Qualify` workflow that includes the infra job.
+1. Check **GitHub Actions** for any currently-running `deploy-infra`, `Qualify` (with the infra job) or `Drift Detection` workflow.
 2. Confirm no team member is running `terraform apply` locally (single-operator project, so usually just you).
 3. Look at the lock's `Created` timestamp in the error — if it's hours old with no in-flight runs, it's stale.
 
@@ -50,4 +53,4 @@ After force-unlock, re-run the failed workflow:
 
 ## When NOT to force-unlock
 
-If GitHub Actions shows an in-flight `deploy-infra` or qualify run, **wait for it to finish**. Force-unlocking during a legitimate operation can corrupt state. The `-lock-timeout=5m` is your safety net here.
+If GitHub Actions shows an in-flight `deploy-infra`, Qualify or Drift Detection run, **wait for it to finish**, then re-run. Force-unlocking during a legitimate operation can corrupt state.

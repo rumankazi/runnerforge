@@ -1,4 +1,118 @@
 ---
 title: Getting Started
-descriptin: Guide
+description: How to get access to RunnerForge and run your first GitHub Actions job on it.
 ---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+RunnerForge gives your GitHub Actions jobs a fresh Linux VM on Google Cloud for each job. You add a
+`runnerforge` label to `runs-on`. RunnerForge boots a VM, registers it as a self-hosted runner on
+your repository, runs the job, and deletes the VM.
+
+## Current status
+
+<Callout type="warn" title="The beta is not open yet">
+  The RunnerForge GitHub App is **private** today, so only the maintainer can install it. The steps
+  below describe how the free beta will work once it opens. You can already file an
+  [access request](https://github.com/rumankazi/runnerforge/issues/new?template=request-access.yml)
+  so you're on the list.
+</Callout>
+
+What the beta will be:
+
+- **Free.** Runners run on RunnerForge's own Google Cloud project. There is no billing and no
+  "bring your own GCP project" mode.
+- **Approved manually.** Only installations on an allow-list get VMs. An installation is one GitHub
+  personal account or one organization. Both kinds are supported.
+- **Best effort.** There is no SLA. Read [Limits](/docs/guides/limits) before you rely on it.
+
+## How the beta works
+
+<Steps>
+<Step>
+
+### Install the GitHub App
+
+Install the RunnerForge App on your personal account or organization. The install link will be
+published here when the beta opens. Pick **Only select repositories** and choose the repositories
+you want runners for. [Trust & threat model](/docs/design/trust) explains what the App can and
+cannot do.
+
+Installing alone does not start anything. Until your installation is approved, jobs that ask for
+`runnerforge` stay queued.
+
+</Step>
+<Step>
+
+### Find your installation ID
+
+The installation ID is the number at the end of the App's settings URL.
+
+- **Personal account:** go to **Settings → Applications → Installed GitHub Apps** and click
+  **Configure** next to RunnerForge. The URL is `https://github.com/settings/installations/<id>`.
+- **Organization:** go to the organization's **Settings → GitHub Apps** and click **Configure** next
+  to RunnerForge. The URL is `https://github.com/organizations/<org>/settings/installations/<id>`.
+
+</Step>
+<Step>
+
+### Request access
+
+Open a [request-access issue](https://github.com/rumankazi/runnerforge/issues/new?template=request-access.yml)
+with your installation ID, the repositories, and the job sizes and volume you expect. The issue is
+public, so don't put anything secret in it.
+
+</Step>
+<Step>
+
+### Wait for approval
+
+The maintainer reviews the request and adds your installation ID to the allow-list. The list is
+part of the deployed configuration (`allowed_installation_ids` in `infra/terraform/variables.tf`),
+and a change to it only takes effect with the next orchestrator release, so approval is not
+instant. You'll get a reply on the issue.
+
+</Step>
+<Step>
+
+### Run a job
+
+Add `runnerforge` to `runs-on`:
+
+```yaml title=".github/workflows/ci.yaml"
+name: CI
+on: [push]
+
+jobs:
+  test:
+    runs-on: [self-hosted, runnerforge, small]
+    steps:
+      - uses: actions/checkout@v6
+      - run: uname -a && nproc && df -h
+```
+
+`small` picks the VM size. Leave it out to get the default (`medium`). Add `spot` to get a cheaper
+VM that Google Cloud can reclaim mid-job. [Runner labels](/docs/guides/runner-labels) lists every
+label RunnerForge understands.
+
+</Step>
+</Steps>
+
+## What happens to a job
+
+1. GitHub sends RunnerForge a `workflow_job` webhook when the job is queued.
+2. RunnerForge checks that your installation is approved and that it understands every label in
+   `runs-on`. If either check fails, it does nothing and the job stays queued (see
+   [Runner labels](/docs/guides/runner-labels#when-a-job-is-rejected)).
+3. It creates a VM from the [runner image](/docs/guides/runner-image). The VM registers as an
+   ephemeral runner on your repository and takes exactly one job.
+4. When GitHub reports the job as completed, RunnerForge deletes the VM. A VM is also deleted after
+   at most 6 hours 15 minutes of runtime, whatever happens to the webhook.
+
+## Next steps
+
+- [Runner labels](/docs/guides/runner-labels): sizes, spot, and literal machine types.
+- [Limits](/docs/guides/limits): what the beta can and can't do today.
+- [Runner image](/docs/guides/runner-image): what's installed on the VM.
+- Need a bigger machine or a longer runtime? Use the
+  [request-more-resources form](https://github.com/rumankazi/runnerforge/issues/new?template=request-more-resources.yml).

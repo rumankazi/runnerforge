@@ -1,0 +1,101 @@
+---
+title: Runner labels
+description: The runs-on labels RunnerForge understands, how they map to VM sizes, and what happens when a label is rejected.
+---
+
+You choose the VM through `runs-on`. RunnerForge reads the job's labels from the `workflow_job`
+webhook and turns them into a Google Compute Engine machine type. The rules live in
+`apps/orchestrator/src/runnerforge/machine_policy.py`.
+
+```yaml
+runs-on: [self-hosted, runnerforge, large, spot]
+```
+
+## The rules
+
+- **`runnerforge` is required.** Jobs without it are ignored, so other runners can still take them.
+- **Matching is case-insensitive**, like GitHub's own matching. `RunnerForge` and `Linux` work.
+- **Every other label must be one RunnerForge understands.** One unknown label rejects the whole job.
+- **At most one size.** Use either a size name or a literal machine type, not both, and not two of
+  either.
+
+| Label | Meaning |
+|---|---|
+| `runnerforge` | Required. Routes the job to RunnerForge. |
+| `self-hosted`, `linux`, `x64` | GitHub's default labels for a Linux x64 self-hosted runner. Accepted and ignored. |
+| `small`, `medium`, `large`, `xlarge` | VM size. See [Sizes](#sizes). |
+| A machine type such as `n2-highmem-4` | Literal GCE machine type. See [Literal machine types](#literal-machine-types). |
+| `spot` | Run on a Spot VM. See [Spot VMs](#spot-vms). |
+
+The VM registers as a runner with exactly the labels from your `runs-on`, plus GitHub's defaults, so
+GitHub matches it to your job.
+
+## Sizes
+
+| Label | Machine type | vCPUs | Memory |
+|---|---|---|---|
+| `small` | `n2-standard-2` | 2 | 8 GB |
+| `medium` | `n2-standard-4` | 4 | 16 GB |
+| `large` | `n2-standard-8` | 8 | 32 GB |
+| `xlarge` | `n2-standard-16` | 16 | 64 GB |
+
+With no size label, you get **`n2-standard-4`** (the same as `medium`).
+
+## Literal machine types
+
+Any label shaped like a GCE machine type is used as one: `family-type` or `family-type-N`, for
+example `e2-medium`, `n2-highmem-4`, or `n2-highcpu-8` (regex `^[a-z][a-z0-9]+-[a-z]+(?:-\d+)?$`,
+checked after lowercasing).
+
+When it starts, the orchestrator loads the list of machine types available in its zone. A label that
+fits the shape but isn't in that list, such as `ubuntu-latest`, is rejected. If that list couldn't be
+loaded, RunnerForge trusts the label and Compute Engine rejects the VM instead. Either way, the job
+gets no runner.
+
+<Callout type="warn" title="Shared capacity">
+  Literal types aren't restricted per installation yet. They draw on the same project-wide quotas
+  as everyone else, and some machine families have very small quotas. See
+  [Limits](/docs/guides/limits#shared-capacity). Prefer the size names unless you need a specific
+  shape.
+</Callout>
+
+## Spot VMs
+
+Add `spot` to run on a [Spot VM](https://cloud.google.com/compute/docs/instances/spot). Spot VMs
+cost less to run, which helps keep the beta free. In exchange, Compute Engine can reclaim
+(preempt) the VM at any time, and your job then fails or is cancelled. A preempted VM is deleted.
+RunnerForge doesn't retry the job; re-run it from GitHub.
+
+Use `spot` for jobs that are cheap to retry: tests, linters, builds without side effects. Avoid it
+for deploys or anything that must not stop halfway.
+
+RunnerForge doesn't tell you that a job was preempted. In GitHub you only see a failed or cancelled
+job.
+
+## When a job is rejected
+
+RunnerForge rejects a job, and creates no VM, when:
+
+- a label is unknown, such as `gpu`, `windows`, or `ubuntu-22.04`;
+- there's more than one size, such as `[runnerforge, small, large]` or
+  `[runnerforge, medium, n2-standard-8]`. Repeating the same size counts too;
+- a literal machine type doesn't exist in the zone;
+- your installation isn't on the allow-list (see [Getting Started](/docs/guides/getting-started)).
+
+<Callout type="error" title="There is no error message today">
+  RunnerForge doesn't report the rejection back to GitHub. The job sits at "Waiting for a runner to
+  pick up this job" until you cancel it or GitHub gives up on it. If a job never starts, check its
+  labels against this page first.
+</Callout>
+
+## Not supported
+
+- **Windows and macOS.** `windows` and `macos` are unknown labels.
+- **Arm.** `arm64` is an unknown label, and the [runner image](/docs/guides/runner-image) is x64
+  only, so Arm machine types such as `t2a-*` won't work either.
+- **GPUs.** There is no GPU label, and the image has no GPU drivers.
+- **Runner groups.** Runners are registered on your repository, not in an organization runner
+  group, so `runs-on: { group: ... }` won't match them.
+
+Need something bigger than `xlarge`, or a specific machine type for a regular workload? Use the
+[request-more-resources form](https://github.com/rumankazi/runnerforge/issues/new?template=request-more-resources.yml).

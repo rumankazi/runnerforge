@@ -5,7 +5,11 @@ description: The script that runs on every VM boot — mounts the data disk, fet
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-The startup script at [`/scripts/startup-script.sh`](https://github.com/rumankazi/runnerforge/blob/main/scripts/startup-script.sh) runs on **every VM boot** in production. It's the runtime bridge between a freshly-booted VM and a registered, job-executing GitHub Actions runner.
+<Callout type="info" title="Historical build log">
+  Historical snapshot from Phase 1. The code has changed since this was written. For the VM lifecycle today, see [Webhook flow](/docs/design/webhook-flow). The script now lives at `apps/orchestrator/src/runnerforge/scripts/startup_script.sh`.
+</Callout>
+
+The startup script at [`apps/orchestrator/src/runnerforge/scripts/startup_script.sh`](https://github.com/rumankazi/runnerforge/blob/main/apps/orchestrator/src/runnerforge/scripts/startup_script.sh) runs on **every VM boot** in production. It's the runtime bridge between a freshly-booted VM and a registered, job-executing GitHub Actions runner.
 
 This is a different concern from [install-runner.sh](/docs/development/phase-1/phase-1.6/install-runner), which runs once at *image build* time. See the [main index](/docs/development/phase-1/phase-1.6) for the lifecycle distinction.
 

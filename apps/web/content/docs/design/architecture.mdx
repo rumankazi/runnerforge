@@ -1,80 +1,158 @@
 ---
 title: Architecture
-description: Contains the architecture of RunnerForge
+description: Components, identities, and the two layers of RunnerForge.
 ---
-
-RunnerForge uses a two-layer architecture: a slow-changing infrastructure layer provisioned once, and a fast per-job orchestration layer that handles the webhook-driven runner lifecycle.
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-import diagram from '../../images/architecture-phase-1.excalidraw.json';
+RunnerForge has two layers. An **infrastructure layer** (Terraform, Packer) changes rarely and is applied
+through CI. A **per-job layer** (the orchestrator) reacts to every `workflow_job` webhook by creating or
+deleting one VM.
 
-<Excalidraw data={diagram} />
+```text
+GitHub ──workflow_job──▶ Cloud Run: orchestrator ──insert/delete──▶ GCE runner VMs (europe-west4-a)
+   ▲                         │  ▲                                        │
+   │   registration token ◀──┘  └── POST /sweep (Cloud Scheduler, daily) │
+   └──────────────── runner registers itself, runs one job ◀── Cloud NAT ┘
+```
 
 ## Components
 
 ### GitHub App
 
-The GitHub App serves two purposes: it receives webhook events and authenticates with the GitHub API. Users install the app on their repositories, and GitHub automatically sends `workflow_job` webhook events to the configured endpoint whenever a runner is needed or a job completes.
+The App is **private** today. Each installation (one GitHub user or organization) is a tenant. The
+orchestrator acts only on `workflow_job` events. GitHub also sends `ping`, `installation` and similar
+events, which the orchestrator acknowledges and ignores.
 
-The app is configured with a webhook URL (the Cloud Run endpoint), a webhook secret for signature validation, and permissions scoped to `workflow_job` events only.
+Minimum permissions, checked on every installation token the orchestrator mints (`models.Permissions`;
+a token without them fails validation):
 
-### Cloud Run — the orchestrator
+| Permission | Used for |
+| --- | --- |
+| Actions: read | `workflow_job` webhooks; `GET /repos/{repo}/actions/jobs/{id}` in the sweep |
+| Administration: read & write | `POST /repos/{repo}/actions/runners/registration-token` only |
+| Metadata: read | Required by GitHub for repository access; not called directly |
 
-A single Cloud Run service running a FastAPI application. This is the brain of the system. It receives webhook POSTs, validates signatures, routes events by type, and manages the VM lifecycle.
+Why Administration is needed, and what bounds it, is on [Trust & threat model](/docs/design/trust).
 
-Cloud Run scales to zero when no webhooks are arriving — zero running containers, zero cost. When a webhook hits the endpoint, Cloud Run spins up a container in under a second to handle the request. Each request runs in its own isolated container instance with a concurrency setting of 1, so concurrent webhooks are handled by separate containers automatically.
+### Orchestrator (Cloud Run)
 
-The FastAPI app contains:
+A FastAPI service, `runnerforge-orchestrator`, in `europe-west4` (`infra/terraform/cloud_run.tf`):
 
-- **POST /webhook** — the single entry point. Validates the HMAC-SHA256 signature, parses the payload, and routes to the appropriate handler.
-- **Event router** — reads the `action` field from the webhook payload and dispatches to the queued handler or the completed/failed handler.
-- **GitHub client** — handles the GitHub App authentication chain and requests registration tokens.
-- **Compute client** — calls the GCE API to create and delete VMs.
-- **POST /sweep** — a separate endpoint triggered by Cloud Scheduler on a cron schedule to clean up orphaned VMs.
+- **Scaling:** 0 to 50 instances, up to 10 concurrent requests each, with 1 vCPU and 512 MiB.
+- **Ingress:** public (`allUsers` invoker), because GitHub posts from many IPs. Each route does its own auth.
+- **Routes:**
+  - `POST /webhook` checks the HMAC signature. See [Webhook flow](/docs/design/webhook-flow).
+  - `POST /sweep` accepts only a Cloud Scheduler OIDC token for the expected service account and audience.
+  - `GET /health` is a liveness probe.
+- **Modules:** `handlers.py` (per-action logic), `machine_policy.py` (labels → machine type),
+  `github_client.py` (App JWT → installation token → registration token), `compute_client.py` (GCE),
+  `sweep.py`, `security.py`.
+- **Deploys:** on each orchestrator release, `deploy-orchestrator.yaml` builds the image and signs it with
+  Cosign. It starts a new revision on 5% traffic, then ramps to 100% after approval.
 
-### GCE VMs — ephemeral runners
+<Callout type="warn" title="Env var changes ship with the next release">
+  Terraform owns the service's env vars, but production traffic is pinned to the revision CD deployed.
+  A revision created by `terraform apply` gets no traffic. A changed env var, such as a new entry in
+  `allowed_installation_ids`, takes effect with the next orchestrator release.
+</Callout>
 
-{/* TODO: Add context around what is ephemeral runners, spot vms, etc. for differentiating. */}
+### Installation allow-list
 
-Each runner is an isolated GCE VM created from a pre-baked Packer image. The VM boots, a startup script reads the registration token from instance metadata, configures the GitHub Actions runner binary with the correct labels, and starts the runner process in ephemeral mode (`--ephemeral`).
+`ALLOWED_INSTALLATION_IDS` (from the Terraform variable `allowed_installation_ids`) controls which
+installations can create VMs:
 
-The runner registers itself with GitHub — the orchestrator never tells GitHub about the runner directly. GitHub sees the newly registered runner, matches it to the queued job by labels, and assigns the job. After the job completes, the runner process exits. The orchestrator receives a `completed` webhook and deletes the VM.
+- **Unset:** every installation is allowed. This is meant for self-hosting, and it logs a startup warning.
+- **Empty string** (an empty Terraform list): nobody is allowed. This works as a kill switch.
+- **Comma-separated IDs:** only those installations are allowed. A malformed ID makes the new revision
+  fail at startup, so it never takes traffic.
 
-VMs are tagged with labels including `job_id`, `repo`, and `runner=runnerforge`, which allows the orchestrator to find and manage them via the GCE API without needing a separate database.
+Only `queued` events are gated. `in_progress` and `completed` always pass, so VMs of a removed installation
+are still cleaned up.
 
-### Packer image
+### Runner VMs
 
-Packer builds a custom GCE VM image ahead of time with everything pre-installed: the GitHub Actions runner binary, Docker, and any common dependencies workflows might need. This image is stored in the GCP project as a custom image.
+A runner VM is **ephemeral**: the runner registers with `--ephemeral`, runs one job and exits. The VM is
+never reused. **Spot** is a separate choice that controls how the VM is billed. A job opts in with the
+`spot` label. Spot VMs are cheaper but GCE can reclaim them mid-job. For a failed or cancelled job, the
+orchestrator checks the audit log and logs `Job ended due to spot preemption` if GCE reclaimed the VM.
 
-When a VM boots from this image, there is no installation step — the software is already on disk. The startup script only needs to configure the runner for the specific job (set the registration token, labels, and repo URL) and start the process. This cuts boot-to-ready time from 4–5 minutes (stock image + install) to approximately 35 seconds.
+Every VM (`compute_client.create_vm`):
+
+- **Location:** zone `europe-west4-a`, on the `default` network.
+- **Networking:** no external IP. Egress goes through Cloud NAT (`runnerforge-nat`, auto-allocated IPs;
+  `network.tf`, ADR-009).
+- **Disks:** a 10 GB boot disk from the runner image, and a 50 GB `pd-balanced` data disk mounted at
+  `/home/runner/actions-runner/_work`. Both auto-delete with the VM.
+- **Runtime cap:** GCE deletes the VM after 6 h 15 min of running (`max_run_duration`, termination action
+  `DELETE`). That is GitHub's default 6 h job timeout plus 15 min for boot.
+- **Service account:** `runnerforge-runner-vm`, which has only `roles/logging.logWriter`.
+- **Labels** (copied onto both disks for cost attribution): `runner=runnerforge`, `job_id`, `run_id`,
+  `run_attempt`, `repository_id`, `installation_id`, `queued_received_at`, and the queued webhook's
+  trace and span IDs.
+- **Metadata:** `registration-token`, `repo-url`, `runner-labels`, `startup-script`.
+
+The startup script (`runnerforge/scripts/startup_script.sh` in the orchestrator package) mounts the data
+disk, reads the metadata, and registers the runner under the VM's own name. That is why a `completed` event's `runner_name` names the VM to delete.
+
+### Runner image
+
+Packer (`infra/packer/`) builds on Debian 12. It bakes in the GitHub Actions runner (version pinned in
+`infra/packer/scripts/install-runner.sh`), its dependencies, Docker, and the Cloud Ops Agent.
+`deploy-runner-image.yaml` builds the image, smoke-tests it on a real VM, and promotes it into the `runnerforge-runner` image
+family. It then deprecates
+everything older than the five newest images, with deletion after 30 days. A rollback deprecates the bad
+image, and the family falls back to the next newest.
+
+**Pinning:** each orchestrator instance resolves the family to a concrete image once, at startup
+(`init_runner_image`), and creates every VM from that image. So a newly promoted image is used only by
+orchestrator instances that start after it: after a deploy, a scale-out, or a scale from zero. If the
+lookup fails, VMs boot from the family alias. The image lives in `RUNNER_IMAGE_PROJECT`, which defaults to
+`GCP_PROJECT_ID`.
 
 ### Terraform
 
-Terraform provisions all the slow-changing infrastructure: the Cloud Run service, IAM roles and service accounts, networking configuration, Cloud Scheduler jobs, and any other GCP resources. This runs once (or when infrastructure changes), not per job.
+A single root module in `infra/terraform/` with a GCS backend. Pull requests get a plan (tfaction) and OPA
+policy checks (`infra/policies/`). On merge to `main`, `deploy-infra.yaml` applies after approval in the
+`prod-infra` environment. A daily drift check (`drift-detection.yaml`) opens issues.
+Terraform covers Cloud Run, Cloud Scheduler, NAT, IAM, Workload Identity Federation for CI, secrets, observability (metrics, dashboard, SLOs, alerts), and quota preferences (`quotas.tf`).
 
-The separation is deliberate: Terraform handles what changes rarely, the FastAPI app handles what changes per job. Different tools, different lifecycles, different concerns.
+## Identities
 
-## Two-layer separation
+| Service account | Roles | Why |
+| --- | --- | --- |
+| Orchestrator | `compute.instanceAdmin.v1`, `compute.imageUser` | Create and delete VMs from the runner image |
+| | `iam.serviceAccountUser` on the runner VM SA | Attach that SA to the VMs it creates |
+| | `secretmanager.secretAccessor` on two secrets | Read the webhook secret and the App private key |
+| | `logging.logWriter`, `logging.viewer`, `cloudtrace.agent` | Write logs and traces; read audit logs for the preemption check |
+| `runnerforge-runner-vm` | `logging.logWriter` | Ship VM logs. Nothing else. |
+| `runnerforge-scheduler` | none (signs OIDC tokens) | Identity that `/sweep` accepts |
 
-| Layer          | What it does                                              | How often             | Tool                 |
-| -------------- | --------------------------------------------------------- | --------------------- | -------------------- |
-| Infrastructure | Provisions Cloud Run, IAM, networking, scheduler          | Once / on change      | Terraform            |
-| Image building | Builds runner VM image with pre-installed dependencies    | On dependency updates | Packer               |
-| Orchestration  | Receives webhooks, creates/deletes VMs, manages lifecycle | Per job               | FastAPI on Cloud Run |
+These are the runtime identities (`iam.tf`, `runner_vm.tf`, `scheduler.tf`). CI authenticates through
+Workload Identity Federation with its own service accounts (`wif.tf`, `runner_image.tf`, `terraform_ci.tf`).
 
-## Cost model
+## What changes when
 
-When idle — no jobs running, no developers pushing code — the entire system costs effectively nothing:
+| Layer | Owns | Changes | Tool |
+| --- | --- | --- | --- |
+| Infrastructure | Cloud Run service, IAM, NAT, scheduler, observability, quotas | On merge, after approval | Terraform via CI |
+| Image | Runner binary, Docker, OS packages | On a `runner-image` release | Packer via CI |
+| Per job | One VM per queued job, deleted on completion | Every webhook | Orchestrator |
 
-- Cloud Run: sleeping at zero instances, $0.
-- GCE VMs: none exist, $0.
-- Packer image: stored in GCP, pennies per month.
-- Networking: no traffic, $0.
-  When a job runs, the cost is the Cloud Run request time (fractions of a cent for a few seconds of compute) plus the GCE VM for the duration of the job (a few cents for a small VM running 5–10 minutes).
+## Cost when idle
 
-<Callout type="idea" title="Why not GKE?">
-  GKE was rejected specifically because its control plane costs ~$72/month regardless of usage. For
-  a portfolio project with sporadic traffic, true zero idle cost is the dominant design goal. See
-  [ADR-001](/docs/RunnerForge/decisions) for the full rationale.
-</Callout>
+With no jobs, Cloud Run sits at zero instances and no runner VM is running. What remains is mostly
+storage (runner images, container images, logs, secrets, Terraform state) plus any fixed charges of the
+supporting services, such as Cloud NAT. Cloud Run over GKE was chosen for this (ADR-001 in
+[Decisions](/docs/design/decisions)).
+
+## Where this is going
+
+These are planned, not built:
+
+- **Free hosted beta.** RunnerForge runs the VMs in its own GCP project. Installations join by manual
+  approval (the allow-list today, a tenant registry later) and get per-installation limits.
+- **Self-hosting.** Run the whole backend (orchestrator, image, infrastructure) in your own GCP project. The
+  unset allow-list default and the separate `RUNNER_IMAGE_PROJECT` already lean this way.
+
+Bring-your-own GCP project for the hosted service and paid billing are deferred.

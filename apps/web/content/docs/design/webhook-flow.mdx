@@ -1,136 +1,189 @@
 ---
 title: Webhook flow
-description: The per-job lifecycle — what happens for each webhook event type.
+description: What the orchestrator does for each workflow_job action, and how the sweep and runtime cap catch the rest.
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 
-Every runner lifecycle is driven by GitHub webhook events. The orchestrator receives a single POST to `/webhook` and routes based on the `action` field in the payload.
+GitHub `workflow_job` webhooks drive the whole runner lifecycle. `POST /webhook` handles every action
+(`main.py`). Two backstops cover anything the webhooks miss: a daily sweep (`sweep.py`) and a runtime cap that
+GCE enforces on every VM.
 
-## Event types
+## Every request
 
-GitHub sends `workflow_job` webhooks with the following actions:
+<Steps>
+  <Step>
+    **Signature.** The orchestrator computes an HMAC-SHA256 of the raw body with the webhook secret and
+    compares it to `X-Hub-Signature-256` in constant time. A mismatch returns **401**. A request missing
+    `X-Hub-Signature-256` or `X-GitHub-Event` is rejected with **422** before this check.
+  </Step>
+  <Step>
+    **Event type.** The orchestrator dispatches on the `X-GitHub-Event` header, not on the payload's shape.
+    Anything other than `workflow_job` (`ping`, `installation`, `installation_repositories`, …) gets a
+    **200** and is ignored.
+  </Step>
+  <Step>
+    **Parse.** A body that isn't JSON returns **400**. A body that doesn't match the `WorkflowJobEvent`
+    model returns **500**, because that usually means GitHub changed its payload.
+  </Step>
+  <Step>
+    **RunnerForge filter.** A job with no `runnerforge` label (case-insensitive) gets a **200** and nothing
+    else happens. This keeps traffic for GitHub-hosted runners and your other runners cheap.
+  </Step>
+  <Step>
+    **Allow-list (`queued` only).** If `ALLOWED_INSTALLATION_IDS` is set and doesn't contain the event's
+    installation, the orchestrator logs `Installation not allowed` and returns **200**. No VM is created.
+  </Step>
+  <Step>
+    **Accepted.** The orchestrator logs `Webhook event received` with `event_type`. This comes after the
+    gate on purpose, so rejected installations don't count toward the lost-webhook alert.
+  </Step>
+</Steps>
 
-- **`queued`** — a job needs a runner. This triggers VM creation.
-- **`in_progress`** — a runner picked up the job. Logged for observability, no action needed.
-- **`completed`** — the job finished (success or failure). This triggers VM cleanup.
+## Queued
 
-<Callout type="warn" title="Webhooks are one-shot">
-  GitHub sends each event exactly once. There are no repeated pings for queued jobs — if a webhook is lost, the job stays queued indefinitely until the orphan-cleanup sweep catches it.
+<Steps>
+  <Step>
+    **Resolve labels** to a machine type and spot flag (see [Label parsing](#label-parsing)). A rejected
+    label set logs `Machine policy rejected` with a `reason` and returns 200 with no VM.
+  </Step>
+  <Step>
+    **Get a registration token.** The App JWT is exchanged for an installation token. That token then
+    mints a registration token for the repo. Calls that hit network errors or 5xx responses are tried up to 3 times.
+  </Step>
+  <Step>
+    **Create the VM** named `runnerforge-{run_id}-{job_id}-{run_attempt}`. Its metadata holds the token,
+    the repo URL and the job's labels. The VM's own labels identify it (see
+    [Architecture](/docs/design/architecture#runner-vms)). The call submits the insert and doesn't wait.
+  </Step>
+  <Step>
+    **Return 200.** A background task polls the GCE operation for up to 300 s and logs `VM creation outcome`
+    (`success`, `failure` or `timeout`).
+  </Step>
+</Steps>
+
+The VM's startup script then mounts the data disk, runs `config.sh --ephemeral` with the VM name as the
+runner name, and starts the runner. The runner registers with GitHub, and GitHub assigns it a matching
+queued job.
+
+<Callout type="warn" title="A rejected job stays queued">
+  When the allow-list or the label policy rejects a job, GitHub still shows it as queued. Unless another
+  of your runners matches its labels, no runner will come, and the job waits until GitHub's own queue
+  timeout fails it.
 </Callout>
 
-## Webhook validation
+### Label parsing
 
-Every incoming request is validated before processing:
+`machine_policy.resolve_labels` runs on the job's `runs-on` labels, case-insensitively:
 
-<Steps>
-  <Step>Read the raw request body.</Step>
-  <Step>Compute HMAC-SHA256 of the body using the webhook secret (configured when creating the GitHub App).</Step>
-  <Step>Compare the result against the `X-Hub-Signature-256` header.</Step>
-  <Step>If they don't match, reject the request with 401.</Step>
-</Steps>
+| Label | Effect |
+| --- | --- |
+| `runnerforge` | Required. Routes the job to RunnerForge. |
+| `self-hosted`, `linux`, `x64` | Accepted and ignored. GitHub adds these to every runner we boot. |
+| `spot` | Use a Spot VM. |
+| `small` / `medium` / `large` / `xlarge` | `n2-standard-2` / `-4` / `-8` / `-16` |
+| A literal GCE type, such as `e2-standard-4` | Used as is if it exists in the zone, checked against a list cached at startup. Otherwise rejected (`invalid_machine_type`). If the list failed to load, the type is passed through and GCE rejects a bad one on insert. |
+| No size label | `n2-standard-4` |
+| Two machine labels | Rejected (`conflicting_machines`) |
+| Anything else not shaped like a machine type, including `windows`, `macos`, `arm64` | Rejected (`unknown_token`) |
 
-This ensures the webhook genuinely came from GitHub, not a random POST to the endpoint.
+### Duplicates and re-runs
 
-## Queued flow
+The VM name is deterministic. If a `queued` event is delivered twice, for example redelivered by hand from
+the App's delivery log, the second insert fails with `AlreadyExists`. The orchestrator logs `VM already exists` and creates no second VM.
+A re-run of the job has a new `run_attempt`, so it gets a new name and a new VM.
 
-When `action` is `queued`, the orchestrator runs:
+## In progress
 
-<Steps>
-  <Step>
-    **Parse the payload.** Extract `workflow_job.id` (the job ID), `workflow_job.labels` (the requested runner labels like `self-hosted`, `linux`, `large`), `repository.full_name` (the repo), and `installation.id` (for authentication).
-  </Step>
-  <Step>
-    **Authenticate with GitHub.** Use the GitHub App's private key to generate a JWT, exchange it for an installation access token, then request a registration token for the target repository.
-  </Step>
-  <Step>
-    **Create the GCE VM.** Call the GCE API to create a VM with:
-    - The Packer-built custom image as the boot disk.
-    - Instance metadata containing the registration token and repo URL.
-    - VM labels: `job_id={id}`, `repo={owner-repo}`, `runner=runnerforge`, `labels={requested-labels}`.
-    - Machine type selected based on the requested labels (mapping defined in configuration).
-  </Step>
-  <Step>
-    **Log structured data.** Log a JSON object with the job ID, repo, labels, and timing for each step (`token_fetched_ms`, `vm_created_ms`, `total_ms`).
-  </Step>
-  <Step>
-    **Return 200.** The orchestrator's job is done. The VM boots independently.
-  </Step>
-</Steps>
+There is no VM action. The orchestrator finds the VM booted for this job by its `job_id`, `run_id` and
+`run_attempt` labels, then:
 
-After the orchestrator returns, the VM lifecycle continues on its own:
+- parents this request's trace under the queued request's trace, so registration shows up as one trace;
+- logs `Runner registration outcome` with `runner_readiness_seconds`, the time from receiving the queued
+  webhook to the job starting. This is the source of the time-to-register SLO.
 
-<Steps>
-  <Step>VM boots from the Packer image (~30 seconds).</Step>
-  <Step>The startup script reads the registration token from instance metadata.</Step>
-  <Step>The runner binary is configured with `./config.sh --url {repo_url} --token {token} --labels {labels} --ephemeral --unattended`.</Step>
-  <Step>The runner starts with `./run.sh`.</Step>
-  <Step>The runner process registers itself with GitHub.</Step>
-  <Step>GitHub matches the runner to the queued job by labels and assigns it.</Step>
-  <Step>The runner executes the job.</Step>
-</Steps>
+## Completed
 
-## Completed flow
-
-When `action` is `completed`:
+`completed` covers every way a job ends; the `conclusion` field (`success`, `failure`, `cancelled`, …)
+says which. The orchestrator
+deletes the VM named by the event's `runner_name`, which is the VM that actually ran the job. Before
+deleting, it checks:
 
 <Steps>
   <Step>
-    **Parse the payload.** Extract `workflow_job.id` and `workflow_job.conclusion` (success, failure, cancelled).
+    **There is a runner.** A job cancelled before any runner picked it up has no `runner_name`. There is
+    nothing to delete. The sweep or the runtime cap removes the VM that was booted for it.
   </Step>
   <Step>
-    **Find the VM.** Call the GCE API to list VMs filtered by label `job_id={id}`.
+    **The name has the `runnerforge-` prefix.** Otherwise it's one of your own runners, so it's skipped
+    quietly.
   </Step>
   <Step>
-    **Delete the VM.** If a matching VM is found, delete it. If no VM is found (it may have already been cleaned up or never created), log a warning and move on.
+    **The VM exists.** If it's already gone, that's logged as an idempotent no-op.
   </Step>
   <Step>
-    **Log structured data.** Log the job ID, conclusion, VM deletion result, and timing.
-  </Step>
-  <Step>
-    **Return 200.**
+    **The VM is ours and belongs to this installation.** Whoever registers a runner chooses its name, so the
+    prefix alone proves nothing. The VM's labels must say `runner=runnerforge`, and its `installation_id`
+    must equal the event's installation. If they don't, the orchestrator logs
+    `Refusing to delete VM not owned by this installation` and leaves the VM alone.
   </Step>
 </Steps>
 
-The `--ephemeral` flag on the runner means the runner process exits after one job, but the VM itself does not self-delete — a process cannot easily delete the machine it is running on. The orchestrator handles VM deletion via this webhook.
+After the delete is submitted, a `failure` or `cancelled` conclusion starts a background audit-log check for
+Spot preemption.
 
-## Failed and cancelled jobs
+### Job swaps
 
-The `completed` webhook covers both successful and failed jobs — the `conclusion` field indicates the outcome. There is no separate `failed` action. The cleanup logic is identical regardless of conclusion: find the VM by `job_id` label and delete it.
+A runner takes **any** queued job in its repo whose labels match, not only the job it was booted for. VM X,
+booted for job X, may run job Y while job X runs on VM Y. Webhook cleanup still works because it deletes by
+`runner_name`, the VM that actually ran the job. Labels like `job_id` record why a VM was booted, not which
+job it ran.
 
-If a job is cancelled before a runner picks it up, GitHub may send a `completed` webhook with `conclusion: cancelled`. The VM might still be booting or registering. The orchestrator still attempts to find and delete it.
-
-## Orphan cleanup sweep
-
-Since webhooks are one-shot (not retried indefinitely), there are failure scenarios where a VM is created but the cleanup webhook is never received:
-
-- The orchestrator crashes after creating the VM but before returning 200, causing GitHub to retry and potentially create a duplicate.
-- A network issue causes the `completed` webhook to be lost entirely.
-- A VM fails to boot or the runner fails to register, so the job times out on GitHub's side but the VM still exists.
-
-To handle these, Cloud Scheduler triggers a `POST /sweep` endpoint on a regular interval (every 10 minutes):
-
-<Steps>
-  <Step>List all GCE VMs with label `runner=runnerforge`.</Step>
-  <Step>For each VM, check the creation timestamp.</Step>
-  <Step>
-    If a VM is older than the maximum allowed duration (e.g., 2 hours):
-    - Check the job status via the GitHub API using the `job_id` label.
-    - If the job is completed, cancelled, or no longer exists, delete the VM.
-    - If the job is somehow still running past the hard limit, delete the VM anyway — something is wrong.
-  </Step>
-  <Step>Log all actions taken for observability.</Step>
-</Steps>
-
-<Callout type="info" title="Safety net">
-  The webhook-driven cleanup handles the happy path; the sweep catches everything else. Both paths are required — one alone is not enough.
+<Callout type="warn" title="Known gap: the sweep and swapped jobs">
+  The sweep checks the job a VM was booted for (`job_id` label), not the job it is running. Suppose VM X is over
+  an hour old and still running job Y, and job X has already finished on another VM. A sweep at that moment
+  deletes VM X in the middle of job Y.
 </Callout>
+
+## Sweep
+
+Cloud Scheduler job `runnerforge-sweep` calls `POST /sweep` daily at **00:12 UTC** (`scheduler.tf`) with an
+OIDC token. The orchestrator verifies the token's audience and its service-account email. It lists VMs
+labelled `runner=runnerforge` and skips any whose labels don't parse. For each remaining VM:
+
+| Age / state | Decision |
+| --- | --- |
+| Younger than 1 h | Skip (`too_young`). The webhooks should handle it. |
+| Older than 6 h 15 min (`MAX_VM_RUN_DURATION`) | Delete (`hard_limit`), whatever the job status. |
+| `repo-url` metadata missing or not a `https://github.com/` URL | Skip (`unknown_repo`). The hard limit still applies later. |
+| GitHub says the job is `completed`, or returns 404 | Delete (`job_completed`) |
+| Otherwise | Skip (`job_running`) |
+
+The repo comes from the VM's `repo-url` metadata, never from labels. GCE label values are lowercase and at
+most 63 characters, so they can't hold an exact `owner/repo`. Asking GitHub about a guessed repo would get a
+404, which reads as "orphan". If one VM fails, the error is recorded and the sweep moves on to the next. The
+response reports `checked`, `deleted`, `skipped` and `errors`.
+
+## Runtime cap
+
+Every VM is created with `max_run_duration` = 6 h 15 min and termination action `DELETE`. GCE deletes the VM
+and its disks even if both the webhook and the sweep miss it. That is GitHub's default 6 h job timeout plus
+15 min for boot and registration.
+
+## What isn't recovered
+
+GitHub doesn't retry failed webhook deliveries.
+
+- **A lost `queued` webhook** means no VM is created, and nothing recreates it. The job waits until GitHub's
+  queue timeout. The `lost_webhook_ratio` alert only catches queued webhooks that were accepted but produced
+  no VM creation (label-policy rejections and duplicates count here too), not ones that never arrived.
+- **A lost `completed` webhook** leaves the VM running. The first sweep after the VM is 1 h old deletes it if its
+  job is done. Otherwise the runtime cap deletes it.
 
 ## Concurrency
 
-Multiple webhooks arriving simultaneously are handled by Cloud Run's auto-scaling. Each webhook request gets its own container instance (concurrency set to 1). The containers are fully isolated and share no state.
-
-Two jobs requesting the same labels at the same time: each gets its own VM, each VM registers independently, GitHub assigns them to their respective jobs via label matching and queue ordering.
-
-Duplicate webhooks for the same job (rare, caused by network retries): the second request creates a second VM. The extra VM registers with GitHub but finds no matching queued job. The orphan cleanup sweep deletes it.
+Each Cloud Run instance handles up to 10 requests at once, and the service scales to 50 instances. No job
+state lives in the orchestrator process (only API clients and startup caches); the only shared job state
+is GCE itself. Simultaneous jobs with the same labels each get their
+own VM, and GitHub hands the runners out to queued jobs, which is where swaps come from.

@@ -1,5 +1,66 @@
 ---
 title: Runbooks
+description: What to do when an alert fires or a Terraform pipeline gets stuck.
 ---
 
-Collection of runbooks.
+import { Card, Cards } from 'fumadocs-ui/components/card';
+
+Each alert runbook follows the same shape: Symptom, Impact, Diagnose (read-only commands), Mitigate (changes,
+marked as such), Escalate. Every alert email comes from the "RunnerForge Alerts" channel and carries the policy's
+display name; each runbook's Symptom section quotes it. For how the alerts are defined, see
+[Observability](/docs/design/observability#alert-policies).
+
+## Alerts
+
+<Cards>
+  <Card
+    title="Availability SLO fast burn"
+    description="CRITICAL. Too many 5xx from the orchestrator: webhooks GitHub won't redeliver."
+    href="/docs/guides/runbooks/webhook-availability"
+  />
+  <Card
+    title="Time-to-Register SLO fast burn"
+    description="CRITICAL. Runners taking more than 300 s from our queued receipt to job start."
+    href="/docs/guides/runbooks/time-to-register"
+  />
+  <Card
+    title="VM creation failures"
+    description="ERROR. More than 5% of GCE create operations failing or timing out."
+    href="/docs/guides/runbooks/vm-creation-failures"
+  />
+  <Card
+    title="Lost webhooks"
+    description="ERROR. Queued jobs accepted without a VM being submitted."
+    href="/docs/guides/runbooks/lost-webhooks"
+  />
+  <Card
+    title="Webhook rejections"
+    description="WARNING. Sustained 4xx on /webhook: probes, or a webhook secret mismatch."
+    href="/docs/guides/runbooks/webhook-rejections"
+  />
+  <Card
+    title="Cold-start latency"
+    description="WARNING. Orchestrator instances taking more than 30 s to start."
+    href="/docs/guides/runbooks/cold-start-latency"
+  />
+  <Card
+    title="Instance saturation"
+    description="WARNING. More than 40 of the 50 allowed Cloud Run instances in use."
+    href="/docs/guides/runbooks/instance-saturation"
+  />
+</Cards>
+
+## Terraform
+
+<Cards>
+  <Card
+    title="Terraform drift detected"
+    description="The daily drift check found differences between the code and GCP."
+    href="/docs/guides/runbooks/terraform-drift"
+  />
+  <Card
+    title="Terraform stale state lock"
+    description="Plan or apply fails with Error acquiring the state lock."
+    href="/docs/guides/runbooks/terraform-stale-lock"
+  />
+</Cards>

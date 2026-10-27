@@ -5,6 +5,10 @@ description: Operational commands for the orchestrator — build, deploy, verify
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
+<Callout type="info" title="Historical build log">
+  Historical snapshot from Phase 1. The code has changed since this was written. Orchestrator releases now deploy through release-please and `.github/workflows/deploy-orchestrator.yaml` (canary, approval, ramp, and rollback). See the [phase tracker](/docs/development) and [Runbooks](/docs/guides/runbooks).
+</Callout>
+
 This is the runbook. Every command needed to release a new orchestrator version, verify it's healthy, rotate secrets, or roll back when something goes wrong.
 
 ## Prerequisites

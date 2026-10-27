@@ -1,110 +1,113 @@
 ---
 title: Trust & threat model
-description: What RunnerForge can do on your repos, what limits the damage if we're compromised, and how you can verify our claims.
+description: What the RunnerForge GitHub App can access, what data it keeps and where, how tenants are isolated today, and how to check our claims.
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-RunnerForge runs jobs on infrastructure we control, using credentials your GitHub App install grants us. That is a meaningful amount of trust. This page describes exactly what we ask for, what we use it for, what we cannot do, and what limits the damage if our system is compromised.
+RunnerForge runs your GitHub Actions jobs on VMs in our Google Cloud project. To do that, it needs a GitHub App installation on your repositories. This page lists exactly what that installation lets us do, what we keep, and where it falls short, so you can decide whether to install it.
 
-If anything here ever drifts from what the code actually does, the code is the source of truth and this page is the bug. File an issue.
+The code is the source of truth. If this page disagrees with it, the page is wrong. Please open an issue.
 
-## What we ask for, and the exact endpoint each permission gates
+## Where things stand
 
-The GitHub App requests two permissions. We use each one for a specific, narrow purpose.
+- **The App is private today.** Only allow-listed installations get VMs. An installation is one GitHub user or organization, and RunnerForge treats each one as a tenant. Personal accounts and organizations are both supported.
+- **Planned:** a free hosted beta on RunnerForge's GCP project, with manual approval through the allow-list and per-installation limits. Running the whole backend yourself is also planned for later. Neither has a date, and there is no paid tier.
 
-| Permission | Scope | Why we need it | Endpoint we call |
-|---|---|---|---|
-| **Actions: Read** | Repository | Receive `workflow_job` webhook events so we know when to provision and tear down runners | None — webhook subscription only |
-| **Administration: Read and write** | Repository | Mint a single-use runner registration token so a VM can register itself as a self-hosted runner | `POST /repos/{owner}/{repo}/actions/runners/registration-token` |
+## What the App can access
 
-<Callout type="warn" title="Administration is broader than we use">
-  GitHub currently bundles self-hosted runner management inside the `Administration` permission, alongside the ability to delete repositories, transfer ownership, manage collaborators, and change security settings. **We do not use any of those capabilities.** The single endpoint we call is the registration-token endpoint listed above. When GitHub ships a granular "self-hosted runners" permission (on their public roadmap), we will switch to it immediately.
+The orchestrator requires these permissions. An installation token without them fails validation (`models.py`):
+
+| Permission | Level | Why |
+|---|---|---|
+| Actions | Read | To receive `workflow_job` webhooks, and to look up a job's status during cleanup |
+| Administration | Read & write | To create runner registration tokens for your repository |
+| Metadata | Read | GitHub grants this to every App |
+
+The App needs the **Workflow job** event. The orchestrator acts only on `workflow_job` deliveries. It acknowledges any other event GitHub sends and ignores it.
+
+<Callout type="warn" title="Administration: write is a powerful permission">
+  GitHub only issues registration tokens for repository-level self-hosted runners to callers with `Administration: write`. That permission isn't limited to runners. It's GitHub's repository-administration permission, which also covers changing repository settings, managing collaborators and branch protection, and deleting the repository. RunnerForge's code calls only the endpoints listed below, but the permission itself would let a compromised App do much more on the repositories you install it on. Weigh that before installing, and limit the installation to the repositories that need runners.
 </Callout>
 
-## What we cannot do
+## Every GitHub API call RunnerForge makes
 
-These boundaries are enforced by the GitHub App's permission scope — they are not promises, they are technical constraints.
+All of them are in [`github_client.py`](https://github.com/rumankazi/runnerforge/blob/main/apps/orchestrator/src/runnerforge/github_client.py):
 
-- ❌ Read your source code, pull requests, issues, or any repository contents.
-- ❌ Read or modify workflow files (`.github/workflows/*.yml`).
-- ❌ Access any repositories you did not explicitly install the App on.
-- ❌ Access any other GitHub events (push, pull_request, issues, comments, etc.) — only `workflow_job`.
-- ❌ Read your personal user data, emails, or organization membership.
-- ❌ Persist any installation tokens. We fetch them on demand and they expire in one hour.
+| Call | When | Why |
+|---|---|---|
+| `POST /app/installations/{installation_id}/access_tokens` | For each queued job that passes our checks, and during the daily cleanup sweep (at most once per installation, only if it needs to check a job) | Gets a short-lived installation token |
+| `POST /repos/{owner}/{repo}/actions/runners/registration-token` | For each queued job that passes our checks | Gets a token the new VM uses to register itself as a runner for that repository |
+| `GET /repos/{owner}/{repo}/actions/jobs/{job_id}` | Daily sweep, only for a VM that is between 1 hour and 6h15m old | Checks whether the job behind a still-running VM has finished, so the VM can be deleted |
 
-## What limits the damage if we are compromised
+There are no other calls. In particular, the orchestrator never reads repository contents, pull requests, issues or workflow files through the API. Your installation settings show the exact permissions the App holds.
 
-A realistic threat model has to assume the worst case: our private key is exfiltrated, or an attacker takes over the orchestrator. Three things bound the blast radius:
+## Your job runs on our machines
 
-### 1. Per-repository scoping
+The API boundaries above don't cover the VM itself. Your job runs on a VM in RunnerForge's GCP project, so everything the job handles is on that VM: checked-out source, build outputs, and any secrets or `GITHUB_TOKEN` your workflow passes to it. Anyone with admin access to the RunnerForge GCP project could reach that VM and its disks while it exists. Any hosted runner works this way. Only send workflows to RunnerForge whose code and secrets you're comfortable running on our infrastructure.
 
-You choose, at install time, exactly which repositories the App can act on. If you installed RunnerForge on one repository, an attacker with full control of our system can only affect that one repository — not your other repos, not your organization, not your account.
+What limits exposure:
 
-Recommended: install on a single test repository first. Confirm in your audit log that we only call the endpoints listed above. Graduate to production repositories once you have evidence.
+- **One VM per job.** Each queued job gets its own fresh VM, which registers as an ephemeral runner (`--ephemeral`) and accepts one job only.
+- **VMs are deleted.** The VM is deleted when GitHub reports its job completed. A daily sweep deletes VMs that path misses, and GCE deletes every VM after at most 6h15m of runtime, even if RunnerForge is down. Both disks are deleted with the VM.
+- **No external IP.** Runner VMs have no public IP address, so they can't be reached from the internet. They reach it outbound through Cloud NAT.
 
-### 2. Tokens are short-lived
+## What we store, and where
 
-We do not hold long-lived credentials that point at your account. Concretely:
+There is no database. Everything below lives in the GCP project `runnerforge`. Cloud Run and the runner VMs run in `europe-west4` (VMs in zone `europe-west4-a`). Logs and traces use Cloud Logging and Cloud Trace with their default storage location and retention settings, which Terraform doesn't change.
 
-- Installation access tokens expire after **1 hour**. We fetch them on demand and discard them.
-- Runner registration tokens expire after **1 hour** and are **single-use**.
-- The only durable credential is the GitHub App's private key, which lives in GCP Secret Manager. It is the keys to the kingdom — see [the compromise recovery section](#if-our-private-key-leaks) for what to do if it ever leaks.
+**On each VM, deleted with the VM:**
 
-An attacker who breaches our system mid-flight gets, at most, an hour of access per affected installation. An attacker who is not also in possession of our private key cannot mint new tokens at all.
+- **Name:** `runnerforge-{run_id}-{job_id}-{run_attempt}`.
+- **Labels** (also on its disks): `runner`, `job_id`, `run_id`, `run_attempt`, `repository_id` (the numeric GitHub ID), `installation_id`, `webhook_trace_id`, `webhook_span_id` and `queued_received_at`.
+- **Metadata:** `registration-token` (the runner registration token, readable from inside the VM until it's deleted), `repo-url` (`https://github.com/{owner}/{repo}`), `runner-labels` (your job's `runs-on` labels) and `startup-script`.
 
-### 3. Every action we take is in your audit log
+**In Cloud Logging:**
 
-GitHub records every API call our App makes against your repository in your audit log. You can see exactly what we did, when, and from which installation. We have no way to hide our activity from you.
+- The orchestrator's log lines for a RunnerForge job carry `repo`, `owner`, `sender` (the GitHub login that triggered the job), `job_id`, `run_id`, `run_attempt`, `runner_name`, `runner_id` and `installation_id`. Some lines also include your job's labels and timing values (`logger.py`, `main.py`, `handlers.py`).
+- Request logs record the request URL, the caller's IP and the user agent, which for webhooks are GitHub's.
+- If a webhook payload or GitHub response doesn't match the expected shape, the values that failed validation are logged. For a missing field, that value can be the enclosing object, up to the whole payload.
+- The VM's system logs are shipped by the Cloud Ops Agent. They include the startup script's output, which names the repository URL. Anything else written to the VM's system logs during the job ends up there too.
 
-If you ever see an entry that is not "fetched a registration token," that is the canary — revoke the installation immediately and file an issue.
+**In Cloud Trace:** every request is traced. Spans carry `repo`, `sender`, `job_id`, `installation_id`, `labels`, `run_id`, `run_attempt`, `runner_name` and the VM's labels. The automatic HTTP instrumentation also records the outgoing GitHub API URLs, which contain the repository name and job ID.
 
-## How you can verify
+**Not stored:** installation tokens and the App JWT are kept in memory only and never written anywhere. Valid webhook payloads aren't logged in full.
 
-Trust is earned through verifiable claims, not assertions on a marketing page. Four ways to verify ours:
+## Isolation today
 
-1. **Audit log.** Your repository's audit log (Settings → Security log) shows every API call we make. Filter by integration to isolate RunnerForge.
-2. **Source code.** The orchestrator is open source. Every GitHub API call we make is in [`github_client.py`](https://github.com/rumankazi/runnerforge/blob/main/apps/orchestrator/src/runnerforge/github_client.py). Grep for `api.github.com` to see the complete list.
-3. **Webhook delivery history.** Your GitHub App's "Recent Deliveries" page shows every payload we received and the response we sent back.
-4. **Install on a test repo first.** The most reliable verification is empirical. Spend a day with the App installed on a throwaway repository before you grant access to anything that matters.
+<Callout type="warn" title="Tenants share one project">
+  All installations' VMs run in the same GCP project, zone and VPC network (`default`). Each job gets its own VM, but RunnerForge doesn't configure firewall rules to separate one tenant's VMs from another's on that network. Per-tenant isolation is planned and doesn't exist yet.
+</Callout>
 
-## How we secure our side
+Other tenant-level controls that exist today:
 
-Boundaries on the GitHub side only matter if the credentials they protect are themselves secured. On our infrastructure:
+- **Admission.** Only allow-listed installations can create VMs. Other installations get no VM, but their webhooks are still acknowledged.
+- **Deletion ownership.** A "job completed" event can delete a VM only if that VM's own labels say RunnerForge created it for the same installation that sent the event. One tenant's events can't delete another tenant's runner.
 
-- **Private key in Secret Manager.** Never an environment variable, never in source control, never in Terraform state. See [security.mdx](/docs/RunnerForge/design/security) for details.
-- **Least-privilege service account.** The orchestrator's GCP service account has the minimum IAM roles required — VM management and secret access, nothing else.
-- **Webhook signature validation.** Every incoming request is HMAC-SHA256 verified against the webhook secret before any processing. Unauthenticated callers cannot trigger VM creation.
-- **No data persistence.** The orchestrator is stateless. We do not store your job IDs, repository names, or any other data beyond Cloud Logging (which retains for the GCP project's standard log retention — typically 30 days).
+## What limits the damage if RunnerForge is compromised
 
-## Comparison to alternatives
+- **Repository scoping.** You choose which repositories the installation covers. An attacker with full control of RunnerForge could act only on those repositories, but on each of them with the full `Administration: write` permission described above.
+- **Short-lived GitHub tokens.** Installation tokens and registration tokens each expire after 1 hour (GitHub sets both lifetimes). The App's private key is the only long-lived credential. It's stored in GCP Secret Manager and mounted into the orchestrator as a file. It isn't in source control or Terraform state.
+- **You can cut access at any time.** Suspending or uninstalling the App on your account or organization stops RunnerForge from getting new tokens for it.
+- **Signed webhooks.** The orchestrator rejects any webhook that isn't signed with the App's webhook secret, so a forged request can't create VMs.
 
-The GitHub App pattern is the *least bad* available primitive for this job. The alternatives are worse, not better:
+If the App's private key leaks, the maintainer can generate a new key and delete the old one in the App settings. You don't need to do anything. Key rotation is manual today.
 
-| Approach | Scope | Lifetime | Revocability |
-|---|---|---|---|
-| Personal Access Token | All your repos (or all you tick) | Until manually rotated | Manual |
-| OAuth App | Whatever scopes you grant | Until manually revoked | Per-token |
-| **GitHub App (RunnerForge)** | Only repos you explicitly install on | Installation tokens auto-expire hourly | Per-installation, immediate |
+More detail on the implementation is in [Security](/docs/design/security).
 
-If you are uncomfortable with a GitHub App, you are not going to be more comfortable with a PAT.
+## How you can check
 
-## If our private key leaks
+1. **Your installation settings** show exactly which permissions and repositories the App has. These are the limits GitHub enforces, whatever this page says.
+2. **The source code.** Every GitHub API call is in `github_client.py`, and every VM label and metadata key is set in `handlers.py`.
+3. **Your repository's runner list.** While a job runs, its runner, named `runnerforge-…`, appears under **Settings → Actions → Runners** and then disappears.
+4. **Try a test repository first.** Install the App on a throwaway repository before granting it anything that matters.
 
-The recovery procedure is one step, and it invalidates every token ever issued under that key:
+## Known limitations
 
-1. Go to your GitHub App settings → **Private keys** → **Generate a private key**. Optionally **Revoke** the old key in the same panel.
+- **Administration is broader than we need.** It's the only permission GitHub accepts for repository-level runner registration.
+- **Tenants aren't isolated** at the project or network level yet. See [Isolation today](#isolation-today).
+- **No per-installation limits yet.** They're planned for the hosted beta.
+- **No certification or third-party audit.** This is a portfolio platform-engineering project, not a commercial service. You can check the claims here against the public source code, but no third party has attested them.
+- **No bug bounty.** Please report security issues privately to the maintainer, not in a public issue.
 
-That's it. All in-flight installation tokens minted under the old key become invalid immediately. New tokens minted under the new key are unaffected. **You, as a user, do nothing.** The change is transparent on your end.
-
-We publish post-mortems for any incident that touches user credentials.
-
-## Open issues and known limitations
-
-In the spirit of not pretending things are better than they are:
-
-- **Administration permission is coarser than we want.** Tracking GitHub's roadmap; will switch the moment a granular self-hosted-runners permission is available.
-- **No formal SOC 2 / security certification.** This is a portfolio platform engineering project, not a commercial service. Security claims here are auditable via the open-source codebase; they are not third-party attested.
-- **No bug bounty program yet.** Security issues should be filed as private GitHub Security Advisories on the repository.
-
-Last reviewed: 2026-05-27.
+Last reviewed: 2026-10-27.

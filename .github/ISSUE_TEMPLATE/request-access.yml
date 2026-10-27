@@ -1,0 +1,99 @@
+name: Request beta access
+description: Ask for your GitHub account or organization to be approved for the free RunnerForge beta.
+title: "Access request: <account or org>"
+labels: ["access-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for your interest in RunnerForge. Please read [Getting Started](https://github.com/rumankazi/runnerforge/blob/main/apps/web/content/docs/guides/getting-started.mdx) and [Limits](https://github.com/rumankazi/runnerforge/blob/main/apps/web/content/docs/guides/limits.mdx) first.
+
+        **This issue is public.** Don't include secrets, tokens, or private repository details you don't want visible.
+
+  - type: input
+    id: account
+    attributes:
+      label: GitHub account or organization
+      description: The personal account or organization the RunnerForge App is (or will be) installed on.
+      placeholder: octo-org
+    validations:
+      required: true
+
+  - type: dropdown
+    id: account-type
+    attributes:
+      label: Account type
+      options:
+        - Personal account
+        - Organization
+    validations:
+      required: true
+
+  - type: input
+    id: installation-id
+    attributes:
+      label: Installation ID
+      description: |
+        The number at the end of the App's settings URL: `github.com/settings/installations/<id>` for a personal account, or `github.com/organizations/<org>/settings/installations/<id>` for an organization. If the App can't be installed yet, leave this blank and add it in a comment once you have it. We can't approve a request without it.
+      placeholder: "12345678"
+    validations:
+      required: false
+
+  - type: textarea
+    id: repositories
+    attributes:
+      label: Repositories
+      description: Which repositories will use RunnerForge runners? One per line.
+      placeholder: |
+        octo-org/api
+        octo-org/web
+    validations:
+      required: true
+
+  - type: input
+    id: jobs-per-day
+    attributes:
+      label: Expected jobs per day
+      description: A rough estimate across all listed repositories.
+      placeholder: "20"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: sizes
+    attributes:
+      label: Runner sizes you expect to use
+      description: See the Runner labels guide for what each size means.
+      multiple: true
+      options:
+        - small (n2-standard-2)
+        - medium (n2-standard-4, default)
+        - large (n2-standard-8)
+        - xlarge (n2-standard-16)
+        - spot
+        - A literal machine type (name it below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: usage
+    attributes:
+      label: What will you run?
+      description: Typical jobs and how long they take. Name any literal machine types you plan to use.
+      placeholder: Unit tests and Docker builds, about 10 minutes each.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Acknowledgements
+      options:
+        - label: I understand this is a free beta that can change or end, and approval isn't guaranteed.
+          required: true
+        - label: I understand there is no SLA. Runners may be slow, unavailable, or preempted.
+          required: true
+        - label: I understand only Linux x64 runners are available.
+          required: true
+        - label: I understand that abuse (for example mining, attacks, or using far more than requested) gets my installation removed.
+          required: true

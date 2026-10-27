@@ -1,0 +1,73 @@
+---
+title: Cold-start latency
+description: Runbook for "Cold-start latency p95 > 30s (5m)", slow orchestrator instance startup on Cloud Run.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Symptom
+
+Email from "RunnerForge Alerts": **Cold-start latency p95 > 30s (5m)**, severity WARNING.
+
+The alert watches Cloud Run's `run.googleapis.com/container/startup_latencies` for `runnerforge-orchestrator`. It
+fires when the p95 over 5 minutes is above 30 s, for 5 minutes. The metric only has data when an instance starts,
+so quiet periods don't trigger it. The 30 s threshold is a placeholder (see the comment in
+`observability_alerts.tf`).
+
+The service scales to zero (`min_instance_count = 0` in `cloud_run.tf`), so the first webhook after an idle period
+always hits a cold start. Startup runs `config.py` (env vars, the App private key file, `ALLOWED_INSTALLATION_IDS`)
+and then `lifespan` in `main.py`: HTTP client, GCE clients, runner image lookup, machine-types list for the zone,
+and the Cloud Logging client.
+
+## Impact
+
+A request that lands on a starting instance waits for startup. GitHub gives up on a delivery after 10 seconds and
+doesn't retry, so at this threshold the webhooks that hit a cold instance are likely failing. Check
+[Lost webhooks](/docs/guides/runbooks/lost-webhooks) and Recent Deliveries in the GitHub App settings.
+
+## Diagnose
+
+All commands are read-only.
+
+**1. Find the revision.** On the dashboard ("RunnerForge — Orchestrator Health"), Orchestrator Health, "Active
+instances + cold-start p95 by revision". If it started with a new revision, the release is the suspect.
+
+**2. Time the startup steps.** Each instance logs these during startup; `labels.instanceId` groups them:
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  (
+    jsonPayload.message="Installation allow-list active"
+    OR jsonPayload.message:"ALLOWED_INSTALLATION_IDS unset"
+    OR jsonPayload.message="Resolved runner image"
+    OR jsonPayload.message:"Runner image resolve failed"
+    OR jsonPayload.message:"machine types"
+    OR jsonPayload.message="Clients initialized"
+  )
+' --project=runnerforge --freshness=2h --limit=100 \
+  --format='table(timestamp, labels.instanceId, resource.labels.revision_name, jsonPayload.message)'
+```
+
+A long gap before `Resolved runner image` or `Loaded machine types cache` means a slow GCE API call. A gap before
+the first line means slow imports or container start.
+
+**3. Check GCP status** (status.cloud.google.com) for Cloud Run or Compute Engine issues in `europe-west4`.
+
+## Mitigate
+
+<Callout type="warn" title="Mutations">
+  Everything in this section changes production.
+</Callout>
+
+- **Regression in a new release:** roll back with **Deploy Orchestrator** (`deploy-orchestrator.yaml`),
+  `action=rollback`, `target=<previous revision>`.
+- **Keep an instance warm:** raise `min_instance_count` in `cloud_run.tf`. This costs money while idle. It is a
+  revision template change, so like any template change it only takes effect with the next orchestrator release:
+  production traffic is pinned to a named revision, and the revision Terraform creates gets no traffic.
+- **Platform-side slowness:** no action; the alert closes once startups are fast again.
+
+## Escalate
+
+Startup slow with no code change and no GCP incident: GCP support case with revision name and instance IDs.

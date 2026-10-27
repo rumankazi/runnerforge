@@ -6,6 +6,10 @@ description: GCE VM creation, deletion, and label-based lookup
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 
+<Callout type="info" title="Historical build log">
+  Historical snapshot from Phase 1. The code has changed since this was written. For the current VM lifecycle, see [Webhook flow](/docs/design/webhook-flow) and [Architecture](/docs/design/architecture).
+</Callout>
+
 After phase 1.3, we could mint a registration token. After phase 1.5, we actually use it — by creating a real GCE VM with the token baked into instance metadata, and deleting that VM when the job completes.
 
 The orchestrator is now functionally complete for the happy path. What the runner does once booted is phase 1.6.
@@ -44,7 +48,7 @@ Defaults from `config.py`: `GCP_PROJECT_ID`, `GCP_ZONE`. Image is hardcoded to `
 
 Lists VMs in the project/zone with `labels.job_id={id}` filter. Returns instance names. This is the linkage that lets `handle_completed` find the VM created by `handle_queued`.
 
-Per [ADR-004](/docs/RunnerForge/design/decisions), labels on the VM are the source of truth for VM-to-job mapping. No database.
+Per [ADR-004](/docs/design/decisions), labels on the VM are the source of truth for VM-to-job mapping. No database.
 
 ### `delete_vm`
 

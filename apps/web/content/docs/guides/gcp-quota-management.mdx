@@ -1,8 +1,13 @@
 ---
 title: GCP Quota Management
+description: How to check GCP quotas, which ones bind RunnerForge, and how to raise them through Terraform.
 ---
 
-How to check current GCP quotas and request increases. Most quota bumps on an established billing project auto-approve within seconds.
+How to check current GCP quotas, which ones limit how many runners RunnerForge can run at once, and how to raise them.
+
+<Callout type="info" title="Quota changes go through Terraform">
+  RunnerForge's quota preferences are declared in [`infra/terraform/quotas.tf`](https://github.com/rumankazi/runnerforge/blob/main/infra/terraform/quotas.tf). To change one, edit its `preferred_value` and open a PR; CI plans and applies it. Use the `gcloud` commands below to look up quotas, or for a new quota that isn't in Terraform yet: create it with `gcloud`, then `terraform import` it into `quotas.tf`.
+</Callout>
 
 ## Background — two quota APIs
 
@@ -72,6 +77,7 @@ gcloud alpha quotas preferences create \
   --quota-id=<QUOTA_ID> \
   --dimensions=region=<REGION> \
   --preferred-value=<NEW_LIMIT> \
+  --email=<CONTACT_EMAIL> \
   --justification="<reason>"
 ```
 
@@ -84,8 +90,11 @@ gcloud alpha quotas preferences create \
   --quota-id=INSTANCES-per-project-region \
   --dimensions=region=europe-west4 \
   --preferred-value=200 \
-  --justification="Self-hosted CI runner platform; default 24 caps concurrent jobs"
+  --email=<CONTACT_EMAIL> \
+  --justification="Self-hosted CI runner platform"
 ```
+
+`INSTANCES` is already at 200 in `quotas.tf`; this is the command shape that was used before it was imported.
 
 ## Verify approval
 
@@ -99,43 +108,35 @@ Look at the most recent entry:
 quotaConfig:
   grantedValue: '200'
   preferredValue: '200'
-  stateDetail: Quota request approved to 200
 ```
 
-- `stateDetail` starts with `"approved"` → done. New limit live within seconds.
-- `stateDetail` mentions `"pending"` or `"in review"` → human review. Usually same-day; check email.
-- `stateDetail` mentions `"denied"` → re-file with a stronger justification or smaller delta.
+- `grantedValue` equals `preferredValue` → the new limit is in effect.
+- `grantedValue` is lower → the request is still in review or was partly or fully denied. Read `stateDetail`, and watch the contact email for questions from Google.
 
-For modest bumps (≤8× current value), established billing projects typically auto-approve in under a minute.
+## Quotas that bind RunnerForge
 
-## Common metrics for RunnerForge
+The size labels map to `n2-standard-*` machine types (`machine_policy.py`: `small`=2, `medium`=4 (the default), `large`=8, `xlarge`=16 vCPUs). A literal machine-type label, such as `e2-standard-4`, uses that family's CPU quota instead. Each VM gets a 50 GB `pd-balanced` data disk, which counts against SSD quota, and a 10 GB boot disk with no disk type set (`compute_client.py`). Values below are for `europe-west4`, from the capacity notes in `quotas.tf` (checked 2026-06-12, not live).
 
-| Quota ID | Default | What it controls | When to bump |
+| Quota | Value | Source | What it gates |
 |---|---|---|---|
-| `INSTANCES-per-project-region` | 24 | Concurrent VMs in region | Burst tests / Phase 3.4 scale-up |
-| `CPUS-per-project-region` | 200 | Total vCPUs across all VM families | When `INSTANCES × VM-size` exceeds it |
-| `IN-USE-ADDRESSES-per-project-region` | 8 | Public IPs in use (VMs + NAT + LB) | Pre-NAT only; irrelevant after Cloud NAT |
-| `N2D-CPUS-per-project-region` | 16 | N2D family vCPU cap | If pivoting runners off E2 to N2D |
-| `PREEMPTIBLE-CPUS-per-project-region` | 0 | Spot VM vCPUs | Phase 3.4 — spot runners |
-| `NETWORK-FIREWALL-POLICIES` | 10 | Firewall policies in region | Migration to custom VPC with explicit rules |
-| `SUBNETWORKS` | 100 | Subnets per VPC | Multi-region expansion |
-| `IMAGES` (project-level) | 100 | Custom GCE images | Runner image retention threshold |
+| `INSTANCES-per-project-region` | 200 | Requested, in `quotas.tf` | Concurrent VMs |
+| `SSD-TOTAL-GB-per-project-region` | 1500 | Requested, in `quotas.tf` | Total SSD-backed disk: 30 concurrent runners at 50 GB of data disk each. **The binding limit for `small` and `medium`** |
+| `N2_CPUS` | 200 | GCP default | N2 vCPUs, for both on-demand and Spot VMs. **Binds before SSD for `large`** (25 concurrent) **and `xlarge`** (12 concurrent) |
+| `E2_CPUS` | 24 | GCP default | E2 vCPUs, used by literal `e2-*` labels. Too small to be the default runner family |
+| `CPUS` | 200 | GCP default | N1 only in modern regions; doesn't gate E2 or N2 |
+| `N2D_CPUS` | 16 | GCP default | N2D vCPUs, used by literal `n2d-*` labels |
 
-For Cloud Run-specific limits:
+<Callout type="info" title="Spot VMs don't use PREEMPTIBLE_CPUS">
+  Spot VMs (`provisioning_model = SPOT`) count against the machine family's CPU quota, such as `N2_CPUS`. `PREEMPTIBLE_CPUS` applies only to legacy preemptible VMs, which RunnerForge doesn't create. A leftover `PREEMPTIBLE_CPUS` preference exists in the project and is deliberately not in Terraform; it gates nothing.
+</Callout>
 
-| Quota ID | Default | What it controls |
-|---|---|---|
-| `services-per-region` | 1000 | Cloud Run services in region |
-| `revisions-per-service` | 1000 | Revisions per service |
-| `max-instance-count-per-service` | 1000 | Max concurrent instances per service |
+Runner VMs have no external IP (egress goes through Cloud NAT, `network.tf`), so `IN-USE-ADDRESSES` doesn't scale with runners.
 
 ## When to bump what (RunnerForge-specific guidance)
 
-- **Hitting `IN_USE_ADDRESSES` pre-NAT**: don't bump — ship Cloud NAT instead. Saves quota long-term.
-- **Hitting `INSTANCES` after NAT**: bump to 200 or higher. The natural concurrent-runner ceiling.
-- **Hitting `CPUS`**: rare — only if you're running larger VM sizes by default. Bump alongside `INSTANCES` if so.
-- **Hitting `N2D_CPUS`**: bump when adopting the N2D family for any size class. 100 is a reasonable target.
-- **Hitting `PREEMPTIBLE_CPUS`**: bump as part of Phase 3.4 spot-VM rollout. 100 is a reasonable target.
+- **More concurrent `small` or `medium` runners**: raise `SSD-TOTAL-GB` first; it binds at 30 VMs. Then check `N2_CPUS` (200) and `INSTANCES` (200) against the new ceiling: 30 `medium` runners already use 120 of the 200 N2 vCPUs.
+- **Heavy use of `large` or `xlarge`**: `N2_CPUS` binds first (8 or 16 vCPUs each). Raise it alongside `SSD-TOTAL-GB`.
+- **Adopting another machine family**: raise that family's CPU quota (for example `N2D_CPUS`), for on-demand and Spot alike.
 
 ## Console route (fallback)
 
@@ -151,13 +152,7 @@ The Console uses the same Cloud Quotas backend, so approval timing is identical.
 
 ## Quota adjuster (auto-bump on usage trends)
 
-GCP offers an automated quota-adjuster feature: it watches your usage and pre-emptively raises quotas before you hit ceilings. Enable per-quota at:
-
-```
-IAM & Admin → Quotas & System Limits → Configurations
-```
-
-Worth enabling for `INSTANCES` and `CPUS` once Phase 3.4 ships and usage starts trending upward — avoids the "burst → blocked → request → wait" loop.
+GCP offers a quota adjuster that watches usage and requests increases before you hit a ceiling; see the [quota adjuster docs](https://cloud.google.com/docs/quotas/quota-adjuster). It isn't enabled or managed in Terraform today. Worth considering for `INSTANCES`, `SSD-TOTAL-GB` and `N2_CPUS` if usage starts trending upward. It avoids the "burst → blocked → request → wait" loop.
 
 ## See also
 

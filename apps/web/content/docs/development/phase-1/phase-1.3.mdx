@@ -3,6 +3,10 @@ title: Phase 1.3
 description: Github App auth chain
 ---
 
+<Callout type="info" title="Historical build log">
+  Historical snapshot from Phase 1. The code has changed since this was written. For the current GitHub App auth chain, see [Security](/docs/design/security).
+</Callout>
+
 We will be focusing on the github authentication.
 
 First,
@@ -25,7 +29,7 @@ A short-lived string Github gives, that says:
 
 > whoever has this allowed to register a self-hostd runner on this specific repo.
 
-This token gets baked into GCE VM's metadata (Phase 1.4).
+This token gets baked into GCE VM's metadata (Phase 1.5).
 When VM boots, it reads the token, run `./config.sh --token <token> --url <repo>`, and the runner process registers itself with Github.
 
 ## Why do we need three tokens (and not one)?

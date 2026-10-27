@@ -1,0 +1,91 @@
+---
+title: Time-to-Register SLO fast burn
+description: Runbook for "Time-to-Register SLO fast burn (10x over 1h)", runners taking more than 5 minutes to pick up jobs.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Symptom
+
+Email from "RunnerForge Alerts": **Time-to-Register SLO fast burn (10x over 1h)**, severity CRITICAL.
+
+The SLO (`observability_slos.tf`) is built on `runner_readiness_seconds`: the time from the orchestrator receiving
+a job's `queued` webhook to GitHub's `started_at` for that job. A 5-minute window is bad when more than 0.5% of its
+samples are over 300 s. The alert fires when the burn rate over the last hour is above 10.
+
+<Callout type="info" title="One slow job is enough">
+  Unless a 5-minute window holds at least 200 registrations, a single registration over 300 s makes it bad, and one
+  bad window in an hour is above the 10x threshold. Expect this alert for isolated slow jobs, not only for broad slowdowns.
+</Callout>
+
+## Impact
+
+Jobs ran, but waited more than 5 minutes for a runner after we received them. This is latency, not lost work.
+Jobs that never got a runner don't appear here; see [Lost webhooks](/docs/guides/runbooks/lost-webhooks) and
+[VM creation failures](/docs/guides/runbooks/vm-creation-failures).
+
+## Diagnose
+
+All commands are read-only.
+
+**1. Find the slow registrations.**
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  jsonPayload.message="Runner registration outcome"
+  jsonPayload.runner_readiness_seconds>300
+' --project=runnerforge --freshness=2h --limit=50 \
+  --format='table(timestamp, jsonPayload.job_id, jsonPayload.repo, jsonPayload.runner_readiness_seconds)'
+```
+
+**2. Split the time for one job.** Every line for the job carries `job_id` from the log context, including the VM
+creation outcome written by the background task:
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  jsonPayload.job_id=<JOB_ID>
+' --project=runnerforge --freshness=1d \
+  --format='table(timestamp, jsonPayload.message, jsonPayload.duration_ms, jsonPayload.outcome, jsonPayload.machine_type, jsonPayload.spot, jsonPayload.image_version)'
+```
+
+- Long gap between `Webhook event received` and `Submitted VM creation`: slow GitHub token calls (up to 3 attempts
+  with backoff each) or a slow GCE insert call. Compare the `github.*` and `compute.create_vm` spans in the trace.
+- High `duration_ms` on `VM creation outcome`: GCE took long to create the VM.
+- VM created quickly but readiness still high: the time went into boot, runner registration, or GitHub assigning the
+  job. Check the VM's boot output if it still exists:
+
+  ```bash
+  gcloud compute instances get-serial-port-output <VM_NAME> --zone=europe-west4-a --project=runnerforge
+  ```
+
+  Once it's deleted, its startup script lines are in Cloud Logging under `resource.type="gce_instance"`.
+
+**3. Look for a common factor.** Compare the `machine_type`, `spot` and `image_version` fields on the slow jobs'
+`Submitted VM creation` lines from step 2. The readiness metric itself can't be sliced this way: its `machine_type`
+and `image_version` labels are always empty. The image version an orchestrator instance uses is also in its
+`Resolved runner image` startup line.
+
+**4. Rule out GitHub.** Check githubstatus.com for Actions incidents.
+
+## Mitigate
+
+<Callout type="warn" title="Mutations">
+  Everything in this section changes production.
+</Callout>
+
+- **Isolated slow job:** nothing to do. The alert auto-closes 30 minutes after the condition clears.
+- **New runner image boots slowly:** roll the image back with the **Deploy Runner Image** workflow
+  (`deploy-runner-image.yaml`), `action=rollback`, `target=<bad image name>`. It deprecates that image, so the family
+  points at the next-newest one. Orchestrator instances resolve the family at startup and keep that image, so only
+  new instances pick up the change.
+- **Spot capacity is slow in the zone:** users can drop `spot` from `runs-on` for affected workflows.
+
+## Escalate
+
+- GitHub slow to assign jobs to registered runners: GitHub Support, with job IDs and timestamps.
+- GCE slow to create VMs with no change on our side: GCP support case, with operation names from
+  `Submitted VM creation` (`operation_id`).

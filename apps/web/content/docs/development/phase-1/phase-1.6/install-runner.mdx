@@ -5,6 +5,10 @@ description: Line-by-line explanation of the Packer provisioning script
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
+<Callout type="info" title="Historical build log">
+  Historical snapshot from Phase 1. The code has changed since this was written. For the runner image today, see [Architecture](/docs/design/architecture). The current script is `infra/packer/scripts/install-runner.sh`.
+</Callout>
+
 The provisioning script [`infra/packer/scripts/install-runner.sh`](https://github.com/rumankazi/runnerforge/blob/main/infra/packer/scripts/install-runner.sh) runs **once during `packer build`** on the temporary build VM. Its output is baked into the resulting image.
 
 This page walks through it section by section. Understanding *why* each step is here matters as much as *what* it does — the order is deliberate.

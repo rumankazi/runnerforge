@@ -1,19 +1,136 @@
 ---
 title: Development
-description: Progress tracker for the development phases
+description: Phase tracker for contributors, plus the commands to build and test each part of the repo locally.
 ---
 
-Overall progress tracker of the development.
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-## Phase 1
+This page tracks what has shipped and what is planned. The code is the source of truth: if a page here disagrees with `apps/orchestrator/`, `infra/`, or `.github/workflows/`, the code wins.
 
-Backend
+Current releases are in [`.release-please-manifest.json`](https://github.com/rumankazi/runnerforge/blob/main/.release-please-manifest.json). The orchestrator is at **0.18.0**.
+
+## Where we are
+
+| Phase | Scope | Status |
+|---|---|---|
+| 1 | Webhook-driven runner lifecycle, deployed to Cloud Run | Done |
+| 2.x | CI/CD, image pipeline, tracing, dashboards | Done |
+| 3.1–3.6 | Operational maturity | Done |
+| 4.0 | Safety fixes before letting other installations in | Done |
+| 4.1–4.6 | Hosted beta and self-hosting | Planned |
+
+<Callout type="info" title="Product direction">
+  The GitHub App is private today. The plan is a free hosted beta on RunnerForge's own GCP project, with manual approval (the installation allow-list) and per-installation limits, and later a package for self-hosting the whole backend. One installation (a GitHub user or organization) is one tenant. There is no bring-your-own-GCP-project mode and no paid billing on the roadmap for now.
+</Callout>
+
+## Phase 1: webhook foundation (done)
+
+A queued `workflow_job` creates a GCE VM that registers as an ephemeral (one-job) runner. A completed job deletes it. A scheduled `/sweep` catches VMs whose cleanup webhook never arrived. The orchestrator runs on Cloud Run, managed by Terraform.
 
 <Cards>
-  <Card href="/docs/development/phase-1" title="Phase 1" description="Backend" />
+  <Card href="/docs/development/phase-1" title="Phase 1 build logs" description="Historical notes from 1.1 to 1.8" />
 </Cards>
 
-We will be tackling
-- Webhook endpoint and payload modeling
-- Github App auth
-- GCP VM creation
+## Phase 2: production hardening (done)
+
+- **2.1** Workload Identity Federation for CI, no service-account keys (`infra/terraform/wif.tf`).
+- **2.2** PR gate: `qualify.yaml` with path-filtered per-app jobs.
+- **2.3** release-please with Conventional Commits, plus Renovate.
+- **2.4** Orchestrator CD on release: Cosign signing, a 5% canary, an approval gate, then ramp. Rollback is a `workflow_dispatch` (`deploy-orchestrator.yaml`).
+- **2.5** Runner image CD: Packer build, smoke test, then image family promotion (`deploy-runner-image.yaml`).
+- **2.7** OpenTelemetry tracing to Cloud Trace (`tracing.py`).
+- **2.8** Cloud Monitoring dashboards and SLO alerts.
+- **2.9** A dedicated runner-VM service account, `runnerforge-runner-vm` (`runner_vm.tf`).
+
+## Phase 3: operational maturity (done)
+
+- **3.1** Terraform via tfaction: plan on PR (`_qualify-infra.yaml`, with OPA policies from `infra/policies/` run against the plan), apply on merge to `main` (`deploy-infra.yaml`), and daily drift detection (`drift-detection.yaml`).
+- **3.2** Shared HTTP and Compute clients created once in the FastAPI lifespan (`main.py`), not per request.
+- **3.3** Cloud NAT for runner egress (`network.tf`), and background polling of VM creation outcomes.
+- **3.3.5** Observability as code: log-based metrics, dashboard, SLOs and alerts in `infra/terraform/observability_*.tf`.
+- **3.4** Spot VMs and label-based machine sizing (`machine_policy.py`), with quotas codified in `quotas.tf`.
+- **3.5** Runner image retention: keep the newest images and deprecate the rest with a delete date (end of `deploy-runner-image.yaml`).
+- **3.6** Custom IAM role `runnerImageManager` for the image-build service account (`runner_image.tf`).
+
+## Phase 4.0: safety fixes (done)
+
+These close the gaps that mattered before any installation other than the owner's could send jobs.
+
+- **Completed-job deletes are checked.** `handlers.handle_completed` deletes the VM named by `runner_name` only if the name starts with `runnerforge-` and the VM's labels (`compute_client.get_vm_labels_by_name`) carry `runner=runnerforge` and the same `installation_id` as the event.
+- **Sweep uses the exact repo.** `sweep.py` reads `owner/repo` from the VM's `repo-url` metadata. VMs are labelled with the numeric `repository_id`, which replaced the old `repo` label. If the repo is unknown, the sweep skips the job-status check; the hard limit still applies.
+- **GitHub's default labels work.** `self-hosted`, `linux` and `x64` are accepted, and label matching is case-insensitive (`machine_policy.py`, and the RunnerForge-label check in `main.py`). `windows`, `macos` and `arm64` are rejected.
+- **Only `workflow_job` is processed.** `/webhook` dispatches on the `X-GitHub-Event` header. `ping`, `installation` and other events get a 200 and are ignored.
+- **Every VM has a runtime cap.** VMs are created with `max_run_duration` of 6h15m and `instance_termination_action=DELETE` (`compute_client.MAX_VM_RUN_DURATION`). The sweep's `HARD_LIMIT` reuses the same value. Disks carry the instance labels. `RUNNER_IMAGE_PROJECT` sets where the runner image comes from and defaults to `GCP_PROJECT_ID`.
+- **Installation allow-list.** `ALLOWED_INSTALLATION_IDS` comes from the Terraform variable `allowed_installation_ids` (`variables.tf`, `cloud_run.tf`). Unset allows every installation; an empty value allows none. Only `queued` events are gated, so VMs of a removed installation are still cleaned up. The "Webhook event received" log line is written after the gate.
+
+## Phase 4.1 onward (planned)
+
+Not built yet. Scope may change, and there are no dates.
+
+| # | Scope |
+|---|---|
+| 4.1 | Docs: correct out-of-date pages and add the missing ones. In progress. |
+| 4.2 | Tenant registry: a record of approved installations and their limits. |
+| 4.3 | Hosted isolation: keep tenants' runner VMs apart from each other on the shared project. |
+| 4.4 | Usage tracking per installation. |
+| 4.5 | User-facing dashboard. |
+| 4.6 | Self-host package: run the whole backend in your own environment. |
+
+## Local development
+
+Each app runs its checks from its own directory. CI runs the same checks; `./scripts/pre-push-check.sh [all|workflows|infra|orchestrator|web]` from the repo root mirrors it.
+
+<Tabs items={['Orchestrator', 'Web', 'Infra', 'Container']}>
+<Tab value="Orchestrator">
+
+Run in `apps/orchestrator/`. uv fetches Python 3.14 itself. Tests need no credentials; `tests/conftest.py` sets throwaway env values.
+
+```bash
+uv sync --frozen
+uv run --frozen ruff check
+uv run --frozen ruff format --check
+uv run --frozen bandit -r src/ -ll -ii
+uv run --frozen pytest            # unit + integration, 100% branch coverage required
+```
+
+</Tab>
+<Tab value="Web">
+
+Run in `apps/web/`. There is no test suite: lint, types and build are the checks.
+
+```bash
+bun install --frozen-lockfile
+bun run lint
+bun run types:check               # fumadocs-mdx && next typegen && tsc --noEmit
+bun run build
+bun run dev
+```
+
+</Tab>
+<Tab value="Infra">
+
+Run in `infra/terraform/`. Locally these are static checks only. Never run `terraform plan` or `apply` by hand: CI does that with WIF credentials.
+
+```bash
+terraform fmt -check -recursive
+terraform init -backend=false -input=false && terraform validate
+tflint --recursive
+trivy config .
+conftest verify -p ../policies/   # OPA policy unit tests
+```
+
+Tool versions are pinned in `mise.toml` and `aqua.yaml`. Without them, `trivy` and `conftest` are missing.
+
+</Tab>
+<Tab value="Container">
+
+Run from the repo root, because the build context is the root.
+
+```bash
+docker build -f apps/orchestrator/Dockerfile --target test .   # runs pytest in the image
+```
+
+</Tab>
+</Tabs>
+
+Conventions (Conventional Commit PR titles, SHA-pinned actions, no extra lint config) are in [`AGENTS.md`](https://github.com/rumankazi/runnerforge/blob/main/AGENTS.md).

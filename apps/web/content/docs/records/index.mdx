@@ -1,4 +1,35 @@
 ---
 title: Records
-description: Contains the records for ADR, Incidents, Troubleshooting and Investigations
+description: How RunnerForge writes down decisions, debugging sessions, and incidents, and where to find them.
 ---
+
+A record is a dated, numbered note about something that happened or was decided. Records explain *why* the system looks the way it does. For *how* to operate it, see the [runbooks](/docs/guides/runbooks).
+
+<Cards>
+  <Card href="/docs/design/decisions" title="Architecture Decision Records" description="ADR-001 to ADR-017: every major technical choice, with options and trade-offs." />
+</Cards>
+
+## Record types
+
+Each record starts with a `<Record />` header (`apps/web/components/record.tsx`) that shows its type, number, status, and optionally a date and severity.
+
+| Type | Use it for | Statuses |
+|---|---|---|
+| `adr` | A technical decision: context, options considered, decision, consequences. | `proposed`, `accepted`, `superseded`, `deprecated` |
+| `troubleshooting` | A debugging session worth keeping: symptom, what was checked, root cause, fix or workaround. | `open`, `workaround`, `resolved` |
+| `incident` | A production problem that affected users or the service: impact, timeline, cause, follow-ups. Takes a `severity` from `sev1` to `sev4`. | `investigating`, `mitigated`, `resolved`, `postmortem` |
+
+All ADRs live on the [Decisions](/docs/design/decisions) page. No troubleshooting or incident records have been published yet.
+
+## Writing a record
+
+```mdx
+<Record type="adr" id="018" status="proposed" date="2026-11-02" />
+
+## Short title stating the decision
+```
+
+- **Numbering**: IDs are three digits, sequential per type, and never reused or renumbered.
+- **Changing your mind**: don't rewrite history. Add a dated revision note for corrections, or set the old record to `superseded` and link to the new one.
+- **Proposed is fine**: write the ADR before the work starts, with status `proposed`, so the trade-offs get reviewed with the change.
+- **Facts come from code**: names, numbers, and thresholds must match `apps/orchestrator/`, `infra/`, or `.github/workflows/`. Name the source file when it helps the reader check.

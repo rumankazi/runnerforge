@@ -5,6 +5,10 @@ description: Backend preparations
 
 import { Card, Cards } from 'fumadocs-ui/components/card';
 
+<Callout type="info" title="Historical build log">
+  Historical snapshot from Phase 1. The code has changed since this was written. For the system as it is today, see [Architecture](/docs/design/architecture). For what shipped after Phase 1, see the [phase tracker](/docs/development).
+</Callout>
+
 Prepare the backend. Validated and tested against different cases.
 
 Goals:
@@ -19,6 +23,11 @@ Goals:
     title="Phase 1.1"
     description="Webhook + HMAC validation + /webhook endpoint"
   />
-  <Card href="./phase-1.2.mdx" title="Phase 1.2" description="Payload modeling + event router" />
-  <Card href="./phase-1.3.mdx" title="Phase 1.3" description="Github App auth chain" />
+  <Card href="/docs/development/phase-1/phase-1.2" title="Phase 1.2" description="Payload modeling + event router" />
+  <Card href="/docs/development/phase-1/phase-1.3" title="Phase 1.3" description="Github App auth chain" />
+  <Card href="/docs/development/phase-1/phase-1.4" title="Phase 1.4" description="Logging and testing framework" />
+  <Card href="/docs/development/phase-1/phase-1.5" title="Phase 1.5" description="GCE VM creation, deletion, and label-based lookup" />
+  <Card href="/docs/development/phase-1/phase-1.6" title="Phase 1.6" description="Packer runner image + startup script" />
+  <Card href="/docs/development/phase-1/phase-1.7" title="Phase 1.7" description="Sweep endpoint + Cloud Ops Agent" />
+  <Card href="/docs/development/phase-1/phase-1.8" title="Phase 1.8" description="Terraform-managed production deployment" />
 </Cards>

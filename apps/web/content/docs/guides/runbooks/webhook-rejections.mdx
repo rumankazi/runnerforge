@@ -1,0 +1,89 @@
+---
+title: Webhook rejections
+description: Runbook for "Webhook rejections > 5/min (10m)", sustained 4xx responses on /webhook.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Symptom
+
+Email from "RunnerForge Alerts": **Webhook rejections > 5/min (10m)**, severity WARNING.
+
+`webhook_rejection_count` counts `POST /webhook` access-log lines with a 4xx status. The alert fires when more than
+50 land in a 10-minute window, for 10 minutes. `/webhook` is public, so some probe traffic is normal; the threshold
+is a first guess (see the comment in `observability_alerts.tf`).
+
+The orchestrator returns these 4xx codes on `/webhook`:
+
+| Status | Meaning |
+|---|---|
+| 401 | HMAC signature didn't match (`Webhook signature validation failed`, with `signature_prefix`). |
+| 422 | A required header (`X-Hub-Signature-256` or `X-GitHub-Event`) is missing. FastAPI rejects it before our code runs. |
+| 400 | Signature valid and the event is `workflow_job`, but the body isn't JSON. |
+
+Payload schema problems are not 4xx: they raise and return 500, so they show up in the
+[Availability SLO](/docs/guides/runbooks/webhook-availability) runbook instead.
+
+## Impact
+
+- **Scanner traffic:** none. These requests were never from GitHub.
+- **401s from GitHub itself:** every delivery is being rejected, so no VMs are created or deleted. This is an
+  outage that the availability SLO doesn't see, because 4xx counts as good.
+
+## Diagnose
+
+All commands are read-only.
+
+**1. Break down by status and client.**
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  jsonPayload.message="POST /webhook"
+  httpRequest.status>=400 httpRequest.status<500
+' --project=runnerforge --freshness=1h --limit=100 \
+  --format='table(timestamp, httpRequest.status, httpRequest.userAgent)'
+```
+
+GitHub's deliveries use a `GitHub-Hookshot/...` user agent. Anything else is not GitHub.
+
+**2. Check whether real deliveries are failing.**
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  jsonPayload.message="POST /webhook"
+  httpRequest.status=401
+  httpRequest.userAgent:"GitHub-Hookshot"
+' --project=runnerforge --freshness=1h --limit=20 --format='table(timestamp, httpRequest.status)'
+```
+
+Then confirm in the GitHub App settings, Advanced, Recent Deliveries: failing deliveries show a 401 response.
+
+**3. If GitHub is getting 401s,** check when the webhook secret last changed. This lists versions without reading
+their values:
+
+```bash
+gcloud secrets versions list github-webhook-secret --project=runnerforge
+```
+
+## Mitigate
+
+<Callout type="warn" title="Mutations">
+  Changing the webhook secret on either side changes production.
+</Callout>
+
+- **Scanner traffic:** no action. If it persists, snooze the alert in Cloud Monitoring with a reason, and consider
+  raising the threshold in `observability_alerts.tf` once there's a baseline.
+- **Secret mismatch:** make the webhook secret in the GitHub App settings equal the latest version of
+  `github-webhook-secret` (the Cloud Run service reads `latest`). If you add a new Secret Manager version instead,
+  orchestrator instances that are already running may keep the old value until they're replaced.
+- **After the fix:** redeliver the rejected `workflow_job` deliveries from Recent Deliveries so queued jobs get VMs
+  and completed jobs get cleaned up.
+
+## Escalate
+
+401s from GitHub with secrets that match on both sides: open a GitHub issue to investigate the signature check
+(`security.verify_github_signature`) with delivery IDs.
