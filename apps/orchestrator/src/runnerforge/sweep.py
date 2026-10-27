@@ -1,12 +1,18 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-from runnerforge.compute_client import delete_vm, list_runnerforge_vms
+from runnerforge.compute_client import (
+    MAX_VM_RUN_DURATION,
+    delete_vm,
+    list_runnerforge_vms,
+)
 from runnerforge.github_client import get_installation_token, get_job_status
 from runnerforge.models import SweepResult
 
 MAX_LIFETIME_HOURS = 1
-HARD_LIMIT_HOURS = 6
+# Same cap GCE enforces via max_run_duration; the sweep is the backstop for
+# VMs created before that shipped (or if GCE's termination lags).
+HARD_LIMIT = MAX_VM_RUN_DURATION
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +42,7 @@ async def run_sweep() -> SweepResult:
                 )
                 continue
 
-            if age > timedelta(hours=HARD_LIMIT_HOURS):
+            if age > HARD_LIMIT:
                 # Job probably stuck or zombie - kill regardless of status
 
                 await delete_vm(instance_name=vm.name, reason="sweep")

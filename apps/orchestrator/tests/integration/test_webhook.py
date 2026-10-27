@@ -83,6 +83,7 @@ def test_webhook_queued_event_triggers_github_auth_chain(
     create_vm_mock = AsyncMock(
         return_value=OperationHandle(
             name="op-test-12345",
+            project="test-project",
             zone="europe-west4-a",
             spot=True,
             machine_type="e2-medium",
@@ -441,6 +442,7 @@ def test_webhook_queued_event_persists_queued_received_at_to_vm_labels(
     create_vm_mock = AsyncMock(
         return_value=OperationHandle(
             name="op-test",
+            project="test-project",
             zone="europe-west4-a",
             spot=False,
             machine_type="n2-standard-4",
@@ -1209,6 +1211,7 @@ async def test_concurrent_webhooks_keep_per_request_context_isolated(
     create_vm_mock = AsyncMock(
         return_value=OperationHandle(
             name="op-test",
+            project="test-project",
             zone="europe-west4-a",
             machine_type="e2-medium",
             spot=False,

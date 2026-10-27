@@ -11,6 +11,9 @@ PRIVATE_KEY = Path(os.environ["GITHUB_APP_PRIVATE_KEY_PATH"]).read_text()
 GCP_PROJECT_ID = os.environ["GCP_PROJECT_ID"]
 GCP_ZONE = os.environ.get("GCP_ZONE", "europe-west4-a")
 RUNNER_VM_SA_EMAIL = os.environ["RUNNER_VM_SA_EMAIL"]
+# Project that owns the runner image family. Same as GCP_PROJECT_ID today;
+# differs once VMs run elsewhere (a separate hosted pool project, self-host).
+RUNNER_IMAGE_PROJECT = os.environ.get("RUNNER_IMAGE_PROJECT", GCP_PROJECT_ID)
 
 # Startup script fed into the vm creation metadata
 STARTUP_SCRIPT = (

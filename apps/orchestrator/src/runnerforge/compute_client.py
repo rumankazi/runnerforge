@@ -12,19 +12,33 @@ from google.cloud import logging as gcp_logging
 from opentelemetry import trace
 from pydantic import ValidationError
 
-from runnerforge.config import GCP_PROJECT_ID, GCP_ZONE, RUNNER_VM_SA_EMAIL
+from runnerforge.config import (
+    GCP_PROJECT_ID,
+    GCP_ZONE,
+    RUNNER_IMAGE_PROJECT,
+    RUNNER_VM_SA_EMAIL,
+)
 from runnerforge.models import RunnerForgeVmLabels, VmInfo
 
 _KNOWN_MACHINE_TYPES: set[str] | None = None
 _logging_client: gcp_logging.Client | None = None
 _RUNNER_IMAGE_NAME: str | None = None  # full GCE name, used as source_image pin
 _RUNNER_IMAGE_VERSION: str | None = None  # dotted semver, used in logs/metrics
-_BOOT_IMAGE_FAMILY = "projects/runnerforge/global/images/family/runnerforge-runner"
+_RUNNER_IMAGE_FAMILY = "runnerforge-runner"
+_BOOT_IMAGE_FAMILY = (
+    f"projects/{RUNNER_IMAGE_PROJECT}/global/images/family/{_RUNNER_IMAGE_FAMILY}"
+)
 _BOOT_DISK_SIZE_GB = 10
 _DATA_DISK_SIZE_GB = 50
 # handle_queued writes repo-url with this prefix; the sweep strips it to get
 # the exact owner/repo for the GitHub jobs API.
 GITHUB_REPO_URL_PREFIX = "https://github.com/"
+# GCE deletes the VM (and its auto-delete disks) after this much RUNNING time,
+# so a stuck or abandoned runner can't bill indefinitely between daily sweeps.
+# 6h matches GitHub's default job timeout (360 min); the 15 min covers boot +
+# registration so a job using its full default timeout isn't cut short. The
+# sweep's hard limit uses the same value. Becomes a per-tenant limit later.
+MAX_VM_RUN_DURATION = timedelta(hours=6, minutes=15)
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -35,6 +49,7 @@ class OperationHandle:
     """What `create_vm` returns so polling code can query the GCE operation later."""
 
     name: str
+    project: str
     zone: str
     spot: bool
     machine_type: str
@@ -130,7 +145,7 @@ def init_runner_image():
         return
     try:
         image = _images_client.get_from_family(
-            project=GCP_PROJECT_ID, family="runnerforge-runner"
+            project=RUNNER_IMAGE_PROJECT, family=_RUNNER_IMAGE_FAMILY
         )
     except (DefaultCredentialsError, GoogleAPIError) as e:
         logger.warning(
@@ -257,8 +272,10 @@ async def create_vm(
     # init_runner_image resolved a specific image, qualify its short name
     # into the canonical projects/<project>/global/images/<name> form;
     # otherwise fall back to the family alias (which is already qualified).
+    # The image lives in RUNNER_IMAGE_PROJECT, not necessarily project_id
+    # (the project the VM is created in).
     source_image = (
-        f"projects/{project_id}/global/images/{_RUNNER_IMAGE_NAME}"
+        f"projects/{RUNNER_IMAGE_PROJECT}/global/images/{_RUNNER_IMAGE_NAME}"
         if _RUNNER_IMAGE_NAME
         else _BOOT_IMAGE_FAMILY
     )
@@ -281,6 +298,9 @@ async def create_vm(
                 initialize_params=compute_v1.AttachedDiskInitializeParams(
                     source_image=source_image,
                     disk_size_gb=_BOOT_DISK_SIZE_GB,
+                    # Disks don't inherit instance labels; without these the
+                    # billing export can't attribute disk cost to a job/tenant.
+                    labels=labels,
                 ),
             ),
             # Data disk - workflow execution space (larger, blank, formatted  at boot)
@@ -290,6 +310,7 @@ async def create_vm(
                 initialize_params=compute_v1.AttachedDiskInitializeParams(
                     disk_size_gb=data_disk_size_gb,
                     disk_type=f"zones/{zone}/diskTypes/pd-balanced",
+                    labels=labels,
                 ),
             ),
         ]
@@ -318,13 +339,21 @@ async def create_vm(
             )
         ]
 
+        # Every VM gets a hard runtime cap enforced by GCE itself. DELETE (not
+        # STOP): a stopped VM clears its termination timestamp and its disks
+        # keep billing. The action is required for standard VMs and defaults
+        # to STOP for Spot, so it's always set explicitly.
+        scheduling = compute_v1.Scheduling(
+            instance_termination_action="DELETE",
+            max_run_duration=compute_v1.Duration(
+                seconds=int(MAX_VM_RUN_DURATION.total_seconds())
+            ),
+        )
         if spot:
-            instance.scheduling = compute_v1.Scheduling(
-                provisioning_model="SPOT",
-                instance_termination_action="DELETE",
-                automatic_restart=False,
-                on_host_maintenance="TERMINATE",
-            )
+            scheduling.provisioning_model = "SPOT"
+            scheduling.automatic_restart = False
+            scheduling.on_host_maintenance = "TERMINATE"
+        instance.scheduling = scheduling
 
         # Prepare the request to insert an instance
         request = compute_v1.InsertInstanceRequest()
@@ -357,6 +386,7 @@ async def create_vm(
         )
         return OperationHandle(
             name=operation.name,
+            project=project_id,
             zone=zone,
             machine_type=machine_type,
             spot=spot,
@@ -388,7 +418,8 @@ async def wait_for_vm_creation(
             try:
                 op = await asyncio.to_thread(
                     _zone_ops_client.get,
-                    project=GCP_PROJECT_ID,
+                    # The operation lives in the project the VM was created in.
+                    project=handle.project,
                     zone=handle.zone,
                     operation=handle.name,
                 )

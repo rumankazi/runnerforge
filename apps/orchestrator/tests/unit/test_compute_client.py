@@ -584,6 +584,9 @@ def test_wait_for_vm_creation_returns_success_when_op_done_no_error(
 
     handle = OperationHandle(
         name="op-123",
+        # Not GCP_PROJECT_ID: the poll must follow the project the VM was
+        # created in, or it 404s until timeout for VMs in another project.
+        project="pool-project",
         zone="europe-west4-a",
         machine_type="e2-medium",
         spot=False,
@@ -594,6 +597,7 @@ def test_wait_for_vm_creation_returns_success_when_op_done_no_error(
         outcome = asyncio.run(wait_for_vm_creation(handle, timeout=10.0))
 
     assert outcome.outcome == "success"
+    assert zone_ops_mock.get.call_args.kwargs["project"] == "pool-project"
     assert outcome.op_name == "op-123"
     assert outcome.zone == "europe-west4-a"
     assert outcome.error_code is None
@@ -619,6 +623,7 @@ def test_wait_for_vm_creation_returns_failure_on_op_error(monkeypatch, caplog):
 
     handle = OperationHandle(
         name="op-456",
+        project="test-project",
         zone="europe-west4-a",
         machine_type="e2-medium",
         spot=False,
@@ -653,6 +658,7 @@ def test_wait_for_vm_creation_polls_until_done(monkeypatch):
 
     handle = OperationHandle(
         name="op-789",
+        project="test-project",
         zone="europe-west4-a",
         machine_type="e2-medium",
         spot=False,
@@ -675,6 +681,7 @@ def test_wait_for_vm_creation_times_out_when_op_stays_running(monkeypatch, caplo
 
     handle = OperationHandle(
         name="op-timeout",
+        project="test-project",
         zone="europe-west4-a",
         machine_type="e2-medium",
         spot=False,
@@ -712,6 +719,7 @@ def test_wait_for_vm_creation_keeps_polling_after_transient_get_error(
 
     handle = OperationHandle(
         name="op-flake",
+        project="test-project",
         zone="europe-west4-a",
         machine_type="e2-medium",
         spot=False,
@@ -775,6 +783,43 @@ def test_init_runner_image_resolves_and_sets_globals(monkeypatch, caplog):
     assert log is not None
     assert log.image_name == "runnerforge-runner-image-0-2-0"
     assert log.image_version == "0.2.0"
+    mock_images_client.get_from_family.assert_called_once_with(
+        project="test-project", family="runnerforge-runner"
+    )
+
+
+def test_create_vm_takes_image_from_image_project_not_target_project(monkeypatch):
+    """The VM's project and the image's project are independent. Building the
+    image path from the target project pointed at an image that doesn't exist
+    whenever a VM was created outside the image project."""
+    mock_client = MagicMock()
+    mock_client.insert.return_value.name = "op-1"
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
+    monkeypatch.setattr(
+        "runnerforge.compute_client._RUNNER_IMAGE_NAME",
+        "runnerforge-runner-image-0-2-0",
+    )
+    monkeypatch.setattr(
+        "runnerforge.compute_client.RUNNER_IMAGE_PROJECT", "image-project"
+    )
+
+    handle = asyncio.run(
+        create_vm(
+            instance_name="x",
+            machine_type="e2-micro",
+            labels={"runner": "runnerforge"},
+            project_id="pool-project",
+        )
+    )
+
+    request = mock_client.insert.call_args.kwargs["request"]
+    assert request.project == "pool-project"
+    assert (
+        request.instance_resource.disks[0].initialize_params.source_image
+        == "projects/image-project/global/images/runnerforge-runner-image-0-2-0"
+    )
+    assert handle is not None
+    assert handle.project == "pool-project"
 
 
 def test_init_runner_image_early_returns_when_no_images_client(monkeypatch, caplog):
@@ -839,7 +884,9 @@ def test_create_vm_falls_back_to_family_alias_when_image_name_unset(monkeypatch)
     boot_disk = request.instance_resource.disks[0]
     assert (
         boot_disk.initialize_params.source_image
-        == "projects/runnerforge/global/images/family/runnerforge-runner"
+        # RUNNER_IMAGE_PROJECT (defaults to GCP_PROJECT_ID) — no hardcoded
+        # "runnerforge", which would break self-host.
+        == "projects/test-project/global/images/family/runnerforge-runner"
     )
 
 
@@ -1033,6 +1080,8 @@ def test_create_vm_attaches_spot_scheduling_block_when_spot_true(monkeypatch, ca
     assert scheduling.instance_termination_action == "DELETE"
     assert scheduling.automatic_restart is False
     assert scheduling.on_host_maintenance == "TERMINATE"
+    # Runtime cap applies to Spot as well.
+    assert scheduling.max_run_duration.seconds == 6 * 3600 + 15 * 60
 
     # Log carries the spot dimension so PR 4's vm_creation_count metric can slice on it
     log = next(
@@ -1043,10 +1092,10 @@ def test_create_vm_attaches_spot_scheduling_block_when_spot_true(monkeypatch, ca
     assert log.machine_type == "n2-standard-4"
 
 
-def test_create_vm_omits_scheduling_block_when_spot_false(monkeypatch):
-    """spot=False (default) means no scheduling block is set — GCE applies
-    on-demand defaults. Pins the negative-path behavior so a regression that
-    always attaches the block can't slip through."""
+def test_create_vm_caps_runtime_for_on_demand_vms_too(monkeypatch):
+    """Every VM gets a GCE-enforced runtime cap with DELETE, not just Spot.
+    Without it a stuck on-demand VM bills until the (daily) sweep. On-demand
+    stays on-demand: no SPOT provisioning, default restart/maintenance."""
     mock_client = MagicMock()
     mock_client.insert.return_value.name = "op-ondemand-1"
     monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
@@ -1062,16 +1111,28 @@ def test_create_vm_omits_scheduling_block_when_spot_false(monkeypatch):
 
     assert op_handle is not None
     assert op_handle.spot is False
-
-    # When spot=False, scheduling is the default proto value (an empty Scheduling
-    # message). The four spot-specific fields stay at their defaults: empty
-    # string for provisioning_model / termination_action / maintenance, True
-    # for automatic_restart.
+    assert op_handle.project == "test-project"
     scheduling = mock_client.insert.call_args.kwargs[
         "request"
     ].instance_resource.scheduling
     assert scheduling.provisioning_model == ""
-    assert scheduling.instance_termination_action == ""
+    assert scheduling.instance_termination_action == "DELETE"
+    assert scheduling.max_run_duration.seconds == 6 * 3600 + 15 * 60
+    assert scheduling.on_host_maintenance == ""
+
+
+def test_create_vm_labels_both_disks(monkeypatch):
+    """Disks don't inherit instance labels. Without their own, the billing
+    export can't attribute disk cost (60 GB per VM) to a job or tenant."""
+    mock_client = MagicMock()
+    mock_client.insert.return_value.name = "op-1"
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
+    labels = {"runner": "runnerforge", "installation_id": "123"}
+
+    asyncio.run(create_vm(instance_name="x", machine_type="e2-micro", labels=labels))
+
+    disks = mock_client.insert.call_args.kwargs["request"].instance_resource.disks
+    assert [dict(d.initialize_params.labels) for d in disks] == [labels, labels]
 
 
 # -----------------------------------------------------------------------------
