@@ -120,7 +120,8 @@ deleting, it checks:
     quietly.
   </Step>
   <Step>
-    **The VM exists.** If it's already gone, that's logged as an idempotent no-op.
+    **The VM exists.** If it's already gone (GCE deletes preempted Spot VMs itself), nothing is deleted, but the
+    preemption cross-check below still runs.
   </Step>
   <Step>
     **The VM is ours and belongs to this installation.** Whoever registers a runner chooses its name, so the

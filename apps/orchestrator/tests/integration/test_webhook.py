@@ -1106,10 +1106,20 @@ def test_webhook_completed_runs_preemption_check_when_vm_already_gone(
     ],
     ids=["foreign-installation", "missing-runner-label", "no-labels"],
 )
+@pytest.mark.parametrize("conclusion", ["success", "failure", "cancelled"])
 def test_webhook_completed_refuses_delete_when_vm_not_owned(
-    fixtures_dir, monkeypatch, caplog, target_labels, expected_vm_installation_id
+    fixtures_dir,
+    monkeypatch,
+    caplog,
+    target_labels,
+    expected_vm_installation_id,
+    conclusion,
 ):
-    body = _completed_payload(fixtures_dir, "runnerforge-1-2-1")
+    """failure/cancelled matter most: they would otherwise schedule the
+    preemption cross-check for a VM this installation doesn't own."""
+    payload = json.loads(_completed_payload(fixtures_dir, "runnerforge-1-2-1"))
+    payload["workflow_job"]["conclusion"] = conclusion
+    body = json.dumps(payload).encode()
     monkeypatch.setattr(
         "runnerforge.handlers.get_vm_labels_by_name",
         AsyncMock(return_value=target_labels),
@@ -1397,3 +1407,31 @@ def test_webhook_non_queued_events_bypass_allow_list(fixtures_dir, monkeypatch, 
 
     assert response.status_code == 200
     handler_mock.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("allowed", "expect_check"),
+    [(frozenset({135399152}), True), (frozenset({999}), False), (None, True)],
+    ids=["allowed", "not-allowed", "allow-list-unset"],
+)
+def test_webhook_completed_preemption_check_respects_allow_list(
+    fixtures_dir, monkeypatch, allowed, expect_check
+):
+    """With the VM already gone, ownership can't be checked, and the runner
+    name in the payload drives an audit-log query. Only allow-listed
+    installations (the only ones that can have our VMs) may trigger it, so
+    outsiders can't spend the fixed Logging read quota."""
+    monkeypatch.setattr("runnerforge.main.ALLOWED_INSTALLATION_IDS", allowed)
+    payload = json.loads(_completed_payload(fixtures_dir, "runnerforge-1-2-1"))
+    payload["workflow_job"]["conclusion"] = "failure"
+    body = json.dumps(payload).encode()
+    monkeypatch.setattr(
+        "runnerforge.handlers.get_vm_labels_by_name", AsyncMock(return_value=None)
+    )
+    was_preempted_mock = AsyncMock(return_value=False)
+    monkeypatch.setattr("runnerforge.compute_client.was_preempted", was_preempted_mock)
+
+    response = client.post("/webhook", content=body, headers=_headers(body))
+
+    assert response.status_code == 200
+    assert was_preempted_mock.await_count == (1 if expect_check else 0)

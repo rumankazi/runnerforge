@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -39,6 +40,8 @@ GITHUB_REPO_URL_PREFIX = "https://github.com/"
 # registration so a job using its full default timeout isn't cut short. The
 # sweep's hard limit uses the same value. Becomes a per-tenant limit later.
 MAX_VM_RUN_DURATION = timedelta(hours=6, minutes=15)
+# GCE instance naming rule (RFC 1035 label); no regex metacharacters.
+_GCE_INSTANCE_NAME_RE = re.compile(r"[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?")
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -212,12 +215,18 @@ async def was_preempted(vm_name: str) -> bool:
     """
     if _logging_client is None:
         return False
+    # The name comes from a webhook payload and is interpolated into a regex
+    # filter: anything that isn't a valid GCE instance name can't be ours.
+    if not _GCE_INSTANCE_NAME_RE.fullmatch(vm_name):
+        return False
     client = _logging_client  # local binding so the lambda's closure type-narrows
 
     since = datetime.now(UTC) - timedelta(hours=24)
     filter_str = (
         f'protoPayload.methodName="compute.instances.preempted" '
-        f'AND protoPayload.resourceName:"{vm_name}" '
+        # Anchored regex on the instance name, not `:` (case-insensitive
+        # substring): runnerforge-1-2-1 must not match runnerforge-1-2-10.
+        f'AND protoPayload.resourceName=~"/instances/{vm_name}$" '
         f'AND timestamp >= "{since.isoformat()}"'
     )
 
