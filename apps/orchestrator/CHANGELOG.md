@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.19.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.18.0...orchestrator-v0.19.0) (2026-10-28)
+
+
+### Features
+
+* **orchestrator:** log one outcome per queued webhook ([#308](https://github.com/rumankazi/runnerforge/issues/308)) ([a4624a4](https://github.com/rumankazi/runnerforge/commit/a4624a4b335cc1877b017c72f3f0db9f51611fbc))
+
+
+### Bug Fixes
+
+* **orchestrator:** bound the gone-VM preemption cross-check ([#312](https://github.com/rumankazi/runnerforge/issues/312)) ([ed01108](https://github.com/rumankazi/runnerforge/commit/ed0110865fc98ab58f440344e3849e876b0ca904))
+* **orchestrator:** run preemption cross-check when the VM is already gone ([#306](https://github.com/rumankazi/runnerforge/issues/306)) ([2ebaedc](https://github.com/rumankazi/runnerforge/commit/2ebaedc9c49c402341dd65ce71a439149b0c31f4))
+* **orchestrator:** sweep decides on the VM's runner, not the job it was booted for ([#307](https://github.com/rumankazi/runnerforge/issues/307)) ([bf82f11](https://github.com/rumankazi/runnerforge/commit/bf82f1136c931dca1e64ca68640a77201ab518c2))
+
 ## [0.18.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.17.8...orchestrator-v0.18.0) (2026-10-27)
 
 
