@@ -90,7 +90,7 @@ These are the SLOs and alerts codified in Terraform, not aspirations.
 | --- | --- | --- |
 | Availability | 99.5% of requests are non-5xx, per calendar month. 4xx (bad signatures, scanners) counts as good. | `observability_slos.tf` → `availability` |
 | Time to register | 99.5% of 5-minute windows in a calendar month have at least 99.5% of runners picking up their job within 300 s of RunnerForge receiving the queued webhook (`runner_readiness_seconds`). | `observability_slos.tf` → `time-to-register` |
-| No lost work | Alert when submitted VM creations (`vm_creation_count`) divided by accepted queued webhooks (`webhook_event_count`, `event_type=queued`) stays below 0.9 for 5 minutes. | `observability_alerts.tf` → `lost_webhook_ratio` |
+| No lost work | Alert when queued webhooks that reached a decision (`queued_outcome_count`: VM submitted, duplicate, or label rejection) divided by accepted queued webhooks (`webhook_event_count`, `event_type=queued`) stays below 0.9 for 5 minutes. | `observability_alerts.tf` → `lost_webhook_ratio` |
 | No orphaned VMs | No VM runs longer than 6 h 15 min. GCE deletes it, and the sweep backs that up. | `compute_client.MAX_VM_RUN_DURATION` |
 
 ## Status

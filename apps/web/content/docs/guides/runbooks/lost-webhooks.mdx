@@ -1,6 +1,6 @@
 ---
 title: Lost webhooks
-description: Runbook for "Lost-webhook ratio < 0.9 (5m)", queued jobs accepted without a VM being created.
+description: Runbook for "Lost-webhook ratio < 0.9 (5m)", queued jobs accepted but never handled to a decision.
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
@@ -9,21 +9,23 @@ import { Callout } from 'fumadocs-ui/components/callout';
 
 Email from "RunnerForge Alerts": **Lost-webhook ratio &lt; 0.9 (5m)**, severity ERROR.
 
-The ratio is `vm_creation_count` (`Submitted VM creation`) over `webhook_event_count` for `event_type="queued"`
-(`Webhook event received`). The anchor line is written after the HMAC check, the RunnerForge label check and the
-installation allow-list, so ignored events and disallowed installations don't count. The alert fires when the ratio
+The ratio is `queued_outcome_count` (`Queued webhook outcome`) over `webhook_event_count` for
+`event_type="queued"` (`Webhook event received`). Every queued event that reaches a decision logs exactly one
+outcome: `vm_submitted`, `already_exists` (duplicate delivery) or `policy_rejected` (bad `runs-on` labels). So the
+ratio only drops for events that failed before any decision. The anchor line is written after the HMAC check, the
+RunnerForge label check and the installation allow-list, so ignored events and disallowed installations don't count. The alert fires when the ratio
 stays under 0.9 for 5 minutes, and stays quiet when no queued webhooks arrive.
 
 ## Impact
 
-Each missing creation is a job GitHub thinks we accepted, with no runner coming. It stays queued; GitHub won't
+Each missing outcome is a job GitHub thinks we accepted, with no runner coming. It stays queued; GitHub won't
 resend it.
 
 ## Diagnose
 
 All commands are read-only.
 
-**1. Find which queued events didn't produce a VM.** These are the lines written between the anchor and VM creation:
+**1. Find which queued events didn't reach an outcome.** Compare anchors with outcomes:
 
 ```bash
 gcloud logging read '
@@ -31,21 +33,22 @@ gcloud logging read '
   resource.labels.service_name="runnerforge-orchestrator"
   (
     (jsonPayload.message="Webhook event received" jsonPayload.event_type="queued")
-    OR jsonPayload.message="Submitted VM creation"
-    OR jsonPayload.message="Machine policy rejected"
-    OR jsonPayload.message="VM already exists"
+    OR jsonPayload.message="Queued webhook outcome"
     OR jsonPayload.message:"Exception in ASGI application"
   )
 ' --project=runnerforge --freshness=1h --limit=100 \
-  --format='table(timestamp, jsonPayload.message, jsonPayload.job_id, jsonPayload.repo, jsonPayload.reason, jsonPayload.offending_tokens)'
+  --format='table(timestamp, jsonPayload.message, jsonPayload.outcome, jsonPayload.job_id, jsonPayload.repo, jsonPayload.request_id)'
 ```
+
+An anchor with no `Queued webhook outcome` for the same `request_id` is a lost event.
 
 | What you see after the anchor | Cause |
 |---|---|
-| `Machine policy rejected` | The job's labels can't be mapped to a machine. `reason` is `unknown_token`, `conflicting_machines` or `invalid_machine_type`; `offending_tokens` shows the labels. This is a user-side `runs-on` problem. |
-| `VM already exists` | The same job was delivered twice (often a manual redelivery). The VM from the first delivery serves it. |
-| `Exception in ASGI application` | The handler failed after the anchor (GitHub token call or GCE insert). The request got a 5xx; see [Availability SLO](/docs/guides/runbooks/webhook-availability). |
-| Nothing | Rare. Follow one `request_id` end to end (step 2). |
+| `Exception in ASGI application` | The handler failed before deciding (GitHub token call, or GCE insert error other than "already exists"). The request got a 5xx; see [Availability SLO](/docs/guides/runbooks/webhook-availability). |
+| Nothing | The instance died mid-request, or logging was lost. Follow one `request_id` end to end (step 2). |
+
+`policy_rejected` and `already_exists` outcomes are expected and never lower the ratio. Bad labels show up in
+"Machine policy rejects by reason" instead.
 
 **2. Follow one request.**
 
@@ -63,15 +66,11 @@ rejects by reason".
   Redelivering changes production: it creates VMs.
 </Callout>
 
-- **Policy rejects:** tell the repo owner which labels were rejected. Label rules are in
-  [Webhook flow](/docs/design/webhook-flow#label-parsing). They need to fix `runs-on`, then cancel and re-run the
-  job.
-- **Duplicate deliveries:** no action.
 - **Handler exceptions:** fix the cause using the availability runbook, then redeliver the failed `queued`
   deliveries from the GitHub App settings, Advanced, Recent Deliveries.
 
 ## Escalate
 
-If neither policy rejects nor exceptions explain the gap, track it in a GitHub issue with the request IDs. The
-anchor log and the creation log are written in the same request, so a gap without an error line most likely means
-a code bug.
+If exceptions don't explain the gap, track it in a GitHub issue with the request IDs. The anchor and the outcome
+are written in the same request, so a gap without an error line most likely means a code bug or an instance that
+died mid-request.

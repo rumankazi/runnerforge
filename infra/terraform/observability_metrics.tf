@@ -456,6 +456,32 @@ resource "google_logging_metric" "sweep_error_count" {
 # the orchestrator is silently dropping work GitHub thinks it delivered.
 # ---------------------------------------------------------------------------
 
+# Numerator of lost_webhook_ratio: one "Queued webhook outcome" line per
+# queued event that reached a decision (vm_submitted / already_exists /
+# policy_rejected). A queued event with no outcome (exception, crash) is the
+# only thing that should count as lost; deliberate no-VM decisions are not.
+resource "google_logging_metric" "queued_outcome_count" {
+  name   = "queued_outcome_count"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Queued webhook outcome"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+    labels {
+      key        = "outcome"
+      value_type = "STRING"
+    }
+  }
+
+  label_extractors = {
+    "outcome" = "EXTRACT(jsonPayload.outcome)"
+  }
+}
+
 resource "google_logging_metric" "webhook_event_count" {
   name   = "webhook_event_count"
   filter = <<-EOT
@@ -595,7 +621,35 @@ resource "time_sleep" "wait_for_log_metrics" {
     google_logging_metric.machine_policy_reject_count,
     google_logging_metric.job_preempted_count,
     google_logging_metric.vm_preemption_count,
+    google_logging_metric.queued_outcome_count,
   ]
+
+  # time_sleep only sleeps on create; a new metric added to depends_on would
+  # NOT re-trigger it, and an alert switched to that metric in the same apply
+  # would race its registration. Keying on the metric names re-runs the sleep
+  # whenever the set changes.
+  triggers = {
+    log_metrics = join(",", [
+      google_logging_metric.vm_creation_count.name,
+      google_logging_metric.vm_creation_outcome_count.name,
+      google_logging_metric.vm_deletion_count.name,
+      google_logging_metric.time_to_runner_seconds.name,
+      google_logging_metric.runner_readiness_seconds.name,
+      google_logging_metric.github_queued_delivery_lag_seconds.name,
+      google_logging_metric.github_in_progress_delivery_lag_seconds.name,
+      google_logging_metric.webhook_request_count.name,
+      google_logging_metric.webhook_rejection_count.name,
+      google_logging_metric.webhook_event_count.name,
+      google_logging_metric.runner_vm_count.name,
+      google_logging_metric.sweep_checked_count.name,
+      google_logging_metric.sweep_deleted_count.name,
+      google_logging_metric.sweep_error_count.name,
+      google_logging_metric.machine_policy_reject_count.name,
+      google_logging_metric.job_preempted_count.name,
+      google_logging_metric.vm_preemption_count.name,
+      google_logging_metric.queued_outcome_count.name,
+    ])
+  }
 
   create_duration = "120s"
 }

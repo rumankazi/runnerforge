@@ -61,6 +61,7 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Ignoring GitHub event` | INFO | `main.py` | `github_event` (non-`workflow_job` events) | |
 | `Installation not allowed` | WARNING | `main.py` | context `installation_id`, `repo`, `sender` | |
 | `Webhook event received` | INFO | `main.py` | `event_type` (`queued`, `in_progress`, `completed`) | `webhook_event_count` |
+| `Queued webhook outcome` | INFO | `handlers.py` | `outcome` (`vm_submitted`, `already_exists`, `policy_rejected`) | `queued_outcome_count` |
 | `Machine policy rejected` | WARNING | `handlers.py` | `reason`, `offending_tokens` | `machine_policy_reject_count` |
 | `Submitted VM creation` | INFO | `compute_client.py` | `vm_name`, `operation_id`, `machine_type`, `spot`, `image_version` | `vm_creation_count` |
 | `VM already exists` | WARNING | `compute_client.py` | `instance_name` | |
@@ -128,7 +129,7 @@ If the VM is missing or its labels are malformed, `webhook.handle_in_progress` s
 
 ## Log-based metrics
 
-All 17 are in `observability_metrics.tf`. All but one scope to `resource.type="cloud_run_revision"` and
+All 18 are in `observability_metrics.tf`. All but one scope to `resource.type="cloud_run_revision"` and
 `service_name="runnerforge-orchestrator"`.
 
 | Metric | Kind | Source | Labels |
@@ -136,6 +137,7 @@ All 17 are in `observability_metrics.tf`. All but one scope to `resource.type="c
 | `webhook_request_count` | counter | `POST /webhook` | `response_status_code` |
 | `webhook_rejection_count` | counter | `POST /webhook` with status 400–499 | `response_status_code` |
 | `webhook_event_count` | counter | `Webhook event received` | `event_type` |
+| `queued_outcome_count` | counter | `Queued webhook outcome` | `outcome` |
 | `vm_creation_count` | counter | `Submitted VM creation` | `machine_type`, `image_version`, `spot` |
 | `vm_creation_outcome_count` | counter | `VM creation outcome` | `outcome`, `machine_type`, `image_version`, `error_code`, `spot` |
 | `vm_deletion_count` | counter | `Submitted VM deletion` | `reason` |
@@ -168,7 +170,8 @@ Things to know when reading them:
 - The `spot` label on the two VM creation metrics was added out of band with `gcloud logging metrics update`, to
   avoid the provider destroying and recreating the metric.
 - New log-based metrics take several minutes to become queryable. Dependent SLOs and alerts wait behind
-  `time_sleep.wait_for_log_metrics` (120 s) on a fresh apply.
+  `time_sleep.wait_for_log_metrics` (120 s). Its `triggers` list every metric name, so adding a metric re-runs the
+  sleep instead of only sleeping on the first apply.
 
 ## SLOs
 
@@ -198,7 +201,7 @@ the runbook column.
 | Availability SLO fast burn (10x over 1h) | Burn rate of the availability SLO over a 1 h lookback > 10. Auto-closes after 30 min. | CRITICAL | [Availability SLO](/docs/guides/runbooks/webhook-availability) |
 | Time-to-Register SLO fast burn (10x over 1h) | Burn rate of the time-to-register SLO over a 1 h lookback > 10. Auto-closes after 30 min. | CRITICAL | [Time-to-Register SLO](/docs/guides/runbooks/time-to-register) |
 | VM creation failure ratio > 5% (5m) | `failure` + `timeout` outcomes over all outcomes > 0.05, 5-minute alignment, held 5 min | ERROR | [VM creation failures](/docs/guides/runbooks/vm-creation-failures) |
-| Lost-webhook ratio &lt; 0.9 (5m) | `vm_creation_count` over queued `webhook_event_count` below 0.9, 5-minute alignment, held 5 min. Inactive when there's no data. | ERROR | [Lost webhooks](/docs/guides/runbooks/lost-webhooks) |
+| Lost-webhook ratio &lt; 0.9 (5m) | `queued_outcome_count` over queued `webhook_event_count` below 0.9, 5-minute alignment, held 5 min. Inactive when there's no data. Label-policy rejections and duplicates are outcomes, so they don't lower it. | ERROR | [Lost webhooks](/docs/guides/runbooks/lost-webhooks) |
 | Webhook rejections > 5/min (10m) | More than 50 `webhook_rejection_count` in a 10-minute window, held 10 min | WARNING | [Webhook rejections](/docs/guides/runbooks/webhook-rejections) |
 | Cold-start latency p95 > 30s (5m) | Cloud Run `container/startup_latencies` p95 > 30 000 ms, 5-minute alignment, held 5 min. Inactive when there's no data. | WARNING | [Cold-start latency](/docs/guides/runbooks/cold-start-latency) |
 | Cloud Run instance count > 40 (80% of max=50) | Cloud Run `container/instance_count` max > 40, 1-minute alignment, held 10 min | WARNING | [Instance saturation](/docs/guides/runbooks/instance-saturation) |
