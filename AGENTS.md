@@ -2,7 +2,7 @@
 
 Self-hosted GitHub Actions runners on GCP. A FastAPI **orchestrator** (Cloud Run) receives GitHub App
 `workflow_job` webhooks, boots GCE spot VMs from a Packer image, registers them as runners, and sweeps
-stale VMs. **Terraform** provisions all GCP resources. **apps/web** is the Next.js + Fumadocs docs site (Vercel).
+stale VMs. **Terraform** provisions all GCP resources. **apps/web** is the Next.js + Fumadocs docs site (static export on Cloudflare Workers at runnerforge.com, deployed by Workers Builds).
 
 ## Commands (verified locally 2026-10-22)
 
@@ -93,6 +93,8 @@ conftest 0.68.2. Install with `mise install` / `aqua i -a` where available.
 - DO run the full per-app command block above before declaring done.
 - DON'T run `terraform plan/apply`, `packer build`, `gcloud` deploys, or trigger deploy workflows — they need
   GCP WIF creds and touch prod. Produce a plan description for the owner instead.
+- DON'T run `wrangler deploy` / `wrangler versions deploy` / `wrangler triggers deploy` for `apps/web`: production deploys come from
+  Workers Builds on merge to `main`. `bun run cf:preview` (local `wrangler dev`) is fine.
 - DON'T touch `infra/terraform/.tfaction/`, `.terraform.lock.hcl` (unless upgrading providers), or state.
 - DON'T add a ruff/prettier config or new lint rules as a side effect of another change.
 - DON'T expect `test-jobs.yaml` to run on hosted runners — it dogfoods `[runnerforge, small, spot]`.
@@ -105,4 +107,6 @@ conftest 0.68.2. Install with `mise install` / `aqua i -a` where available.
   trivy step; system terraform/tflint may be newer than the pins (checks still pass, but output can differ from CI).
   The aqua bin symlinks need `aqua` itself on PATH (it comes from mise): use `mise activate`, or prepend
   `~/.local/share/mise/shims` before `~/.local/share/aquaproj-aqua/bin`.
+- Homebrew's bun may be older than the `apps/web/bun.lock` format ("UnknownLockfileVersion"). Use mise's bun
+  (`mise exec -- bun ...`, or mise shims first on PATH).
 - `docker build` context is the repo root; everything else runs inside the app directory.

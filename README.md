@@ -3,9 +3,9 @@
 <p align="center">Self-hosted runners on GCP for GitHub Actions.</p>
 
 <p align="center">
-  <a href="https://runnerforge.vercel.app"><b>Documentation</b></a> ·
-  <a href="https://runnerforge.vercel.app/docs/design/architecture"><b>Architecture</b></a> ·
-  <a href="https://runnerforge.vercel.app/docs/design/decisions"><b>ADRs</b></a>
+  <a href="https://runnerforge.com"><b>Documentation</b></a> ·
+  <a href="https://runnerforge.com/docs/design/architecture"><b>Architecture</b></a> ·
+  <a href="https://runnerforge.com/docs/design/decisions"><b>ADRs</b></a>
 </p>
 
 <p align="center">
@@ -58,7 +58,7 @@ Before pushing, run the pre-push check script (somewhat mirrors CI):
 ```
 runnerforge/
 ├── apps/orchestrator/    # FastAPI app → Cloud Run
-├── apps/web/             # Next.js + Fumadocs docs site → Vercel
+├── apps/web/             # Next.js + Fumadocs docs site → Cloudflare Workers (runnerforge.com)
 ├── infra/terraform/      # GCP infra (TF apply automated via deploy-infra.yaml)
 ├── infra/packer/         # Runner VM image build
 ├── infra/policies/       # OPA policies (rego) enforced in CI
@@ -93,6 +93,6 @@ Independently, `drift-detection.yaml` runs daily at 08:17 UTC against deployed G
 
 ## Further reading
 
-- **Design**: [architecture](https://runnerforge.vercel.app/docs/design/architecture) · [decisions (ADRs)](https://runnerforge.vercel.app/docs/design/decisions) · [security](https://runnerforge.vercel.app/docs/design/security) · [observability](https://runnerforge.vercel.app/docs/design/observability) · [trust model](https://runnerforge.vercel.app/docs/design/trust) · [webhook flow](https://runnerforge.vercel.app/docs/design/webhook-flow)
-- **Operations**: [runbooks](https://runnerforge.vercel.app/docs/guides/runbooks) (webhook availability, terraform drift, terraform stale lock)
-- **Development**: phase-by-phase implementation history in [docs/development/](https://runnerforge.vercel.app/docs/development)
+- **Design**: [architecture](https://runnerforge.com/docs/design/architecture) · [decisions (ADRs)](https://runnerforge.com/docs/design/decisions) · [security](https://runnerforge.com/docs/design/security) · [observability](https://runnerforge.com/docs/design/observability) · [trust model](https://runnerforge.com/docs/design/trust) · [webhook flow](https://runnerforge.com/docs/design/webhook-flow)
+- **Operations**: [runbooks](https://runnerforge.com/docs/guides/runbooks) (webhook availability, terraform drift, terraform stale lock)
+- **Development**: phase-by-phase implementation history in [docs/development/](https://runnerforge.com/docs/development)
