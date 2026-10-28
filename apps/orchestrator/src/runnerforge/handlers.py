@@ -285,14 +285,16 @@ async def handle_completed(event: WorkflowJobEvent) -> PreemptionCheckRequest | 
         # prefix alone proves nothing. Only delete a VM whose own labels say
         # we created it for the installation that sent this event.
         target_labels = await get_vm_labels_by_name(runner_name)
+        installation_id = str(event.installation.id)
         if target_labels is None:
+            # Not an early return: a preempted Spot VM is deleted by GCE
+            # (termination action DELETE) before this event arrives, and that
+            # is exactly the case the preemption cross-check below exists for.
             logger.info(
                 "VM already deleted (idempotent no-op)",
                 extra={"vm_name": runner_name, "reason": "webhook"},
             )
-            return None
-        installation_id = str(event.installation.id)
-        if (
+        elif (
             target_labels.get("runner") != "runnerforge"
             or target_labels.get("installation_id") != installation_id
         ):
@@ -303,11 +305,12 @@ async def handle_completed(event: WorkflowJobEvent) -> PreemptionCheckRequest | 
                 extra={"vm_installation_id": target_labels.get("installation_id")},
             )
             return None
-        operation_id = await delete_vm(runner_name, reason="webhook")
-        logger.info(
-            "VM deletion submitted",
-            extra={"runner_name": runner_name, "operation_id": operation_id},
-        )
+        else:
+            operation_id = await delete_vm(runner_name, reason="webhook")
+            logger.info(
+                "VM deletion submitted",
+                extra={"runner_name": runner_name, "operation_id": operation_id},
+            )
 
         # On failure/cancellation, surface a PreemptionCheckRequest so main.py
         # can schedule the audit-log cross-check in a BackgroundTask. Keeps the
