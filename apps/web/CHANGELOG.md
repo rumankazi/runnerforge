@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.8.0](https://github.com/rumankazi/runnerforge/compare/web-v1.7.1...web-v1.8.0) (2026-10-28)
+
+
+### Features
+
+* **infra/terraform:** lost-webhook alert counts queued outcomes, not VM creations ([#309](https://github.com/rumankazi/runnerforge/issues/309)) ([c6f9231](https://github.com/rumankazi/runnerforge/commit/c6f92313c422ee6479a6bf14de00b9fe4761fe8d))
+
+
+### Bug Fixes
+
+* **orchestrator:** bound the gone-VM preemption cross-check ([#312](https://github.com/rumankazi/runnerforge/issues/312)) ([ed01108](https://github.com/rumankazi/runnerforge/commit/ed0110865fc98ab58f440344e3849e876b0ca904))
+* **orchestrator:** sweep decides on the VM's runner, not the job it was booted for ([#307](https://github.com/rumankazi/runnerforge/issues/307)) ([bf82f11](https://github.com/rumankazi/runnerforge/commit/bf82f1136c931dca1e64ca68640a77201ab518c2))
+
 ## [1.7.1](https://github.com/rumankazi/runnerforge/compare/web-v1.7.0...web-v1.7.1) (2026-10-26)
 
 
