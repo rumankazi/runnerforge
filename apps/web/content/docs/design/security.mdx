@@ -70,8 +70,8 @@ Every VM is created with `scheduling.max_run_duration` of 6h15m and `instance_te
 | VM age | Decision |
 |---|---|
 | Under 1 hour | Skip. The webhook path owns it. |
-| Over `HARD_LIMIT` (the same 6h15m) | Delete, whatever the job's status. |
-| In between | Read the exact `owner/repo` from the VM's `repo-url` metadata and ask GitHub for the job's status. Delete if the job is completed or returns 404. If the repo can't be read, skip and never guess, so only the hard limit applies. |
+| Over `HARD_LIMIT` (the same 6h15m) | Delete, whatever the runner is doing. |
+| In between | Read the exact `owner/repo` from the VM's `repo-url` metadata and ask GitHub whether the runner on this VM (same name) is busy. Busy: skip. Idle or no longer registered: delete. Repo 404, or the repo can't be read: skip and never guess, so only the hard limit applies. |
 
 ## GitHub App credentials
 

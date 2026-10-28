@@ -233,7 +233,7 @@ async def webhook(
     "/sweep",
     status_code=200,
     summary="Orphan VM cleanup sweep",
-    description="Iterates RunnerForge VMs, deletes orphans by checking job status against GitHub. Auth via bearer token.",
+    description="Iterates RunnerForge VMs, deletes orphans whose runner GitHub reports idle or de-registered. Auth via bearer token.",
     tags=["sweep"],
 )
 async def sweep(authorization: Annotated[str, Header()]):
