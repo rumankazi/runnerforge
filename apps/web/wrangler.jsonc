@@ -9,6 +9,10 @@
   // Per-version preview URLs (<version>-runnerforge-web.runnerforge.workers.dev)
   // for non-production branch builds. Production stays on the custom domain.
   "preview_urls": true,
+  // Required by `wrangler preview`, which Workers Builds runs for non-production
+  // branches. Previews inherit nothing from production; the site needs no
+  // bindings or vars, so the block is empty (assets stay top-level).
+  "previews": {},
   "assets": {
     "directory": "./out",
     "not_found_handling": "404-page"

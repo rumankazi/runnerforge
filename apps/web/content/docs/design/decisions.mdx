@@ -576,29 +576,35 @@ RunnerForge started as a single-owner tool. Opening it up raises a set of questi
 
 ---
 
-<Record type="adr" id="017" status="proposed" date="2026-10-27" />
+<Record type="adr" id="017" status="accepted" date="2026-10-28" />
 
-## Docs site hosting as a static export
-
-<Callout type="warn" title="Proposed, not decided">
-  Nothing in this ADR is built. It records the direction under discussion so the trade-offs are written down before work starts.
-</Callout>
+## Docs site: static export on Cloudflare Workers
 
 ### Context
 
-- The docs site (`apps/web`, Next.js + Fumadocs) is deployed on Vercel today (`AGENTS.md`).
-- The docs are public, read-only content. Nothing on them needs a server at request time except the features listed under Consequences.
-- A user-facing dashboard is also planned. It is an authenticated app with different needs, so it is out of scope here and gets its own ADR when that work starts.
+- The docs site (`apps/web`, Next.js + Fumadocs) was deployed on Vercel. Vercel's Hobby plan is for non-commercial use only, the project that owned `runnerforge.com` was paused (the domain returned 503), and the DNS zone already lives on Cloudflare.
+- The docs are public, read-only content. Nothing on them needs a server at request time.
+- The dashboard is an authenticated app with different needs. It is out of scope here and gets its own ADR.
 
 ### Options considered
 
-- **Stay on Vercel**: no migration work; keeps the server features as they are.
-- **Static export served from Cloudflare**: no server to run; the server features must become build-time output or go.
+- **Stay on Vercel**: no migration work, but Hobby forbids commercial use and Pro is a monthly seat for a site that needs no server.
+- **Static export on Cloudflare Workers static assets**: no server to run; static asset requests are free.
+- **Container on Cloud Run**: possible, but a server we don't need for static docs.
 
-### Proposal
+### Decision
 
-Build the docs as static output and serve them from Cloudflare.
+- `next.config.mjs` sets `output: 'export'`; every route is pre-rendered (`revalidate = false`, `generateStaticParams`).
+- Served by the assets-only Worker `runnerforge-web` (`apps/web/wrangler.jsonc`) on the custom domain **`runnerforge.com`**. Cloudflare manages the DNS record and certificate. `www` is a proxied placeholder record with a Redirect Rule to the apex. The production `workers.dev` URL is off.
+- **Deploys: Workers Builds** (Cloudflare's Git integration). A merge to `main` builds `apps/web` and runs `wrangler deploy`; other branches run `wrangler versions upload` and get a preview URL (`<version>-runnerforge-web.runnerforge.workers.dev`, `preview_urls: true`).
+- **No Cloudflare API token in GitHub.** Cloudflare has no keyless OIDC login for wrangler in GitHub Actions, so a GitHub Actions deploy would need a long-lived token. Workers Builds pulls from GitHub instead; the repo is public, so its read access grants nothing new. This keeps the repo's rule of no long-lived deploy secrets (see ADR-007).
 
-### Consequences (if accepted)
+### Consequences
 
-- The docs site has server code that a static export can't run as-is: `app/api/search/route.ts`, `app/og/docs/[...slug]/route.tsx`, the `llms.txt`, `llms-full.txt` and `llms.mdx` routes under `app/`, and the Markdown content negotiation in `proxy.ts`. Each has to be pre-rendered at build time or dropped.
+- `proxy.ts` (Markdown content negotiation on `Accept: text/markdown`) is gone. Markdown copies stay at `/llms.mdx/docs/<page>/content.md`, plus `llms.txt` and `llms-full.txt`.
+- Search is client-side: `/api/search` is a pre-built index and `components/search.tsx` searches it in the browser (`useStaticSearch`).
+- OG images and the `llms` routes are generated at build time.
+- Builds run on Cloudflare (Free plan: 3,000 build minutes a month, 1 concurrent build), outside the repo's GitHub Actions conventions. The PR gate (`qualify.yaml`) still lints, type-checks and builds `apps/web` before merge.
+- Preview URLs are public; acceptable for public docs. Cloudflare Access can protect them later.
+- The `web` release-please component still produces versions and changelogs; deploys follow merges to `main`, not releases.
+
