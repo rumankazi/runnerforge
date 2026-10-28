@@ -6,9 +6,10 @@ import respx
 from pydantic import ValidationError
 
 from runnerforge.github_client import (
+    RepoNotFound,
     get_installation_token,
-    get_job_status,
     get_registration_token,
+    get_runner,
 )
 
 
@@ -354,79 +355,85 @@ async def test_get_registration_token_does_not_retry_on_unknown_error():
     assert route.call_count == 1  # NOT retried — unknown exception
 
 
-# --- get_job_status ---
+# --- get_runner ---
+_RUNNERS_URL = "https://api.github.com/repos/RumanKazi/Foo.js/actions/runners"
+
+
+def _runner(name: str, busy: bool, status: str = "online") -> dict:
+    return {"id": 7, "name": name, "os": "Linux", "status": status, "busy": busy}
+
+
 @respx.mock
-async def test_get_job_status_returns_job_status(caplog):
-    route = respx.get("https://api.github.com/repos/foo/bar/actions/jobs/12").mock(
+async def test_get_runner_returns_exact_name_match():
+    """GitHub doesn't document `name` as an exact filter; a prefix-sharing
+    runner (e.g. a later attempt) must not be mistaken for ours."""
+    route = respx.get(_RUNNERS_URL).mock(
         return_value=httpx.Response(
-            200, json={"status": "completed", "conclusion": "success"}
+            200,
+            json={
+                "total_count": 2,
+                "runners": [
+                    _runner("runnerforge-1-2-10", busy=True),
+                    _runner("runnerforge-1-2-1", busy=False),
+                ],
+            },
         )
     )
 
-    with caplog.at_level(logging.INFO):
-        response = await get_job_status(
-            installation_token="ghs_test_installation_token",
-            repo_full_name="foo/bar",
-            job_id="12",
-        )
-    assert route.called
-    assert response is not None
-    assert response.status == "completed"
-    assert response.conclusion == "success"
-    assert any("Job status retrieved" in record.message for record in caplog.records)
-    assert all(record.levelno == logging.INFO for record in caplog.records)
+    runner = await get_runner(
+        installation_token="ghs_test",
+        repo_full_name="RumanKazi/Foo.js",
+        runner_name="runnerforge-1-2-1",
+    )
+
+    assert runner is not None
+    assert runner.name == "runnerforge-1-2-1"
+    assert runner.busy is False
+    request = route.calls.last.request
+    assert request.url.params["name"] == "runnerforge-1-2-1"
+    assert request.url.params["per_page"] == "100"
+    assert request.headers["Authorization"] == "Bearer ghs_test"
 
 
 @respx.mock
-async def test_get_job_status_handles_null_conclusion_for_in_progress_jobs():
-    # In-progress jobs return conclusion=null from GitHub.
-    # Exercise the `conclusion is not None` branch where conclusion IS None,
-    # so we don't attempt to set None as an OTel attribute.
-    route = respx.get("https://api.github.com/repos/foo/bar/actions/jobs/13").mock(
-        return_value=httpx.Response(
-            200, json={"status": "in_progress", "conclusion": None}
-        )
+async def test_get_runner_returns_none_when_not_registered():
+    """Ephemeral runners are de-registered after their one job."""
+    respx.get(_RUNNERS_URL).mock(
+        return_value=httpx.Response(200, json={"total_count": 0, "runners": []})
     )
 
-    response = await get_job_status(
-        installation_token="ghs_test_installation_token",
-        repo_full_name="foo/bar",
-        job_id="13",
+    runner = await get_runner(
+        installation_token="ghs_test",
+        repo_full_name="RumanKazi/Foo.js",
+        runner_name="runnerforge-1-2-1",
     )
-    assert route.called
-    assert response is not None
-    assert response.status == "in_progress"
-    assert response.conclusion is None
+
+    assert runner is None
 
 
 @respx.mock
-async def test_get_job_status_returns_none_on_404(caplog):
-    route = respx.get("https://api.github.com/repos/foo/bar/actions/jobs/12").mock(
-        return_value=httpx.Response(404, json={"message": "Job not found"})
+async def test_get_runner_raises_repo_not_found_on_404():
+    respx.get(_RUNNERS_URL).mock(
+        return_value=httpx.Response(404, json={"message": "Not Found"})
     )
 
-    with caplog.at_level(logging.INFO):
-        response = await get_job_status(
-            installation_token="ghs_test_installation_token",
-            repo_full_name="foo/bar",
-            job_id="12",
+    with pytest.raises(RepoNotFound):
+        await get_runner(
+            installation_token="ghs_test",
+            repo_full_name="RumanKazi/Foo.js",
+            runner_name="runnerforge-1-2-1",
         )
-    assert route.called
-    assert response is None
-    assert any("Job not found" in record.message for record in caplog.records)
-    assert all(record.levelno == logging.INFO for record in caplog.records)
 
 
 @respx.mock
-async def test_get_job_status_propagates_5xx(caplog):
-    route = respx.get("https://api.github.com/repos/foo/bar/actions/jobs/12").mock(
+async def test_get_runner_propagates_5xx():
+    respx.get(_RUNNERS_URL).mock(
         return_value=httpx.Response(503, json={"message": "Service not available"})
     )
 
     with pytest.raises(httpx.HTTPStatusError):
-        await get_job_status(
-            installation_token="ghs_test_installation_token",
-            repo_full_name="foo/bar",
-            job_id="12",
+        await get_runner(
+            installation_token="ghs_test",
+            repo_full_name="RumanKazi/Foo.js",
+            runner_name="runnerforge-1-2-1",
         )
-    assert route.called
