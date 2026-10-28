@@ -6,7 +6,7 @@ from runnerforge.compute_client import (
     delete_vm,
     list_runnerforge_vms,
 )
-from runnerforge.github_client import get_installation_token, get_job_status
+from runnerforge.github_client import RepoNotFound, get_installation_token, get_runner
 from runnerforge.models import SweepResult
 
 MAX_LIFETIME_HOURS = 1
@@ -53,10 +53,10 @@ async def run_sweep() -> SweepResult:
                 )
                 continue
 
-            # Age is between MAX_LIFETIME and HARD_LIMIT — check job status
+            # Age is between MAX_LIFETIME and HARD_LIMIT — check the runner
             if vm.repo_full_name is None:
-                # Without the exact repo, GitHub would 404 and a 404 reads as
-                # "orphan" — never delete on a guess. The hard limit still applies.
+                # Can't ask GitHub about the runner without the exact repo, and
+                # we never delete on a guess. The hard limit still applies.
                 skipped += 1
                 logger.warning(
                     "Sweep decision",
@@ -69,29 +69,42 @@ async def run_sweep() -> SweepResult:
                 ] = await get_installation_token(installation_id)
             token = installation_token_cache[installation_id]
 
-            job_status = await get_job_status(
-                installation_token=token,
-                repo_full_name=vm.repo_full_name,
-                job_id=vm.labels.job_id,
-            )
-
-            if job_status is None or job_status.status == "completed":
-                await delete_vm(instance_name=vm.name, reason="sweep")
-                deleted += 1
-                logger.info(
-                    "Sweep decision",
-                    extra={
-                        **log_extra,
-                        "decision": "delete",
-                        "reason": "job_completed",
-                    },
+            # Ask about the runner on THIS VM (VM name == runner name), not the
+            # job it was booted for: after a job swap, VM-for-job-X may be
+            # running job Y while job X already finished elsewhere.
+            try:
+                runner = await get_runner(
+                    installation_token=token,
+                    repo_full_name=vm.repo_full_name,
+                    runner_name=vm.name,
                 )
-            else:
+            except RepoNotFound:
+                # No evidence either way; GCE's max_run_duration still removes it.
+                skipped += 1
+                logger.warning(
+                    "Sweep decision",
+                    extra={**log_extra, "decision": "skip", "reason": "repo_not_found"},
+                )
+                continue
+
+            if runner is not None and runner.busy:
                 skipped += 1
                 logger.info(
                     "Sweep decision",
-                    extra={**log_extra, "decision": "skip", "reason": "job_running"},
+                    extra={**log_extra, "decision": "skip", "reason": "runner_busy"},
                 )
+                continue
+
+            # Gone: the ephemeral runner finished its job (or never registered).
+            # Idle: its job went to another runner; past MAX_LIFETIME nothing
+            # is coming for it.
+            reason = "runner_gone" if runner is None else "runner_idle"
+            await delete_vm(instance_name=vm.name, reason="sweep")
+            deleted += 1
+            logger.info(
+                "Sweep decision",
+                extra={**log_extra, "decision": "delete", "reason": reason},
+            )
         # Deliberately broad: one VM that fails to sweep must not abort the
         # sweep for every other VM. The failure is recorded and reported.
         except Exception as e:  # noqa: BLE001

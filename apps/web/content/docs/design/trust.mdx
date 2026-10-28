@@ -21,7 +21,7 @@ The orchestrator requires these permissions. An installation token without them 
 | Permission | Level | Why |
 |---|---|---|
 | Actions | Read | To receive `workflow_job` webhooks, and to look up a job's status during cleanup |
-| Administration | Read & write | To create runner registration tokens for your repository |
+| Administration | Read & write | To create runner registration tokens for your repository, and to check whether one of our runners is still busy |
 | Metadata | Read | GitHub grants this to every App |
 
 The App needs the **Workflow job** event. The orchestrator acts only on `workflow_job` deliveries. It acknowledges any other event GitHub sends and ignores it.
@@ -36,9 +36,9 @@ All of them are in [`github_client.py`](https://github.com/rumankazi/runnerforge
 
 | Call | When | Why |
 |---|---|---|
-| `POST /app/installations/{installation_id}/access_tokens` | For each queued job that passes our checks, and during the daily cleanup sweep (at most once per installation, only if it needs to check a job) | Gets a short-lived installation token |
+| `POST /app/installations/{installation_id}/access_tokens` | For each queued job that passes our checks, and during the daily cleanup sweep (at most once per installation, only if it needs to check a runner) | Gets a short-lived installation token |
 | `POST /repos/{owner}/{repo}/actions/runners/registration-token` | For each queued job that passes our checks | Gets a token the new VM uses to register itself as a runner for that repository |
-| `GET /repos/{owner}/{repo}/actions/jobs/{job_id}` | Daily sweep, only for a VM that is between 1 hour and 6h15m old | Checks whether the job behind a still-running VM has finished, so the VM can be deleted |
+| `GET /repos/{owner}/{repo}/actions/runners?name={vm_name}` | Daily sweep, only for a VM that is between 1 hour and 6h15m old | Checks whether the runner on a still-running VM is busy, so an idle or finished VM can be deleted |
 
 There are no other calls. In particular, the orchestrator never reads repository contents, pull requests, issues or workflow files through the API. Your installation settings show the exact permissions the App holds.
 
