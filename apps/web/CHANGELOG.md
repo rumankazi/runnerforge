@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/rumankazi/runnerforge/compare/web-v1.8.0...web-v1.9.0) (2026-10-28)
+
+
+### Features
+
+* **infra/terraform:** alert when every queued job is rejected by label policy ([#313](https://github.com/rumankazi/runnerforge/issues/313)) ([628831b](https://github.com/rumankazi/runnerforge/commit/628831ba3c513783414d471ac28c3fe9d097f289))
+
 ## [1.8.0](https://github.com/rumankazi/runnerforge/compare/web-v1.7.1...web-v1.8.0) (2026-10-28)
 
 
