@@ -8,6 +8,7 @@
 
 import logging
 import time
+from urllib.parse import urlencode
 
 import httpx
 import jwt
@@ -22,8 +23,9 @@ from tenacity import (
 from runnerforge.config import GITHUB_APP_ID, PRIVATE_KEY
 from runnerforge.models import (
     InstallationTokenResponse,
-    JobStatusResponse,
     RegistrationTokenResponse,
+    Runner,
+    RunnersResponse,
 )
 from runnerforge.validation import parse_github_response
 
@@ -148,21 +150,30 @@ async def get_registration_token(installation_token: str, repo_full_name: str) -
         return response.token
 
 
-async def get_job_status(
+class RepoNotFound(Exception):
+    """GitHub returned 404 for the repo: deleted, or no longer visible to the
+    installation. Not evidence that a runner is idle, so callers must not
+    treat it as "safe to delete"."""
+
+
+async def get_runner(
     installation_token: str,
     repo_full_name: str,
-    job_id: str,
-) -> JobStatusResponse | None:
-    """
-    Returns the job's status + conclusion, or None if the job doesn't exist (404).
-    Other errors (auth, 5xx) propagate.
+    runner_name: str,
+) -> Runner | None:
+    """Returns the self-hosted runner registered on the repo under exactly
+    `runner_name`, or None if there is none. Our runners are --ephemeral:
+    GitHub de-registers them after their one job, so None means "finished
+    (or never registered)". Raises RepoNotFound on 404; other errors propagate.
     """
     assert _http_client is not None
-    with tracer.start_as_current_span("github.get_job_status") as span:
+    with tracer.start_as_current_span("github.get_runner") as span:
         span.set_attribute("repo", repo_full_name)
-        span.set_attribute("job_id", job_id)
-        url = f"https://api.github.com/repos/{repo_full_name}/actions/jobs/{job_id}"
-
+        span.set_attribute("runner_name", runner_name)
+        url = (
+            f"https://api.github.com/repos/{repo_full_name}/actions/runners"
+            f"?{urlencode({'name': runner_name, 'per_page': 100})}"
+        )
         headers = {
             "Authorization": f"Bearer {installation_token}",
             "Accept": "application/vnd.github+json",
@@ -170,30 +181,19 @@ async def get_job_status(
         }
         try:
             r = await _get_with_retry(client=_http_client, url=url, headers=headers)
-            data = r.json()
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                logger.info(
-                    "Job not found (treating as orphan)",
-                    extra={"job_id": job_id},
-                )
-                return None
+                raise RepoNotFound(repo_full_name) from e
             raise
         response = parse_github_response(
-            JobStatusResponse,
-            data=data,
-            cause_hint="Github returned an unexpected response while fetching job status.",
+            RunnersResponse,
+            data=r.json(),
+            cause_hint="Github returned an unexpected response while listing runners.",
             logger=logger,
         )
-        logger.info(
-            "Job status retrieved",
-            extra={
-                "job_id": job_id,
-                "status": response.status,
-                "conclusion": response.conclusion,
-            },
-        )
-        span.set_attribute("status", response.status)
-        if response.conclusion:
-            span.set_attribute("conclusion", response.conclusion)
-        return response
+        # GitHub doesn't document whether `name` is an exact match; enforce it.
+        runner = next((x for x in response.runners if x.name == runner_name), None)
+        span.set_attribute("found", runner is not None)
+        if runner is not None:
+            span.set_attribute("busy", runner.busy)
+        return runner
