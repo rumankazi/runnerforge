@@ -1,4 +1,5 @@
 import logging
+from typing import Literal
 
 from opentelemetry import trace
 from opentelemetry.trace import (
@@ -46,6 +47,16 @@ def _webhook_span_context(
     )
 
 
+def _log_queued_outcome(
+    outcome: Literal["vm_submitted", "already_exists", "policy_rejected"],
+) -> None:
+    """One line per queued event that reached a deliberate decision. The
+    lost_webhook_ratio alert divides these by queued "Webhook event received"
+    lines, so only a queued event with NO outcome (an exception, a crash)
+    counts as lost. Rejections and duplicates are decisions, not losses."""
+    logger.info("Queued webhook outcome", extra={"outcome": outcome})
+
+
 async def handle_queued(
     event: WorkflowJobEvent, received_at: float
 ) -> OperationHandle | None:
@@ -76,6 +87,7 @@ async def handle_queued(
                 "Machine policy rejected",
                 extra={"reason": e.reason, "offending_tokens": e.offending_tokens},
             )
+            _log_queued_outcome("policy_rejected")
             return None
         span.set_attribute("policy.machine_type", policy.machine_type)
         span.set_attribute("policy.spot", policy.spot)
@@ -126,6 +138,8 @@ async def handle_queued(
             labels=labels.model_dump(),
             metadata=metadata,
         )
+        # create_vm returns None when the VM already exists (duplicate delivery).
+        _log_queued_outcome("vm_submitted" if operation else "already_exists")
         return operation
 
 
@@ -285,14 +299,16 @@ async def handle_completed(event: WorkflowJobEvent) -> PreemptionCheckRequest | 
         # prefix alone proves nothing. Only delete a VM whose own labels say
         # we created it for the installation that sent this event.
         target_labels = await get_vm_labels_by_name(runner_name)
+        installation_id = str(event.installation.id)
         if target_labels is None:
+            # Not an early return: a preempted Spot VM is deleted by GCE
+            # (termination action DELETE) before this event arrives, and that
+            # is exactly the case the preemption cross-check below exists for.
             logger.info(
                 "VM already deleted (idempotent no-op)",
                 extra={"vm_name": runner_name, "reason": "webhook"},
             )
-            return None
-        installation_id = str(event.installation.id)
-        if (
+        elif (
             target_labels.get("runner") != "runnerforge"
             or target_labels.get("installation_id") != installation_id
         ):
@@ -303,11 +319,12 @@ async def handle_completed(event: WorkflowJobEvent) -> PreemptionCheckRequest | 
                 extra={"vm_installation_id": target_labels.get("installation_id")},
             )
             return None
-        operation_id = await delete_vm(runner_name, reason="webhook")
-        logger.info(
-            "VM deletion submitted",
-            extra={"runner_name": runner_name, "operation_id": operation_id},
-        )
+        else:
+            operation_id = await delete_vm(runner_name, reason="webhook")
+            logger.info(
+                "VM deletion submitted",
+                extra={"runner_name": runner_name, "operation_id": operation_id},
+            )
 
         # On failure/cancellation, surface a PreemptionCheckRequest so main.py
         # can schedule the audit-log cross-check in a BackgroundTask. Keeps the

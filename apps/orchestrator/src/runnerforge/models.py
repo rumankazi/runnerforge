@@ -63,11 +63,17 @@ class RegistrationTokenResponse(BaseModel):
     expires_at: datetime
 
 
-class JobStatusResponse(BaseModel):
-    status: Literal[
-        "queued", "in_progress", "completed", "waiting", "requested", "pending"
-    ]
-    conclusion: str | None = None  # null until completed
+class Runner(BaseModel):
+    # One entry of GET /repos/{owner}/{repo}/actions/runners
+    id: int
+    name: str
+    status: str  # "online" | "offline"
+    busy: bool
+
+
+class RunnersResponse(BaseModel):
+    total_count: int
+    runners: list[Runner]
 
 
 class RunnerForgeVmLabels(BaseModel):
