@@ -54,7 +54,7 @@ In production, Terraform sets it from `var.allowed_installation_ids` (`variables
 `runner_name` in a `completed` payload is chosen by whoever registered the runner, so the name alone proves nothing. `handlers.handle_completed` deletes a VM only when all of these hold:
 
 1. `runner_name` starts with `runnerforge-`. Other runners are normal traffic, so a non-matching name is logged at info level and skipped.
-2. The VM exists, which `compute_client.get_vm_labels_by_name` checks. A missing VM is an idempotent no-op.
+2. The VM exists, which `compute_client.get_vm_labels_by_name` checks. A missing VM isn't deleted again, but a failed or cancelled job still gets the preemption cross-check, and only for allow-listed installations, with the name matched exactly in the audit-log query.
 3. The VM's own labels have `runner=runnerforge` and an `installation_id` equal to the event's installation.
 
 Failing check 3 logs `Refusing to delete VM not owned by this installation` and deletes nothing. A signed webhook from installation A therefore can't delete installation B's VM.
@@ -70,8 +70,8 @@ Every VM is created with `scheduling.max_run_duration` of 6h15m and `instance_te
 | VM age | Decision |
 |---|---|
 | Under 1 hour | Skip. The webhook path owns it. |
-| Over `HARD_LIMIT` (the same 6h15m) | Delete, whatever the job's status. |
-| In between | Read the exact `owner/repo` from the VM's `repo-url` metadata and ask GitHub for the job's status. Delete if the job is completed or returns 404. If the repo can't be read, skip and never guess, so only the hard limit applies. |
+| Over `HARD_LIMIT` (the same 6h15m) | Delete, whatever the runner is doing. |
+| In between | Read the exact `owner/repo` from the VM's `repo-url` metadata and ask GitHub whether the runner on this VM (same name) is busy. Busy: skip. Idle or no longer registered: delete. Repo 404, or the repo can't be read: skip and never guess, so only the hard limit applies. |
 
 ## GitHub App credentials
 

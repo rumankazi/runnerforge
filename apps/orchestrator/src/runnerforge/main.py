@@ -35,6 +35,12 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+def installation_allowed(installation_id: int) -> bool:
+    return (
+        ALLOWED_INSTALLATION_IDS is None or installation_id in ALLOWED_INSTALLATION_IDS
+    )
+
+
 def log_admission_mode() -> None:
     if ALLOWED_INSTALLATION_IDS is None:
         logger.warning(
@@ -177,11 +183,7 @@ async def webhook(
     # Admission: only `queued` creates VMs, so only `queued` is gated.
     # in_progress/completed always pass — VMs of an installation removed from
     # the list mid-job must still be deleted when their jobs finish.
-    if (
-        event.action == "queued"
-        and ALLOWED_INSTALLATION_IDS is not None
-        and event.installation.id not in ALLOWED_INSTALLATION_IDS
-    ):
+    if event.action == "queued" and not installation_allowed(event.installation.id):
         # installation_id/repo/sender are on the record via the log context.
         logger.warning("Installation not allowed")
         return {"ok": True}
@@ -208,7 +210,11 @@ async def webhook(
             await handle_in_progress(event, received_at=received_at)
         case "completed":
             preempt_req = await handle_completed(event)
-            if preempt_req is not None:
+            # The cross-check queries audit logs by a runner name taken from the
+            # payload, and the VM may already be gone (so ownership can't be
+            # checked). Only allow-listed installations can have our VMs, so
+            # only they may spend the Logging read quota (60/min, fixed).
+            if preempt_req is not None and installation_allowed(event.installation.id):
                 # Snapshot context now; background task re-installs it so
                 # request_id/job_id/repo correlation survives the post-response
                 # hop into the audit-log query.
@@ -227,7 +233,7 @@ async def webhook(
     "/sweep",
     status_code=200,
     summary="Orphan VM cleanup sweep",
-    description="Iterates RunnerForge VMs, deletes orphans by checking job status against GitHub. Auth via bearer token.",
+    description="Iterates RunnerForge VMs, deletes orphans whose runner GitHub reports idle or de-registered. Auth via bearer token.",
     tags=["sweep"],
 )
 async def sweep(authorization: Annotated[str, Header()]):

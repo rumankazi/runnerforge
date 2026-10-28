@@ -254,8 +254,9 @@ async def handle_completed(event: WorkflowJobEvent) -> PreemptionCheckRequest | 
     preserved via `span.add_link(queued_ctx)` so an operator debugging a
     completion can jump to the matching registration trace.
     """
-    # Fetch labels BEFORE delete_vm — the VM still exists at this point, so
-    # we can retrieve the queued trace context for the cross-trace link.
+    # Fetch labels BEFORE delete_vm — while the VM still exists (it may not:
+    # GCE deletes preempted Spot VMs itself), so we can retrieve the queued
+    # trace context for the cross-trace link.
     runner_name = event.workflow_job.runner_name
     vm_labels = None
     if runner_name:
@@ -305,7 +306,7 @@ async def handle_completed(event: WorkflowJobEvent) -> PreemptionCheckRequest | 
             # (termination action DELETE) before this event arrives, and that
             # is exactly the case the preemption cross-check below exists for.
             logger.info(
-                "VM already deleted (idempotent no-op)",
+                "VM already deleted",
                 extra={"vm_name": runner_name, "reason": "webhook"},
             )
         elif (

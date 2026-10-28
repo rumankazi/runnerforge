@@ -147,7 +147,7 @@ How each path finds its VM:
 
 - **`in_progress`**: list by `job_id` + `run_id` + `run_attempt` labels, read the trace anchor and `queued_received_at`.
 - **`completed`**: take `runner_name` from the payload. Skip unless it starts with `runnerforge-`. Fetch that VM's labels (`compute_client.get_vm_labels_by_name`). Delete only if `runner == runnerforge` and `installation_id` equals the event's installation; otherwise log `Refusing to delete VM not owned by this installation`. A missing VM is a no-op.
-- **Sweep**: list `labels.runner=runnerforge`, read `owner/repo` from `repo-url`. If the repo can't be read, skip the GitHub job-status check (a guessed repo would 404, and a 404 reads as "orphan"); the hard age limit still applies.
+- **Sweep**: list `labels.runner=runnerforge`, read `owner/repo` from `repo-url`. Ask GitHub whether the runner on the VM (same name) is busy: busy → skip, idle or de-registered → delete. If the repo can't be read, or GitHub returns 404, skip rather than guess; the hard age limit still applies.
 
 ### Consequences
 
