@@ -8,7 +8,9 @@
     "start": "next start",
     "types:check": "fumadocs-mdx && next typegen && tsc --noEmit",
     "postinstall": "fumadocs-mdx",
-    "lint": "eslint"
+    "lint": "eslint",
+    "cf:preview": "wrangler dev",
+    "cf:deploy": "wrangler deploy"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.1",
@@ -35,7 +37,8 @@
     "eslint-config-next": "16.4.3",
     "postcss": "^8.5.15",
     "tailwindcss": "^4.3.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "wrangler": "^4.154.0"
   },
   "overrides": {
     "lodash-es": "^4.17.23",

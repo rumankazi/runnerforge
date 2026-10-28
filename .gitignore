@@ -58,3 +58,6 @@ infra/terraform/*.tfstate.*
 infra/terraform/*.tfvars
 infra/terraform/*.tfplan
 infra/terraform/crash.log
+
+# Cloudflare wrangler local state
+.wrangler/

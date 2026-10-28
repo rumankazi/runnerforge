@@ -1,0 +1,11 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Static docs site: `bun run build` writes a Next.js static export to ./out,
+  // served as Workers static assets. No Worker script (no "main").
+  "name": "runnerforge-web",
+  "compatibility_date": "2026-10-27",
+  "assets": {
+    "directory": "./out",
+    "not_found_handling": "404-page"
+  }
+}
