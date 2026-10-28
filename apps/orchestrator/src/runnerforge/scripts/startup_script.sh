@@ -5,7 +5,7 @@
 # as root, before any user logs in.
 #
 # Responsibilities:
-#   1. Format + mount the data disk at /home/runner/_work
+#   1. Format + mount the data disk at /home/runner/actions-runner/_work
 #   2. Fetch per-VM metadata (registration token, repo URL, runner labels)
 #   3. Configure + start the GitHub Actions runner as the `runner` user
 

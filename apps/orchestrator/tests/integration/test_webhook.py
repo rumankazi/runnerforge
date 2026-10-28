@@ -1063,6 +1063,35 @@ def test_webhook_completed_noop_when_target_vm_already_gone(
     )
 
 
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled"])
+def test_webhook_completed_runs_preemption_check_when_vm_already_gone(
+    fixtures_dir, monkeypatch, caplog, conclusion
+):
+    """Regression (0.17.3-0.18.0): a preempted Spot VM is deleted by GCE before
+    the completed event arrives. The 'VM already gone' path returned early and
+    the preemption cross-check never ran, so preemptions went unrecorded."""
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload["action"] = "completed"
+    payload["workflow_job"]["conclusion"] = conclusion
+    payload["workflow_job"]["runner_name"] = "runnerforge-preempted"
+    body = json.dumps(payload).encode()
+    monkeypatch.setattr(
+        "runnerforge.handlers.get_vm_labels_by_name", AsyncMock(return_value=None)
+    )
+    delete_mock = AsyncMock()
+    monkeypatch.setattr("runnerforge.handlers.delete_vm", delete_mock)
+    was_preempted_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("runnerforge.compute_client.was_preempted", was_preempted_mock)
+
+    with caplog.at_level(logging.INFO):
+        response = client.post("/webhook", content=body, headers=_headers(body))
+
+    assert response.status_code == 200
+    delete_mock.assert_not_awaited()
+    was_preempted_mock.assert_awaited_once_with("runnerforge-preempted")
+    assert any("Job ended due to spot preemption" in r.message for r in caplog.records)
+
+
 @respx.mock
 @pytest.mark.parametrize(
     ("target_labels", "expected_vm_installation_id"),
