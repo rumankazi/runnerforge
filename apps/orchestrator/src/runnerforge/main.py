@@ -188,12 +188,12 @@ async def webhook(
         logger.warning("Installation not allowed")
         return {"ok": True}
 
-    # After admission on purpose: rejected installations must not count as
-    # "received but no VM", or the lost_webhook_ratio alert would fire on them.
-    # Anchor for the "lost webhook" ratio alert: counts every RunnerForge
-    # webhook the handler actually accepts, sliced by event_type. When the
-    # ratio of vm_creation_count over queued-events drops, the orchestrator
-    # is silently dropping work GitHub thinks it delivered.
+    # Denominator of the lost_webhook_ratio alert: every RunnerForge webhook
+    # the handler accepts, sliced by event_type. Logged after admission on
+    # purpose, so disallowed installations don't count. For `queued`, the
+    # numerator is "Queued webhook outcome" (handlers.handle_queued): an
+    # accepted event that never reaches an outcome is work GitHub thinks we
+    # took and silently dropped.
     logger.info("Webhook event received", extra={"event_type": event.action})
 
     match event.action:

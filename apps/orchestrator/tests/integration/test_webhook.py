@@ -42,6 +42,12 @@ def _headers(body: bytes, event: str = "workflow_job") -> dict[str, str]:
     return {"X-Hub-Signature-256": _sign(body), "X-GitHub-Event": event}
 
 
+def _queued_outcomes(caplog) -> list[str]:
+    """Outcome lines are the lost_webhook_ratio numerator: exactly one per
+    queued event that reached a decision."""
+    return [r.outcome for r in caplog.records if r.message == "Queued webhook outcome"]
+
+
 @respx.mock
 def test_webhook_queued_event_triggers_github_auth_chain(
     fixtures_dir, monkeypatch, caplog
@@ -119,6 +125,7 @@ def test_webhook_queued_event_triggers_github_auth_chain(
     )
     assert event_log is not None
     assert event_log.event_type == "queued"
+    assert _queued_outcomes(caplog) == ["vm_submitted"]
 
     # Background polling was scheduled and ran (TestClient flushes BackgroundTasks
     # after the response). It received the OperationHandle we returned from create_vm.
@@ -168,11 +175,14 @@ def test_webhook_queued_event_does_not_schedule_polling_when_vm_already_exists(
     wait_mock = AsyncMock()
     monkeypatch.setattr("runnerforge.main.wait_for_vm_creation", wait_mock)
 
-    response = client.post("/webhook", content=body, headers=_headers(body))
+    with caplog.at_level(logging.INFO):
+        response = client.post("/webhook", content=body, headers=_headers(body))
 
     assert response.status_code == 200
     # No operation to poll → no background task fired
     wait_mock.assert_not_awaited()
+    # A duplicate is a decision, not a lost webhook.
+    assert _queued_outcomes(caplog) == ["already_exists"]
 
 
 @respx.mock
@@ -257,6 +267,8 @@ def test_webhook_queued_event_does_not_create_vm_when_labels_are_invalid(
         for r in caplog.records
     )
     assert not any("Registration token received" in r.message for r in caplog.records)
+    # A label rejection is a decision, not a lost webhook.
+    assert _queued_outcomes(caplog) == ["policy_rejected"]
 
 
 @respx.mock
@@ -1435,3 +1447,21 @@ def test_webhook_completed_preemption_check_respects_allow_list(
 
     assert response.status_code == 200
     assert was_preempted_mock.await_count == (1 if expect_check else 0)
+
+
+@respx.mock
+def test_webhook_queued_logs_no_outcome_when_handler_fails(fixtures_dir, caplog):
+    """The only queued event that should count as lost: one that never reached
+    a decision. Here GitHub refuses the installation token."""
+    body = (fixtures_dir / "queued_job_payload.json").read_bytes()
+    respx.post("https://api.github.com/app/installations/135399152/access_tokens").mock(
+        return_value=httpx.Response(500, json={"message": "boom"})
+    )
+    failing_client = TestClient(app, raise_server_exceptions=False)
+
+    with caplog.at_level(logging.INFO):
+        response = failing_client.post("/webhook", content=body, headers=_headers(body))
+
+    assert response.status_code == 500
+    assert any("Webhook event received" in r.message for r in caplog.records)
+    assert _queued_outcomes(caplog) == []
