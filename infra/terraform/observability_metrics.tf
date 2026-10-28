@@ -449,11 +449,11 @@ resource "google_logging_metric" "sweep_error_count" {
 }
 
 # ---------------------------------------------------------------------------
-# Lost-webhook detection — anchor for the "queued events received vs. VMs
-# created" ratio. Counts every RunnerForge-labeled webhook the handler
-# accepts, sliced by event_type (queued, in_progress, completed). Sustained
-# divergence between queued-event count and vm_creation_count signals that
-# the orchestrator is silently dropping work GitHub thinks it delivered.
+# Lost-webhook detection — "queued events accepted vs. queued events that
+# reached a decision". webhook_event_count counts every RunnerForge webhook
+# the handler accepts (after the allow-list), sliced by event_type.
+# queued_outcome_count counts decisions. Sustained divergence for queued
+# means the orchestrator is silently dropping work GitHub thinks it delivered.
 # ---------------------------------------------------------------------------
 
 # Numerator of lost_webhook_ratio: one "Queued webhook outcome" line per
@@ -603,31 +603,11 @@ resource "google_logging_metric" "vm_preemption_count" {
 # "Cannot find metric(s) that match type = ...". Block dependent resources
 # behind this sleep so the metric registry has time to catch up.
 resource "time_sleep" "wait_for_log_metrics" {
-  depends_on = [
-    google_logging_metric.vm_creation_count,
-    google_logging_metric.vm_creation_outcome_count,
-    google_logging_metric.vm_deletion_count,
-    google_logging_metric.time_to_runner_seconds,
-    google_logging_metric.runner_readiness_seconds,
-    google_logging_metric.github_queued_delivery_lag_seconds,
-    google_logging_metric.github_in_progress_delivery_lag_seconds,
-    google_logging_metric.webhook_request_count,
-    google_logging_metric.webhook_rejection_count,
-    google_logging_metric.webhook_event_count,
-    google_logging_metric.runner_vm_count,
-    google_logging_metric.sweep_checked_count,
-    google_logging_metric.sweep_deleted_count,
-    google_logging_metric.sweep_error_count,
-    google_logging_metric.machine_policy_reject_count,
-    google_logging_metric.job_preempted_count,
-    google_logging_metric.vm_preemption_count,
-    google_logging_metric.queued_outcome_count,
-  ]
-
-  # time_sleep only sleeps on create; a new metric added to depends_on would
-  # NOT re-trigger it, and an alert switched to that metric in the same apply
-  # would race its registration. Keying on the metric names re-runs the sleep
-  # whenever the set changes.
+  # One list, used for both ordering and re-triggering: references in
+  # triggers already make this sleep wait for every metric. time_sleep only
+  # sleeps on create, so keying it on the metric names is what re-runs the
+  # sleep when a metric is added (otherwise an alert switched to a new metric
+  # in the same apply would race its registration).
   triggers = {
     log_metrics = join(",", [
       google_logging_metric.vm_creation_count.name,

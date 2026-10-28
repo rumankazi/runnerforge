@@ -171,7 +171,11 @@ resource "google_monitoring_alert_policy" "webhook_rejection_rate" {
 # installation allow-list). Should sit at 1.0; a sustained drop below 0.9
 # means queued events are failing before any decision (token errors, crashes)
 # and those jobs hang in "queued" because GitHub doesn't auto-retry.
-# Deliberate rejections are counted by machine_policy_reject_count instead.
+# Deliberate rejections are counted by machine_policy_reject_count instead,
+# which has no alert: a parser regression that rejects every job would show
+# on the dashboard ("Machine policy rejects by reason") but not page.
+# Rolling the orchestrator back below the release that logs "Queued webhook
+# outcome" empties the numerator and fires this alert.
 resource "google_monitoring_alert_policy" "lost_webhook_ratio" {
   display_name = "Lost-webhook ratio < 0.9 (5m)"
   combiner     = "OR"

@@ -564,7 +564,7 @@
         "widget": {
           "sectionHeader": {
             "dividerBelow": true,
-            "subtitle": "Lost-webhook detection: ratio of VM creations to RunnerForge-labeled queued webhooks accepted."
+            "subtitle": "Lost-webhook detection: ratio of queued webhooks that reached a decision (VM submitted, duplicate, label rejection) to queued webhooks accepted."
           },
           "title": "Webhook reliability"
         },

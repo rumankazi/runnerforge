@@ -48,7 +48,13 @@ An anchor with no `Queued webhook outcome` for the same `request_id` is a lost e
 | Nothing | The instance died mid-request, or logging was lost. Follow one `request_id` end to end (step 2). |
 
 `policy_rejected` and `already_exists` outcomes are expected and never lower the ratio. Bad labels show up in
-"Machine policy rejects by reason" instead.
+"Machine policy rejects by reason" instead. That panel has no alert, so a parser bug that rejects every job
+won't page; check it if users report jobs stuck in queued.
+
+<Callout type="warn" title="Rollbacks fire this alert">
+  Only orchestrator releases that include #308 log `Queued webhook outcome`. If traffic is rolled back to an older
+  revision, the numerator drops to zero and this alert fires. That's expected; it clears after rolling forward.
+</Callout>
 
 **2. Follow one request.**
 
