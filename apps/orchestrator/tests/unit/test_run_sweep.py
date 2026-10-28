@@ -285,7 +285,7 @@ def test_run_sweep_caches_installation_token_per_installation(monkeypatch):
     assert result.errors == []
     # Cache works: one token fetch despite two VMs sharing installation_id
     installation_token_mock.assert_awaited_once_with(200)
-    # But per-VM job status is still checked
+    # But each VM's runner is still checked
     assert runner_mock.await_count == 2
 
 
