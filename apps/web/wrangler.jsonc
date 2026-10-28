@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Static docs site: `bun run build` writes a Next.js static export to ./out,
+  // served as Workers static assets. No Worker script (no "main").
+  "name": "runnerforge-web",
+  "compatibility_date": "2026-10-27",
+  // Served only on the custom domain below; no duplicate *.workers.dev copy.
+  "workers_dev": false,
+  "assets": {
+    "directory": "./out",
+    "not_found_handling": "404-page"
+  },
+  // Cloudflare creates the DNS record and certificate for a custom domain.
+  // www is not here: it's a proxied placeholder record + a Redirect Rule to
+  // the apex (configured in the dashboard), per Cloudflare's guidance.
+  "routes": [{ "pattern": "runnerforge.com", "custom_domain": true }]
+}

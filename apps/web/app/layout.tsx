@@ -1,4 +1,4 @@
-import { RootProvider } from 'fumadocs-ui/provider/next';
+import { Provider } from '@/components/provider';
 import './global.css';
 import { Inter } from 'next/font/google';
 import type { Metadata } from 'next';
@@ -8,14 +8,16 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://runnerforge.vercel.app'),
+  metadataBase: new URL('https://runnerforge.com'),
+  title: { default: 'RunnerForge', template: '%s | RunnerForge' },
+  description: 'On-demand, ephemeral GitHub Actions runners on Google Compute Engine.',
 };
 
 export default function Layout({ children }: LayoutProps<'/'>) {
   return (
     <html lang="en" className={inter.className} suppressHydrationWarning>
       <body className="flex flex-col min-h-screen">
-        <RootProvider>{children}</RootProvider>
+        <Provider>{children}</Provider>
       </body>
     </html>
   );
