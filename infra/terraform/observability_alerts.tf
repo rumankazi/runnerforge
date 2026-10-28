@@ -165,20 +165,26 @@ resource "google_monitoring_alert_policy" "webhook_rejection_rate" {
   notification_channels = [google_monitoring_notification_channel.email.name]
 }
 
-# Lost-webhook detection: ratio of VM-creation events over queued webhook
-# events. Should hover at ~1.0; sustained drop below 0.9 means we
-# acknowledged a queued webhook (200 to GitHub) but failed to spin up a
-# runner — workflow jobs hang in "queued" forever because GitHub doesn't
-# auto-retry. Highest-priority signal for this architecture.
+# Lost-webhook detection: queued events that reached a decision ("Queued
+# webhook outcome": VM submitted, duplicate, or label-policy rejection) over
+# queued events admitted ("Webhook event received", logged after the
+# installation allow-list). Should sit at 1.0; a sustained drop below 0.9
+# means queued events are failing before any decision (token errors, crashes)
+# and those jobs hang in "queued" because GitHub doesn't auto-retry.
+# Deliberate rejections are counted by machine_policy_reject_count instead,
+# which has no alert: a parser regression that rejects every job would show
+# on the dashboard ("Machine policy rejects by reason") but not page.
+# Rolling the orchestrator back below the release that logs "Queued webhook
+# outcome" empties the numerator and fires this alert.
 resource "google_monitoring_alert_policy" "lost_webhook_ratio" {
   display_name = "Lost-webhook ratio < 0.9 (5m)"
   combiner     = "OR"
   severity     = "ERROR"
 
   conditions {
-    display_name = "VM creations / queued webhooks < 0.9"
+    display_name = "Queued outcomes / queued webhooks < 0.9"
     condition_threshold {
-      filter             = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.vm_creation_count.name}\" resource.type=\"cloud_run_revision\""
+      filter             = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.queued_outcome_count.name}\" resource.type=\"cloud_run_revision\""
       denominator_filter = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.webhook_event_count.name}\" resource.type=\"cloud_run_revision\" metric.label.event_type=\"queued\""
       comparison         = "COMPARISON_LT"
       threshold_value    = 0.9

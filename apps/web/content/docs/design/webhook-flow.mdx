@@ -174,8 +174,9 @@ and its disks even if both the webhook and the sweep miss it. That is GitHub's d
 GitHub doesn't retry failed webhook deliveries.
 
 - **A lost `queued` webhook** means no VM is created, and nothing recreates it. The job waits until GitHub's
-  queue timeout. The `lost_webhook_ratio` alert only catches queued webhooks that were accepted but produced
-  no VM creation (label-policy rejections and duplicates count here too), not ones that never arrived.
+  queue timeout. The `lost_webhook_ratio` alert only catches queued webhooks that were accepted but never
+  reached a decision (no `Queued webhook outcome` line, e.g. a token error), not ones that never arrived.
+  Label-policy rejections and duplicates are decisions and don't lower the ratio.
 - **A lost `completed` webhook** leaves the VM running. The first sweep after the VM is 1 h old deletes it once its
   runner is idle or de-registered. Otherwise the runtime cap deletes it.
 

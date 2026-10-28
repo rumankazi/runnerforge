@@ -32,7 +32,8 @@
 #     SSD_TOTAL_GB      = 1500   → 30-VM hard cap (50 GB per runner) ← BINDING
 #
 #   Effective ceiling: SSD_TOTAL_GB binds at ~30 concurrent VMs for sizes
-#   ≤ std-8; N2_CPUS binds before SSD only at xlarge (12 concurrent).
+#   ≤ std-4 (N2_CPUS alone would allow 100 small / 50 medium). For std-8 (large),
+#   N2_CPUS binds first at 25; for xlarge at 12.
 #
 # Importing existing preferences: each was created via `gcloud alpha quotas
 # preferences create` and adopted into TF state via `terraform import` during

@@ -173,7 +173,7 @@ For "how many requested → registered → completed" patterns:
 - One line chart with all of them
 - All using `ALIGN_DELTA` + `SUM` for consistent comparison
 
-The dashboard's "Lost-webhook ratio" panel is a two-stage version of this: `vm_creation_count` over queued `webhook_event_count`.
+The dashboard's "Lost-webhook ratio" panel is a two-stage version of this: `queued_outcome_count` over queued `webhook_event_count`.
 
 Healthy state: the lines track each other (deletions lag by job duration). Divergence highlights where the pipeline is failing.
 
