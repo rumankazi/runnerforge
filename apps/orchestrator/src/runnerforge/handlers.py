@@ -1,4 +1,5 @@
 import logging
+from typing import Literal
 
 from opentelemetry import trace
 from opentelemetry.trace import (
@@ -46,6 +47,16 @@ def _webhook_span_context(
     )
 
 
+def _log_queued_outcome(
+    outcome: Literal["vm_submitted", "already_exists", "policy_rejected"],
+) -> None:
+    """One line per queued event that reached a deliberate decision. The
+    lost_webhook_ratio alert divides these by queued "Webhook event received"
+    lines, so only a queued event with NO outcome (an exception, a crash)
+    counts as lost. Rejections and duplicates are decisions, not losses."""
+    logger.info("Queued webhook outcome", extra={"outcome": outcome})
+
+
 async def handle_queued(
     event: WorkflowJobEvent, received_at: float
 ) -> OperationHandle | None:
@@ -76,6 +87,7 @@ async def handle_queued(
                 "Machine policy rejected",
                 extra={"reason": e.reason, "offending_tokens": e.offending_tokens},
             )
+            _log_queued_outcome("policy_rejected")
             return None
         span.set_attribute("policy.machine_type", policy.machine_type)
         span.set_attribute("policy.spot", policy.spot)
@@ -126,6 +138,8 @@ async def handle_queued(
             labels=labels.model_dump(),
             metadata=metadata,
         )
+        # create_vm returns None when the VM already exists (duplicate delivery).
+        _log_queued_outcome("vm_submitted" if operation else "already_exists")
         return operation
 
 
