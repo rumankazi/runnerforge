@@ -1186,7 +1186,23 @@ def test_was_preempted_returns_true_when_audit_entry_found(monkeypatch):
     mock_client.list_entries.assert_called_once()
     filter_arg = mock_client.list_entries.call_args.kwargs["filter_"]
     assert "compute.instances.preempted" in filter_arg
-    assert "test-vm" in filter_arg
+    # Exact instance name, not a substring: test-vm must not match test-vm-10.
+    assert 'protoPayload.resourceName=~"/instances/test-vm$"' in filter_arg
+
+
+@pytest.mark.parametrize(
+    "vm_name", ["runnerforge-.*", "Runnerforge-1", 'x" OR "1', "-leading-dash", ""]
+)
+def test_was_preempted_refuses_names_that_are_not_gce_instance_names(
+    monkeypatch, vm_name
+):
+    """The name comes from a webhook payload and lands in a regex filter. A
+    non-GCE name can't be one of our VMs, and must not reach the query."""
+    mock_client = MagicMock()
+    monkeypatch.setattr(compute_client, "_logging_client", mock_client)
+
+    assert asyncio.run(compute_client.was_preempted(vm_name)) is False
+    mock_client.list_entries.assert_not_called()
 
 
 def test_was_preempted_returns_false_when_no_entry(monkeypatch):
