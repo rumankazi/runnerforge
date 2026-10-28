@@ -171,9 +171,8 @@ resource "google_monitoring_alert_policy" "webhook_rejection_rate" {
 # installation allow-list). Should sit at 1.0; a sustained drop below 0.9
 # means queued events are failing before any decision (token errors, crashes)
 # and those jobs hang in "queued" because GitHub doesn't auto-retry.
-# Deliberate rejections are counted by machine_policy_reject_count instead,
-# which has no alert: a parser regression that rejects every job would show
-# on the dashboard ("Machine policy rejects by reason") but not page.
+# Deliberate rejections are counted by machine_policy_reject_count instead;
+# policy_reject_storm (below) pages if every queued job is being rejected.
 # Rolling the orchestrator back below the release that logs "Queued webhook
 # outcome" empties the numerator and fires this alert.
 resource "google_monitoring_alert_policy" "lost_webhook_ratio" {
@@ -239,4 +238,42 @@ resource "google_monitoring_alert_policy" "instance_saturation" {
   }
 
   notification_channels = [google_monitoring_notification_channel.email.name]
+}
+
+# Label-policy rejection storm. lost_webhook_ratio treats a rejection as a
+# decision (not a lost webhook), so a parser/config regression that rejects
+# EVERY queued job would otherwise page no one. Fires when >= 3 jobs were
+# rejected in the last hour AND no VM was submitted in that hour: one user's
+# typo amid normal traffic doesn't fire, a system-wide rejection does (the
+# dogfood test-jobs matrix alone produces 3 rejections per push).
+#
+# PromQL because "rejections unless creations" needs the right-hand side to
+# be allowed to have NO data; a threshold condition can't be met by a series
+# with no points. Both inputs are existing DELTA log metrics; increase() over
+# them was verified against log counts on 2026-10-28 (64 vs 66 lines / 12h).
+resource "google_monitoring_alert_policy" "policy_reject_storm" {
+  display_name = "Every queued job rejected by label policy (1h)"
+  combiner     = "OR"
+  severity     = "WARNING"
+
+  conditions {
+    display_name = ">= 3 policy rejections and 0 VM creations in 1h"
+    condition_prometheus_query_language {
+      query               = <<-EOT
+        sum(increase(logging_googleapis_com:user_${google_logging_metric.machine_policy_reject_count.name}{monitored_resource="cloud_run_revision"}[1h])) >= 3
+        unless on()
+        sum(increase(logging_googleapis_com:user_${google_logging_metric.vm_creation_count.name}{monitored_resource="cloud_run_revision"}[1h])) > 0
+      EOT
+      duration            = "0s"
+      evaluation_interval = "60s"
+    }
+  }
+
+  documentation {
+    content   = "Every queued job in the last hour was rejected by label policy and no VM was created. Runbook: https://github.com/rumankazi/runnerforge/blob/main/apps/web/content/docs/guides/runbooks/policy-rejections.mdx"
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = [google_monitoring_notification_channel.email.name]
+  depends_on            = [time_sleep.wait_for_log_metrics]
 }

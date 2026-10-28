@@ -1,0 +1,71 @@
+---
+title: Policy rejection storm
+description: Runbook for "Every queued job rejected by label policy (1h)", all recent jobs rejected and no VM created.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Symptom
+
+Email from "RunnerForge Alerts": **Every queued job rejected by label policy (1h)**, severity WARNING.
+
+It fires when, over the last hour, at least 3 queued jobs were rejected by the label policy
+(`machine_policy_reject_count`, from `Machine policy rejected`) **and** no VM was submitted
+(`vm_creation_count`, from `Submitted VM creation`). The condition is PromQL:
+
+```text
+sum(increase(logging_googleapis_com:user_machine_policy_reject_count{monitored_resource="cloud_run_revision"}[1h])) >= 3
+unless on()
+sum(increase(logging_googleapis_com:user_vm_creation_count{monitored_resource="cloud_run_revision"}[1h])) > 0
+```
+
+One user's mistyped `runs-on` among otherwise normal traffic doesn't fire it. A change that makes the parser
+reject *every* job does. That's why it exists: [Lost webhooks](/docs/guides/runbooks/lost-webhooks) counts a
+rejection as a decision, so it won't page for this.
+
+## Impact
+
+Every job that targets RunnerForge stays at "Waiting for a runner to pick up this job". RunnerForge doesn't report
+rejections back to GitHub.
+
+## Diagnose
+
+All commands are read-only.
+
+**1. See what was rejected and why.**
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  jsonPayload.message="Machine policy rejected"
+' --project=runnerforge --freshness=2h --limit=50 \
+  --format='table(timestamp, jsonPayload.reason, jsonPayload.offending_tokens, jsonPayload.repo, jsonPayload.app_version)'
+```
+
+| Pattern | Likely cause |
+|---|---|
+| Many repos, labels that look valid (`small`, `self-hosted`, `linux`) | A parser regression. Compare `app_version` with the last release. |
+| `invalid_machine_type` for types that exist | The zone's machine-type list loaded wrong, or `GCP_ZONE` changed. Look for the startup log of the machine-types cache. |
+| One repo, unusual labels | A user's `runs-on` problem that happened to be the only traffic this hour. |
+
+**2. Check the deploy history.** If the rejections started with a new revision, it's almost certainly the release.
+
+```bash
+gcloud run revisions list --service runnerforge-orchestrator --region europe-west4 --project runnerforge --limit 5
+```
+
+## Mitigate
+
+<Callout type="warn" title="Mutations">
+  A rollback changes production traffic.
+</Callout>
+
+- **Regression after a release:** roll back to the previous revision with the `rollback` mode of
+  `deploy-orchestrator.yaml` (approval-gated), then fix the parser with a test that reproduces the rejected labels.
+- **Single user:** no platform action. Point them at [Runner labels](/docs/guides/runner-labels).
+
+## Escalate
+
+If rejections continue after a rollback, open a GitHub issue with the `reason` and `offending_tokens` values from
+step 1.
