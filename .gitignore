@@ -61,3 +61,6 @@ infra/terraform/crash.log
 
 # Cloudflare wrangler local state
 .wrangler/
+
+# Playwright MCP screenshots / snapshots
+.playwright-mcp/
