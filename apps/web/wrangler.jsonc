@@ -6,6 +6,9 @@
   "compatibility_date": "2026-10-27",
   // Served only on the custom domain below; no duplicate *.workers.dev copy.
   "workers_dev": false,
+  // Per-version preview URLs (<version>-runnerforge-web.runnerforge.workers.dev)
+  // for non-production branch builds. Production stays on the custom domain.
+  "preview_urls": true,
   "assets": {
     "directory": "./out",
     "not_found_handling": "404-page"
