@@ -20,8 +20,10 @@ GCE enforces on every VM.
   </Step>
   <Step>
     **Event type.** The orchestrator dispatches on the `X-GitHub-Event` header, not on the payload's shape.
-    Anything other than `workflow_job` (`ping`, `installation`, `installation_repositories`, …) gets a
-    **200** and is ignored.
+    `installation` events (`created`, `deleted`, `suspend`, `unsuspend`) update the tenant registry: a new
+    installation gets a `pending` row (see [ADR-019](/docs/design/decisions#tenant-registry-install-to-register-admin-approval-per-installation-limits)).
+    Anything else other than `workflow_job` (`ping`, `installation_repositories`, …) gets a **200** and is
+    ignored.
   </Step>
   <Step>
     **Parse.** A body that isn't JSON returns **400**. A body that doesn't match the `WorkflowJobEvent`

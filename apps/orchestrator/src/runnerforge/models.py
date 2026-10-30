@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 
 class WorkflowJob(BaseModel):
@@ -32,6 +32,29 @@ class Repository(BaseModel):
 
 class Installation(BaseModel):
     id: int
+
+
+class GitHubAccount(BaseModel):
+    id: int
+    login: str
+    type: str  # User | Organization
+
+
+class AppInstallation(BaseModel):
+    # The `installation` object of an `installation` event, and one entry of
+    # GET /app/installations.
+    id: int
+    account: GitHubAccount
+    suspended_at: datetime | None = None
+
+
+class AppInstallations(RootModel[list[AppInstallation]]):
+    pass
+
+
+class InstallationEvent(BaseModel):
+    action: str  # created | deleted | suspend | unsuspend | new_permissions_accepted
+    installation: AppInstallation
 
 
 class WorkflowJobEvent(BaseModel):
@@ -135,4 +158,5 @@ class ReconcileResult(BaseModel):
     stuck: int  # records newly marked stuck (vm missing / preempted before pickup)
     backfilled: int  # records created for VMs that had none
     more_due: bool  # more records were due than one batch holds
+    registry_changes: int = 0  # registry rows created or updated by the backfill
     errors: list[str]  # per-record failures (one record never aborts a run)

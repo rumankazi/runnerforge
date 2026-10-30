@@ -1311,13 +1311,12 @@ async def test_concurrent_webhooks_keep_per_request_context_isolated(
         # Sent once when the App's webhook is configured.
         ("ping", {"zen": "Keep it logically awesome.", "hook_id": 1}),
         # Every GitHub App receives these by default, subscribed or not.
-        ("installation", {"action": "created", "installation": {"id": 135399152}}),
         (
             "installation_repositories",
             {"action": "added", "installation": {"id": 135399152}},
         ),
     ],
-    ids=["ping", "installation", "installation_repositories"],
+    ids=["ping", "installation_repositories"],
 )
 def test_webhook_acknowledges_non_workflow_job_events(
     monkeypatch, caplog, event, payload

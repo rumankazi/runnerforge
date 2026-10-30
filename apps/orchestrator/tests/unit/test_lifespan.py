@@ -115,3 +115,30 @@ def test_close_compute_client_closes_logging_client(monkeypatch):
 
     logging_mock.close.assert_called_once()
     assert compute_client._logging_client is None
+
+
+def test_lifespan_wires_the_registry_to_the_job_store_client(monkeypatch):
+    """Without this wiring the registry stays a no-op and installation events,
+    shadow decisions and the backfill silently do nothing."""
+    from runnerforge import registry
+
+    client = MagicMock()
+    monkeypatch.setattr(github_client, "init_http_client", AsyncMock())
+    monkeypatch.setattr(github_client, "close_http_client", AsyncMock())
+    monkeypatch.setattr(compute_client, "init_compute_client", MagicMock())
+    monkeypatch.setattr(compute_client, "init_runner_image", MagicMock())
+    monkeypatch.setattr(compute_client, "init_machine_types_cache", MagicMock())
+    monkeypatch.setattr(compute_client, "init_logging_client", MagicMock())
+    monkeypatch.setattr(compute_client, "close_compute_client", MagicMock())
+    monkeypatch.setattr(job_store, "init_job_store", AsyncMock())
+    monkeypatch.setattr(job_store, "close_job_store", AsyncMock())
+    monkeypatch.setattr(job_store, "get_client", lambda: client)
+    monkeypatch.setattr(registry, "_registry", registry.NoopRegistry())
+    monkeypatch.setattr(
+        registry, "_cached", registry.CachedRegistry(registry._registry)
+    )
+
+    with TestClient(app):
+        wired = registry.get_registry()
+        assert isinstance(wired, registry.FirestoreRegistry)
+        assert wired._client is client

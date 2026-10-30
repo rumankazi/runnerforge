@@ -61,6 +61,12 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Ignoring GitHub event` | INFO | `main.py` | `github_event` (non-`workflow_job` events) | |
 | `Installation not allowed` | WARNING | `main.py` | context `installation_id`, `repo`, `sender` | |
 | `Job store write failed` | WARNING | `job_store.py` | `operation`, `job_key`, `error_class` | `job_store_write_failure_count` (all but the background `record_fact:vm` and `record_fact:preempted`) |
+| `Installation event` | INFO | `admission.py` | `action`, `installation_id` | |
+| `Ignoring installation action` | INFO | `admission.py` | `action` (e.g. `new_permissions_accepted`) | |
+| `Admission shadow decision` | INFO | `admission.py` | `would_admit`, `reason` (`allowlisted`, `approved`, `not_approved`, `not_registered`, `registry_unavailable`), `allowlist_admits`, `agrees` | |
+| `Registry read failed`, `Registry write failed` | WARNING | `registry.py` | `operation`, `installation_id`, `error_class` | |
+| `Registry backfill skipped` | WARNING | `admission.py` | `reason` (`list_failed`, `read_failed`), `error_class` (`list_failed`) | |
+| `Registry backfill could not confirm installation` | WARNING | `admission.py` | `installation_id`, `error_class` | |
 | `Job store read failed` | WARNING | `job_store.py` | `operation` (`list_due`, `list_open`), `error_class` | |
 | `Webhook event received` | INFO | `main.py` | `event_type` (`queued`, `in_progress`, `completed`) | `webhook_event_count` |
 | `Queued webhook outcome` | INFO | `handlers.py` | `outcome` (`vm_submitted`, `already_exists`, `policy_rejected`, `already_completed`) | `queued_outcome_count` |
@@ -77,7 +83,7 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Sweep decision` | INFO / WARNING | `sweep.py` | `decision`, `reason`, `vm_name`, `age_minutes` | |
 | `Sweep failed for VM` | ERROR | `sweep.py` | `vm_name`, `error` | |
 | `Sweep completed` | INFO | `main.py` | `checked`, `deleted`, `skipped`, `error_count` | `sweep_*` |
-| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `more_due`, `error_count` | `reconcile_stuck_count`, `reconcile_error_count` |
+| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `registry_changes`, `more_due`, `error_count` | `reconcile_stuck_count`, `reconcile_error_count` |
 | `Reconcile failed for record` | ERROR | `reconcile.py` | `job_key`, `error` | |
 | `Reconcile skipped record without identity` | WARNING | `reconcile.py` | `job_key` | |
 

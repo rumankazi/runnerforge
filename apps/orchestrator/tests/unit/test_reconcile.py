@@ -499,3 +499,15 @@ async def test_slow_record_times_out_and_is_retried_later(world, monkeypatch):
 
     assert result.errors == [f"{KEY}: TimeoutError"]
     assert _patch(world)["checks"] == 1
+
+
+async def test_registry_backfill_runs_on_the_hour(world, monkeypatch):
+    sync = AsyncMock(return_value=3)
+    monkeypatch.setattr("runnerforge.reconcile.sync_registry", sync)
+
+    on_hour = await run_reconcile(NOW)  # 12:00
+    off_hour = await run_reconcile(NOW + timedelta(minutes=7))
+
+    assert on_hour.registry_changes == 3
+    assert off_hour.registry_changes == 0
+    sync.assert_awaited_once()
