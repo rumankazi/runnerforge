@@ -360,3 +360,8 @@ async def close_job_store() -> None:
 
 def get_job_store() -> JobStore:
     return _store
+
+
+def get_client() -> firestore.AsyncClient | None:
+    """The Firestore client, for the registry (same database, one channel)."""
+    return _client

@@ -9,7 +9,8 @@ from typing import Annotated
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from opentelemetry import trace
 
-from runnerforge import compute_client, github_client, job_store
+from runnerforge import compute_client, github_client, job_store, registry
+from runnerforge.admission import handle_installation_event, log_shadow_admission
 from runnerforge.compute_client import cross_check_preemption, wait_for_vm_creation
 from runnerforge.config import (
     ALLOWED_INSTALLATION_IDS,
@@ -26,7 +27,7 @@ from runnerforge.logger import (
     update_context,
     with_log_context,
 )
-from runnerforge.models import WorkflowJobEvent
+from runnerforge.models import InstallationEvent, WorkflowJobEvent
 from runnerforge.reconcile import run_reconcile
 from runnerforge.security import verify_github_signature, verify_oidc_token
 from runnerforge.sweep import run_sweep
@@ -66,6 +67,7 @@ async def lifespan(app: FastAPI):
     compute_client.init_machine_types_cache()
     compute_client.init_logging_client()
     await job_store.init_job_store()
+    registry.init_registry(job_store.get_client())
     logger.info("Clients initialized")
     yield
     await github_client.close_http_client()
@@ -144,8 +146,25 @@ async def webhook(
     # Dispatch on the event header, never on payload shape. GitHub Apps get
     # `installation`/`installation_repositories` whether subscribed or not, and
     # `ping` on webhook setup; parsing those as workflow_job used to 500 them.
-    # Acknowledge with 200 so GitHub's delivery log stays clean. Returns before
-    # the "Webhook event received" anchor, so lost_webhook_ratio is unaffected.
+    # `installation` updates the tenant registry; the rest are acknowledged
+    # with 200 so GitHub's delivery log stays clean. Both return before the
+    # "Webhook event received" anchor, so lost_webhook_ratio is unaffected.
+    if x_github_event == "installation":
+        # Keeps the tenant registry in step with GitHub (ADR-019). Not a job,
+        # so it never reaches the lost-webhook anchor below.
+        try:
+            installation_body = json.loads(body)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Failed to load request body")
+        await handle_installation_event(
+            parse_github_response(
+                InstallationEvent,
+                data=installation_body,
+                cause_hint="installation payload did not match the expected schema. GitHub may have changed their payload format.",
+                logger=logger,
+            )
+        )
+        return {"ok": True}
     if x_github_event != "workflow_job":
         logger.info("Ignoring GitHub event", extra={"github_event": x_github_event})
         return {"ok": True}
@@ -188,10 +207,14 @@ async def webhook(
     # Admission: only `queued` creates VMs, so only `queued` is gated.
     # in_progress/completed always pass — VMs of an installation removed from
     # the list mid-job must still be deleted when their jobs finish.
-    if event.action == "queued" and not installation_allowed(event.installation.id):
-        # installation_id/repo/sender are on the record via the log context.
-        logger.warning("Installation not allowed")
-        return {"ok": True}
+    if event.action == "queued":
+        admitted = installation_allowed(event.installation.id)
+        # ADR-019 step 1: log what the registry would decide; it decides nothing.
+        await log_shadow_admission(event.installation.id, admitted)
+        if not admitted:
+            # installation_id/repo/sender are on the record via the log context.
+            logger.warning("Installation not allowed")
+            return {"ok": True}
 
     # Denominator of the lost_webhook_ratio alert: every RunnerForge webhook
     # the handler accepts, sliced by event_type. Logged after admission on
@@ -317,6 +340,7 @@ async def reconcile(authorization: Annotated[str, Header()]):
             "facts": result.facts,
             "stuck": result.stuck,
             "backfilled": result.backfilled,
+            "registry_changes": result.registry_changes,
             "more_due": result.more_due,
             "error_count": len(result.errors),
         },
