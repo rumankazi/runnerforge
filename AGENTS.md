@@ -44,6 +44,7 @@ apps/orchestrator/src/runnerforge/  FastAPI app
   github_client.py   GitHub App JWT + API              compute_client.py GCE VM create/delete
   security.py        webhook HMAC + scheduler OIDC      sweep.py         stale-VM cleanup
   config.py          env-driven settings                machine_policy.py label → machine type
+  job_store.py       per-job record store (ADR-018; Firestore or no-op, fail-open)
   validation.py / models.py / logger.py / tracing.py (OpenTelemetry)
 apps/orchestrator/tests/  unit/ (mocked), integration/ (TestClient + respx), fixtures/
 apps/web/            Next.js App Router; docs in content/docs/ (design, ADRs, runbooks)
@@ -52,13 +53,15 @@ infra/packer/        runner VM image (Debian 12) — own release stream
 infra/policies/      OPA rego policies + *_test.rego, applied to terraform plans in CI
 .github/workflows/   qualify.yaml = PR gate (path-filtered → _qualify-{orchestrator,web,infra}.yaml + gate)
 ```
-No database. State lives in GCP (VMs, Secret Manager, GCS).
+No relational database. State lives in GCP (VMs, Secret Manager, GCS), plus per-job records in the Firestore
+database `runnerforge` (ADR-018), written only when `JOB_STORE=firestore`.
 
 ## Environment
 
 Orchestrator env vars (names only; tests set throwaway defaults in `tests/conftest.py`, so none are needed
 to run tests): `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_APP_ID`, `GCP_PROJECT_ID`,
-`GCP_ZONE` (default `europe-west4-a`), `RUNNER_VM_SA_EMAIL`, `EXPECTED_SCHEDULER_SA_EMAIL`, `EXPECTED_AUDIENCE`.
+`GCP_ZONE` (default `europe-west4-a`), `RUNNER_VM_SA_EMAIL`, `EXPECTED_SCHEDULER_SA_EMAIL`, `EXPECTED_AUDIENCE`;
+optional `JOB_STORE` (`none` default | `firestore`) and `FIRESTORE_DATABASE` (default `runnerforge`).
 All are listed in `apps/orchestrator/.env.example`. Never read `.env` or key files.
 
 Toolchains: `mise.toml` (root + per-app) and `aqua.yaml` pin terraform 1.15.5, tflint 0.62.1, trivy 0.71.0,

@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from opentelemetry import trace
 
-from runnerforge import compute_client, github_client
+from runnerforge import compute_client, github_client, job_store
 from runnerforge.compute_client import cross_check_preemption, wait_for_vm_creation
 from runnerforge.config import (
     ALLOWED_INSTALLATION_IDS,
@@ -62,10 +62,12 @@ async def lifespan(app: FastAPI):
     compute_client.init_runner_image()
     compute_client.init_machine_types_cache()
     compute_client.init_logging_client()
+    await job_store.init_job_store()
     logger.info("Clients initialized")
     yield
     await github_client.close_http_client()
     compute_client.close_compute_client()
+    await job_store.close_job_store()
 
 
 # Initialize the app

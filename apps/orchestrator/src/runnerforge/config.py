@@ -1,6 +1,7 @@
 import importlib.resources
 import os
 from pathlib import Path
+from typing import Literal
 
 # Github
 WEBHOOK_SECRET = os.environ["GITHUB_WEBHOOK_SECRET"].encode()
@@ -45,3 +46,21 @@ def parse_installation_ids(value: str | None) -> frozenset[int] | None:
 ALLOWED_INSTALLATION_IDS = parse_installation_ids(
     os.environ.get("ALLOWED_INSTALLATION_IDS")
 )
+
+
+def parse_job_store(value: str) -> Literal["none", "firestore"]:
+    """A typo raises at import, so a bad revision fails its canary instead of
+    silently not writing job records."""
+    normalized = value.strip().lower()
+    if normalized == "none":
+        return "none"
+    if normalized == "firestore":
+        return "firestore"
+    raise ValueError(f"JOB_STORE must be 'none' or 'firestore', got {value!r}")
+
+
+# Per-job store (ADR-018). "none" (the default) writes nothing, so an install
+# without Firestore still runs.
+JOB_STORE = parse_job_store(os.environ.get("JOB_STORE", "none"))
+# An empty value would make the client fall back to "(default)" silently.
+FIRESTORE_DATABASE = os.environ.get("FIRESTORE_DATABASE") or "runnerforge"
