@@ -596,6 +596,40 @@ resource "google_logging_metric" "vm_preemption_count" {
   }
 }
 
+# Job store writes (ADR-018) that failed on the webhook path. Writes fail open,
+# so a failure never blocks a job; a sustained run of them means job records
+# are going missing. Background-task writes (the VM watcher's `vm`, the
+# cross-check's `preempted`) are excluded on purpose: they run after the
+# response with CPU throttled (cpu_idle), so their 2 s timeout can fire late
+# even when the write landed (seen 2026-10-30), and they'd make this noisy.
+resource "google_logging_metric" "job_store_write_failure_count" {
+  name   = "job_store_write_failure_count"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Job store write failed"
+    NOT jsonPayload.operation=~"^record_fact:(vm|preempted)$"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+    labels {
+      key        = "operation"
+      value_type = "STRING"
+    }
+    labels {
+      key        = "error_class"
+      value_type = "STRING"
+    }
+  }
+
+  label_extractors = {
+    "operation"   = "EXTRACT(jsonPayload.operation)"
+    "error_class" = "EXTRACT(jsonPayload.error_class)"
+  }
+}
+
 # Cloud Monitoring SLOs and alert policies that reference a log-based metric
 # validate the metric exists at create time, but log-based metrics take up
 # to ~10 minutes to become queryable after creation. On a fresh apply, that
@@ -628,6 +662,7 @@ resource "time_sleep" "wait_for_log_metrics" {
       google_logging_metric.job_preempted_count.name,
       google_logging_metric.vm_preemption_count.name,
       google_logging_metric.queued_outcome_count.name,
+      google_logging_metric.job_store_write_failure_count.name,
     ])
   }
 

@@ -277,3 +277,39 @@ resource "google_monitoring_alert_policy" "policy_reject_storm" {
   notification_channels = [google_monitoring_notification_channel.email.name]
   depends_on            = [time_sleep.wait_for_log_metrics]
 }
+
+# Job store writes failing on the webhook path. Writes fail open, so jobs keep
+# running; what's lost is their records (the dashboard and the reconciler
+# depend on them). An outage fails every webhook-path write, and jobs arrive
+# in bursts (3+ per push for test-jobs alone), so an outage passes 3 in 15
+# minutes quickly, while a one-off timeout is 1. A lone long job during an
+# outage (2 writes in the window) won't fire; the reconciler covers it.
+resource "google_monitoring_alert_policy" "job_store_write_failures" {
+  display_name = "Job store write failures >= 3 (15m)"
+  combiner     = "OR"
+  severity     = "WARNING"
+
+  conditions {
+    display_name = "Webhook-path job store write failures"
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.job_store_write_failure_count.name}\" resource.type=\"cloud_run_revision\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 2
+      duration        = "0s"
+
+      aggregations {
+        alignment_period     = "900s"
+        per_series_aligner   = "ALIGN_DELTA"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  documentation {
+    content   = "Job store writes on the webhook path are failing; jobs still run, but their records are missing. Runbook: https://github.com/rumankazi/runnerforge/blob/main/apps/web/content/docs/guides/runbooks/job-store-writes.mdx"
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = [google_monitoring_notification_channel.email.name]
+  depends_on            = [time_sleep.wait_for_log_metrics]
+}
