@@ -27,6 +27,7 @@ The code is the source of truth. If an ADR here disagrees with `apps/orchestrato
 | [016](#multi-tenancy-scope-installation-as-tenant) | Multi-tenancy scope: installation = tenant | accepted |
 | [017](#docs-site-static-export-on-cloudflare-workers) | Docs site: static export on Cloudflare Workers | accepted |
 | [018](#per-job-state-in-firestore-behind-a-jobstore-protocol) | Per-job state in Firestore behind a `JobStore` protocol | accepted |
+| [019](#tenant-registry-install-to-register-admin-approval-per-installation-limits) | Tenant registry: install to register, admin approval, per-installation limits | proposed |
 
 ---
 
@@ -534,6 +535,10 @@ A runner VM that never gets its `completed` webhook (lost delivery, a stuck job,
 
 ## Installation allow-list as a stop-gap admission control
 
+<Callout type="info" title="Revisions">
+  **2026-10-30**: [ADR-019](#tenant-registry-install-to-register-admin-approval-per-installation-limits) (proposed) replaces the allow-list with a tenant registry. `ALLOWED_INSTALLATION_IDS` stays, holding installations that are always admitted, unlimited, without a registry read (the owner's), so they keep working when the registry can't be read.
+</Callout>
+
 ### Context
 
 Any GitHub account that installs the App gets its `workflow_job` events sent to the orchestrator, and each `queued` event with `runnerforge` in `runs-on` creates a VM on RunnerForge's GCP project. The App is private today, but the plan is a free hosted beta with manual approval ([ADR-016](#multi-tenancy-scope-installation-as-tenant)). We need a way to decide who gets VMs before building a tenant system.
@@ -773,3 +778,130 @@ Readers must tolerate missing fields and check `schema_version`, because a docum
   - TTL deletion can lag by up to a day after `expire_at`, so readers also filter on it.
   - Deleting an installation's records when the App is uninstalled needs the `installation` event, which 4.2 adds. Until then, the TTL bounds how long they stay.
 - Two places describe a job: GCE for the VM and the store for its history. When they disagree about whether a VM exists, GCE wins, and the reconciler brings the record into line.
+
+---
+
+<Record type="adr" id="019" status="proposed" date="2026-10-30" />
+
+## Tenant registry: install to register, admin approval, per-installation limits
+
+### Context
+
+- Admission is the env allow-list ([ADR-015](#installation-allow-list-as-a-stop-gap-admission-control)). Its value is a committed default in `infra/terraform/variables.tf`, so every approved tenant would be listed in the public repo. Approving one takes a Terraform apply plus an orchestrator release.
+- No per-installation limits exist. Every tenant shares one pool: about 30 concurrent runners (1,500 GB of SSD at 50 GB per runner) and 200 N2 vCPUs (`guides/limits.mdx`). One busy tenant can use it all.
+- GitHub sends `installation` events (`created`, `deleted`, `suspend`, `unsuspend`) to every App by default. `main.py` acknowledges and ignores them today. While an installation is suspended or deleted, GitHub sends the App no webhooks for it and refuses its API calls.
+- GitHub sends a `queued` webhook once and never redelivers it. A job turned away at `queued` waits until GitHub cancels it after 24 hours.
+- [ADR-018](#per-job-state-in-firestore-behind-a-jobstore-protocol) gives a Firestore database behind a protocol and a 5-minute reconciler. The dashboard (4.5) will have GitHub sign-in.
+
+### Options considered
+
+- **Tenants in tfvars** (status quo): reviewed in git, but the tenant list is public, and every change needs an apply and a release.
+- **A private infrastructure repo holding tenant config:** hides the list. But required reviewers on environments work in private repos only on GitHub Enterprise, so the `prod-infra` approval gate would go. It would also use paid Actions minutes, need the WIF repository pin re-plumbed, and split releases across two repos. Public Terraform is what lets users check the trust page and what self-hosting needs.
+- **Issue-label automation:** a public request form, plus a workflow that writes the registry when you label the issue. It puts a privileged workflow in the public repo, triggered by issues with attacker-controlled bodies, and keeps requests public.
+- **A registry in Firestore, filled from GitHub's own events, with approval by the owner** (chosen).
+- **Counting usage for limits:** open job records (cheap, but drifts until the reconciler runs); VMs in GCE (chosen); or a transactional reservation counter (exact, but a hot document in bursts, and lost releases need repair).
+- **A job over the concurrency limit:** reject it for good (it would wait for GitHub's 24-hour cancel); raise the default so typical matrices fit; or defer it and start it when capacity frees (chosen).
+
+### Decision
+
+**Registry.** One document per installation in the `installations` collection of the `runnerforge` database. The registry module takes the project and database as parameters and doesn't import `runnerforge.config`, so the admin command (below) can use it without the service's secrets.
+
+| Field | Holds |
+|---|---|
+| `installation_id`, `account_id`, `account_login`, `account_type` | Identity, from the `installation` event |
+| `state` | Set by the owner: `pending`, `approved` or `suspended` |
+| `approved_at` | Set on first approval and never cleared. "Has ever been approved" gates job records (below) |
+| `github_status` | Set by GitHub's events or `suspended_at` in the backfill: `active`, `suspended` or `deleted`. It's a separate field, so a GitHub suspend or unsuspend never overwrites the owner's decision |
+| `limits` | `unlimited`, or `max_concurrent_vms`, `max_size`, `spot_only`, `max_runtime_minutes`, `literal_machine_types` |
+| `request` | Onboarding details (repositories, expected jobs, use case), added in 4.5 |
+| `created_at`, `updated_at`, `expire_at` | `expire_at` is set only once `github_status` is `deleted`; it drives a 30-day TTL |
+
+**Registration.** `main.py` handles signed `installation` events, using the same HMAC check as `workflow_job`:
+- `created` writes a `pending` row (create-if-absent).
+- `deleted`, `suspend` and `unsuspend` set `github_status`.
+- Events can never set `state` to `approved`; only the owner can.
+- A reinstall gets a new installation ID from GitHub, so it starts again as `pending`.
+- The reconciler also lists the App's installations (`GET /app/installations`, with the App JWT, paginated). It creates any missing rows and refreshes `github_status` on existing ones from `suspended_at`. After a complete listing, rows that are no longer listed are marked `deleted`. GitHub doesn't redeliver webhooks, so this is what repairs lost `unsuspend` and `deleted` events.
+
+**Approval.** `uv run runnerforge-admin` (a `[project.scripts]` entry in `apps/orchestrator`), run by the owner with their own gcloud credentials:
+- `list [--state pending]`, `approve <id> [--unlimited]`, `suspend <id>` and `set-limits <id> …`;
+- `approve` writes the beta defaults unless told otherwise;
+- it shares the registry code with the service, so the schema can't drift, and is tested like the rest of the package;
+- there is no new service account and no workflow.
+
+**Onboarding (4.5).** The App's Setup URL points at the dashboard. Dashboard sign-in uses the RunnerForge App's own user authorization, so its token can call `GET /user/installations`. GitHub sends the `installation_id` as a query parameter, which can be spoofed, so the dashboard checks it against that list before saving `request` details. The `access-request` issue form goes away. Later, the admin command becomes an admin view in the dashboard.
+
+**Admission on `queued`.** This replaces the allow-list check in `main.py`. It runs **after** the `Webhook event received` line, so every rejection's outcome line has a matching line in the lost-webhook ratio.
+1. **IDs in `ALLOWED_INSTALLATION_IDS` are always admitted as unlimited.** That covers the owner's installation and self-hosted installs. In registry mode, an unset list means nobody, never "everyone".
+2. **Otherwise, read the installation's row.** Each instance caches entries for 60 s. If the read fails, it uses the cached entry. If there's none, the job is rejected: `Queued webhook outcome` `rejected`, reason `registry_unavailable`.
+3. **Allowed only when** `state` is `approved` and `github_status` is `active`. Otherwise the outcome is `rejected`, reason `not_approved`. This is **log-only, with no job record**, so installations nobody approved can't grow the store.
+4. **For limited tenants, check the job against the limits:**
+   - **size:** a size above `max_size`, or a literal machine type that isn't allowed, is rejected (reason `limit_size`). It is not quietly downgraded, so the user sees why.
+   - **Spot:** `spot_only` forces Spot whatever the labels say.
+   - **runtime:** the VM's `max_run_duration` becomes `max_runtime_minutes` plus 15 minutes for boot.
+   - **concurrency:** one GCE list filtered on the `installation_id` label, counting only VMs that are `PROVISIONING`, `STAGING` or `RUNNING` (not ones being deleted). At `max_concurrent_vms` or more, the job is **deferred**, not rejected (below).
+5. **Record the result.** A rejection or deferral on an approved tenant writes the job's `decision` (`kind: rejected` or `deferred`, with `reason`) and logs `Queued webhook outcome` with that kind. The dashboard can then show "limit reached" or "waiting for a free runner". A rejected job stays queued on GitHub until it cancels the job after 24 hours. Telling the user inside GitHub would need the `checks: write` permission, which is not added.
+6. **If a deferral can't be stored** (the record's create or the decision write fails), the job is admitted instead and logged with `deferral_unrecorded`. A deferral nobody recorded would be lost silently, and soft limits already allow overshoot.
+
+**Starting jobs as capacity frees.** A separate pass in each reconciler run, outside the 25-record batch and its backoff. GitHub hands a queued job to any idle runner with matching labels, so a deferred job can take the VM made for another job and leave that job without one. The pass therefore works from capacity, not decision kinds:
+
+1. For each approved, limited installation with open records, it computes free slots: `max_concurrent_vms` minus the installation's VMs that are `PROVISIONING`, `STAGING` or `RUNNING`, plus any it creates during the run.
+2. Its candidates are open records whose job GitHub still shows as `queued` (`GET …/actions/jobs/{id}`) and that no idle VM can take (the stuck rule's test). Deferred jobs qualify, and so do jobs whose VM another job took.
+3. It starts up to the free count, oldest first, round-robin across installations. Each start re-runs the approval and limit checks, fetches a registration token, and creates the VM through the same code as `handle_queued`.
+4. If the job's own VM name is still in use by the job that took it, the new VM gets a suffix (`runnerforge-{run}-{job}-{attempt}-r1`). Code that matches a job to its VM uses the job labels, not the name.
+5. A start writes `decision {kind: vm_submitted, source: reconcile}`. The reconciler's existing check that the VM exists records the `vm` fact.
+
+Records are rescheduled as in ADR-018. A job is never marked stuck while its installation is at its limit; it's still waiting.
+
+**Job records and the preemption cross-check** are gated on "in `ALLOWED_INSTALLATION_IDS`, or has ever been approved" (`approved_at`, from the same cache); in allowlist mode, on the allow-list alone. A tenant suspended mid-job still gets its `in_progress` and `completed` facts.
+
+**Time-to-Register.** `runner_readiness_seconds` is computed from the labels of the VM in `runner_name`: from that VM's admission to a job starting on it, whichever job it is. Its `queued_received_at` label is set when the VM is created. Then neither a deferral nor a swapped VM counts as slow registration.
+
+**When GitHub cuts the App off.** A suspended or deleted installation sends no `completed` webhooks, and its API calls fail:
+- **Its VMs:** the reconciler deletes the VMs of any installation whose registry row says `github_status` is `suspended` or `deleted`.
+- **Its records:** they close as `gone` only when the row says `suspended` or `deleted`, or when `GET /app/installations/{id}` returns 404 or a `suspended_at`. Any other 403, such as a rate limit, is retried.
+- **Uninstall:** once `github_status` is `deleted`, the reconciler deletes that installation's job records, completing ADR-018's deletion story. The registry row expires 30 days later.
+
+An owner `suspend` stops new VMs only; VMs already running end with their job, or at their runtime cap.
+
+**Idle orphan VMs.** A job cancelled before pickup sends a `completed` webhook with no runner, so the VM made for it boots and waits idle. Under a limit of 2 that would hold a slot for up to 75 minutes. When the reconciler closes a record whose own VM still exists, and GitHub says that VM's runner is idle (as the sweep checks), it deletes the VM.
+
+**Beta defaults** (the owner's installation is unlimited):
+
+| Limit | Default |
+|---|---|
+| `max_concurrent_vms` | 2 (more jobs are deferred) |
+| `max_size` | `medium` (`small` or `medium`, and no size label, which means `n2-standard-4`) |
+| `spot_only` | `true` |
+| `max_runtime_minutes` | 60 (VM cap 1 h 15 min) |
+| `literal_machine_types` | `false` |
+
+**What stays.** `ALLOWED_INSTALLATION_IDS` stays, holding only the owner's installation. An `ADMISSION` setting selects the mode: `allowlist` (the default, which keeps a self-hosted install without a registry working) or `registry`.
+
+### Rollout
+
+1. **Registry and events:**
+   - the registry module and Firestore adapter, `installation` event handling, and the reconciler's backfill;
+   - Terraform: a TTL on `installations.expire_at` with the field's automatic indexes off, chained after the existing job indexes;
+   - admission still uses the allow-list. In **shadow mode** each `queued` logs what the registry would have decided, so a wrong rejection shows up before it matters;
+   - docs: the `trust.mdx` API table (`GET /app/installations`), and the lines in `security.mdx`, `webhook-flow.mdx` and `development/index.mdx` that say installation events are ignored.
+2. **Admin command:** `runnerforge-admin`. Approve the existing tenants with their limits. The owner's installation stays in `ALLOWED_INSTALLATION_IDS`.
+3. **Switch admission** to the registry once shadow mode has shown no surprise rejections:
+   - Terraform sets `ADMISSION=registry` (`cloud_run.tf`, a new variable) before the release that reads it, and rewords the `allowed_installation_ids` description;
+   - the same release brings limits in `compute_client` and `handlers`, deferral and the decision kinds in `reconcile.py` (registration-token calls from the reconciler go in the `trust.mdx` table), the record and cross-check gate, and the new outcome values;
+   - an alert on `rejected` outcomes with reason `registry_unavailable`. `not_approved` is the normal outcome for every pending installation, so strangers' installs must not page; it alerts only for installations that were approved before;
+   - `handle_in_progress` reads readiness from the `runner_name` VM, and ADR-018 gets a revision note adding `rejected` and `deferred` decision kinds and their status rows ("Limit reached", "Waiting for a free runner"), above "Starting";
+   - docs: `limits.mdx`, `trust.mdx`, `security.mdx`, `webhook-flow.mdx`, `getting-started.mdx`, and an ADR-016 revision note;
+   - rolling back below this release means admission by the allow-list only.
+4. **Cleanup** in the reconciler: VMs of suspended or deleted installations, idle orphan VMs of closed records, and records after uninstall.
+5. **Dashboard onboarding** (4.5).
+
+### Consequences
+
+- Approving or suspending a tenant takes effect within a minute (the cache), with no git change, apply or release. Who uses RunnerForge, and with what limits, is no longer public.
+- The `queued` path gains one cached Firestore read and, for limited tenants, one GCE list (about 0.3–1 s). It stays well inside GitHub's 10 s.
+- **Limits are soft:** a matrix burst can overshoot `max_concurrent_vms` by its own size, because every job reads the count before any VM exists, and a store outage admits instead of deferring. Later jobs are deferred until the count drops. The GCE quotas remain the hard backstop.
+- **Jobs over the limit run late, not never,** usually within 5 minutes of a slot freeing. The reconciler gains the ability to create VMs, behind the same approval and limit checks as the webhook path, and makes registration-token calls. VM names can carry an `-r1` suffix.
+- Rejected jobs (size, not approved) wait on GitHub until it cancels them. The only signal is the job record (and later the dashboard), not a check on the commit.
+- The registry holds GitHub account IDs and logins, and later onboarding details. `trust.mdx` must say so. Rows for uninstalled installations expire after 30 days.
+- Until 4.5, approval needs the owner's machine and gcloud credentials.
