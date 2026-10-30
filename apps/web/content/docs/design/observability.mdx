@@ -60,8 +60,9 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Webhook signature validation failed` | WARNING | `main.py` | `signature_prefix` (first 10 chars) | |
 | `Ignoring GitHub event` | INFO | `main.py` | `github_event` (non-`workflow_job` events) | |
 | `Installation not allowed` | WARNING | `main.py` | context `installation_id`, `repo`, `sender` | |
+| `Job store write failed` | WARNING | `job_store.py` | `operation`, `job_key`, `error_class` | |
 | `Webhook event received` | INFO | `main.py` | `event_type` (`queued`, `in_progress`, `completed`) | `webhook_event_count` |
-| `Queued webhook outcome` | INFO | `handlers.py` | `outcome` (`vm_submitted`, `already_exists`, `policy_rejected`) | `queued_outcome_count` |
+| `Queued webhook outcome` | INFO | `handlers.py` | `outcome` (`vm_submitted`, `already_exists`, `policy_rejected`, `already_completed`) | `queued_outcome_count` |
 | `Machine policy rejected` | WARNING | `handlers.py` | `reason`, `offending_tokens` | `machine_policy_reject_count` |
 | `Submitted VM creation` | INFO | `compute_client.py` | `vm_name`, `operation_id`, `machine_type`, `spot`, `image_version` | `vm_creation_count` |
 | `VM already exists` | WARNING | `compute_client.py` | `instance_name` | |

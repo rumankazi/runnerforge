@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
-from google.api_core.exceptions import AlreadyExists, ServiceUnavailable
+from google.api_core.exceptions import AlreadyExists, NotFound, ServiceUnavailable
 from google.api_core.retry import AsyncRetry, if_exception_type
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud import firestore
@@ -72,8 +72,13 @@ class JobStore(Protocol):
         name: str,
         fact: dict[str, Any],
         source: Source = "webhook",
+        reopen: bool = True,
     ) -> None:
-        """Merge one fact plus the base fields into the job's record."""
+        """Merge one fact plus the base fields into the job's record.
+
+        `completed` closes the record. Other facts reopen it unless
+        `reopen=False`, for facts that can land after `completed`
+        (the VM watcher, the preemption cross-check)."""
         ...
 
 
@@ -128,6 +133,7 @@ class NoopJobStore:
         name: str,
         fact: dict[str, Any],
         source: Source = "webhook",
+        reopen: bool = True,
     ) -> None:
         return None
 
@@ -163,7 +169,8 @@ class FirestoreJobStore:
         except Exception as exc:  # noqa: BLE001
             _log_failure("get", key, exc)
             return CreateResult.UNKNOWN
-        # Every write sets `open`; a record without it is treated as open.
+        # Every write that creates a record sets `open`; treat a missing one
+        # as open rather than skipping a VM.
         if (snapshot.to_dict() or {}).get("open", True) is False:
             return CreateResult.EXISTS_CLOSED
         return CreateResult.EXISTS_OPEN
@@ -175,20 +182,43 @@ class FirestoreJobStore:
         name: str,
         fact: dict[str, Any],
         source: Source = "webhook",
+        reopen: bool = True,
     ) -> None:
-        data = {
+        data: dict[str, Any] = {
             **base,
-            # `completed` closes the record; any other fact (re)opens it. A
-            # late in_progress after completed is closed again by the reconciler.
-            "open": name != "completed",
             name: {**fact, "at": datetime.now(UTC), "source": source},
         }
+        doc = self._doc(key)
         try:
+            # One bound for the whole write, however many calls it takes.
             async with asyncio.timeout(CALL_TIMEOUT_SECONDS):
-                # merge=True deep-merges nested maps: other facts are kept.
-                await self._doc(key).set(data, merge=True, retry=_RETRY)
+                if name == "completed" or reopen:
+                    # A late in_progress after completed reopens the record;
+                    # the reconciler closes it again.
+                    data["open"] = name != "completed"
+                    # merge=True deep-merges nested maps: other facts are kept.
+                    await doc.set(data, merge=True, retry=_RETRY)
+                else:
+                    await self._merge_keeping_open(doc, data)
         except Exception as exc:  # noqa: BLE001
             _log_failure(f"record_fact:{name}", key, exc)
+
+    async def _merge_keeping_open(self, doc, data: dict[str, Any]) -> None:
+        """For facts that can land after `completed` (background tasks only):
+        leave an existing `open` alone, but give a record this write creates
+        `open: true`, or the reconciler's `open == true` query never sees it.
+        A missing record can't have been closed: `completed` would have
+        created it."""
+        try:
+            await doc.update(data, retry=_RETRY)
+            return
+        except NotFound:
+            pass
+        try:
+            await doc.create({**data, "open": True}, retry=_RETRY)
+        except AlreadyExists:
+            # Another write created it in between: merge without `open`.
+            await doc.set(data, merge=True, retry=_RETRY)
 
     async def warm_up(self) -> None:
         """One bounded read so channel, TLS and token setup happen at startup."""

@@ -3,6 +3,7 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import Annotated
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
@@ -18,6 +19,7 @@ from runnerforge.config import (
     WEBHOOK_SECRET,
 )
 from runnerforge.handlers import handle_completed, handle_in_progress, handle_queued
+from runnerforge.job_store import base_fields, get_job_store, job_key
 from runnerforge.logger import (
     get_context,
     setup_logging,
@@ -198,6 +200,16 @@ async def webhook(
     # took and silently dropped.
     logger.info("Webhook event received", extra={"event_type": event.action})
 
+    # Job record (ADR-018). Only allowed installations get records: once the
+    # App is public, anyone's in_progress/completed events would otherwise
+    # grow the store. Written before the handler, so a failing GCE lookup in
+    # the handler doesn't lose the fact. Bounded and fail-open.
+    record_job = installation_allowed(event.installation.id)
+    key = job_key(
+        event.workflow_job.run_id, event.workflow_job.id, event.workflow_job.run_attempt
+    )
+    base = base_fields(event, received_at)
+
     match event.action:
         case "queued":
             handle = await handle_queued(event, received_at=received_at)
@@ -209,14 +221,34 @@ async def webhook(
                     with_log_context, get_context(), wait_for_vm_creation, handle
                 )
         case "in_progress":
+            if record_job:
+                await get_job_store().record_fact(
+                    key,
+                    base,
+                    "in_progress",
+                    {"runner_name": event.workflow_job.runner_name},
+                )
             await handle_in_progress(event, received_at=received_at)
         case "completed":
+            if record_job:
+                await get_job_store().record_fact(
+                    key,
+                    base,
+                    "completed",
+                    {
+                        "conclusion": event.workflow_job.conclusion,
+                        "runner_name": event.workflow_job.runner_name,
+                    },
+                )
             preempt_req = await handle_completed(event)
             # The cross-check queries audit logs by a runner name taken from the
             # payload, and the VM may already be gone (so ownership can't be
             # checked). Only allow-listed installations can have our VMs, so
             # only they may spend the Logging read quota (60/min, fixed).
-            if preempt_req is not None and installation_allowed(event.installation.id):
+            if preempt_req is not None and record_job:
+                # The cross-check records a positive result as the job's
+                # `preempted` fact.
+                preempt_req = replace(preempt_req, job_key=key, job_base=base)
                 # Snapshot context now; background task re-installs it so
                 # request_id/job_id/repo correlation survives the post-response
                 # hop into the audit-log query.

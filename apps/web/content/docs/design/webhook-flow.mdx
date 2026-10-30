@@ -45,8 +45,13 @@ GCE enforces on every VM.
 
 <Steps>
   <Step>
+    **Create the job record** in Firestore ([ADR-018](/docs/design/decisions#per-job-state-in-firestore-behind-a-jobstore-protocol)).
+    If a closed record already exists, `completed` arrived first: the orchestrator logs the outcome
+    `already_completed` and creates no VM.
+  </Step>
+  <Step>
     **Resolve labels** to a machine type and spot flag (see [Label parsing](#label-parsing)). A rejected
-    label set logs `Machine policy rejected` with a `reason` and returns 200 with no VM.
+    label set logs `Machine policy rejected` with a `reason`, records the decision, and returns 200 with no VM.
   </Step>
   <Step>
     **Get a registration token.** The App JWT is exchanged for an installation token. That token then
@@ -58,10 +63,20 @@ GCE enforces on every VM.
     [Architecture](/docs/design/architecture#runner-vms)). The call submits the insert and doesn't wait.
   </Step>
   <Step>
-    **Return 200.** A background task polls the GCE operation for up to 300 s and logs `VM creation outcome`
-    (`success`, `failure` or `timeout`).
+    **Return 200.** A background task polls the GCE operation for up to 300 s, logs `VM creation outcome`
+    (`success`, `failure` or `timeout`) and records it on the job.
   </Step>
 </Steps>
+
+If the token fetch or the GCE insert fails, the orchestrator records an `errored` fact with that stage and
+returns 500.
+
+<Callout type="info" title="Job records never block a job">
+  Every store call is bounded at 2 s and fails open: a slow or broken store logs `Job store write failed`
+  and the webhook carries on. If the first call on a `queued` request fails, that request skips its other
+  writes, so a degraded store adds at most about 4 s. Records are written only for installations on the
+  allow-list, for every action.
+</Callout>
 
 The VM's startup script then mounts the data disk, runs `config.sh --ephemeral` with the VM name as the
 runner name, and starts the runner. The runner registers with GitHub, and GitHub assigns it a matching
