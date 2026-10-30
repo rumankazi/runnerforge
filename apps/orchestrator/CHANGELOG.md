@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.22.0...orchestrator-v0.23.0) (2026-10-30)
+
+
+### Features
+
+* **orchestrator:** tenant registry from installation events, in shadow mode ([#337](https://github.com/rumankazi/runnerforge/issues/337)) ([fe8614c](https://github.com/rumankazi/runnerforge/commit/fe8614c797d8daf0274e695b21a41f0885b992aa))
+
 ## [0.22.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.21.0...orchestrator-v0.22.0) (2026-10-30)
 
 
