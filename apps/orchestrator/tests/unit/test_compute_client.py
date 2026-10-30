@@ -1238,3 +1238,88 @@ def test_was_preempted_returns_false_on_api_error(monkeypatch, caplog):
         "Failed to query audit log for preemption check" in r.message
         for r in caplog.records
     )
+
+
+# -----------------------------------------------------------------------------
+# Job record writes from the background tasks (ADR-018)
+# -----------------------------------------------------------------------------
+
+
+def _serve_done_op(monkeypatch, error_code: str | None = None) -> None:
+    zone_ops = MagicMock()
+    zone_ops.get.return_value = _done_op(error_code=error_code)
+    monkeypatch.setattr(compute_client, "_zone_ops_client", zone_ops)
+
+
+@pytest.mark.parametrize(
+    ("error_code", "expected"),
+    [
+        (None, {"outcome": "success", "error_code": None}),
+        ("QUOTA_EXCEEDED", {"outcome": "failure", "error_code": "QUOTA_EXCEEDED"}),
+    ],
+)
+def test_wait_for_vm_creation_records_vm_fact_without_reopening(
+    monkeypatch, fake_job_store, error_code, expected
+):
+    _serve_done_op(monkeypatch, error_code)
+    handle = compute_client.OperationHandle(
+        name="op-1",
+        project="test-project",
+        zone="europe-west4-a",
+        spot=True,
+        machine_type="e2-medium",
+        image_version="0.2.0",
+        job_key="1-2-1",
+        job_base={"installation_id": 7},
+    )
+
+    asyncio.run(compute_client.wait_for_vm_creation(handle, timeout=10.0))
+
+    fact = fake_job_store.fact("vm")
+    assert fact["key"] == "1-2-1"
+    assert fact["base"] == {"installation_id": 7}
+    assert fact["fact"] == expected
+    assert fact["source"] == "watcher"
+    assert fact["reopen"] is False
+
+
+def test_wait_for_vm_creation_without_job_record_writes_nothing(
+    monkeypatch, fake_job_store
+):
+    _serve_done_op(monkeypatch)
+    handle = compute_client.OperationHandle(
+        name="op-1",
+        project="test-project",
+        zone="europe-west4-a",
+        spot=True,
+        machine_type="e2-medium",
+        image_version="0.2.0",
+    )
+
+    asyncio.run(compute_client.wait_for_vm_creation(handle, timeout=10.0))
+
+    assert fake_job_store.facts == []
+
+
+@pytest.mark.parametrize("with_record", [True, False])
+def test_cross_check_preemption_records_mid_job_preemption(
+    monkeypatch, fake_job_store, with_record
+):
+    monkeypatch.setattr(compute_client, "was_preempted", AsyncMock(return_value=True))
+    request = compute_client.PreemptionCheckRequest(
+        vm_name="runnerforge-1-2-1",
+        job_id=2,
+        conclusion="failure",
+        job_key="1-2-1" if with_record else None,
+        job_base={"installation_id": 7} if with_record else None,
+    )
+
+    asyncio.run(compute_client.cross_check_preemption(request))
+
+    if with_record:
+        fact = fake_job_store.fact("preempted")
+        assert fact["fact"] == {"phase": "mid_job"}
+        assert fact["source"] == "watcher"
+        assert fact["reopen"] is False
+    else:
+        assert fake_job_store.facts == []

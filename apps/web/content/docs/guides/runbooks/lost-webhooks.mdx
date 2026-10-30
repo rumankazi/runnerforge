@@ -11,7 +11,8 @@ Email from "RunnerForge Alerts": **Lost-webhook ratio &lt; 0.9 (5m)**, severity 
 
 The ratio is `queued_outcome_count` (`Queued webhook outcome`) over `webhook_event_count` for
 `event_type="queued"` (`Webhook event received`). Every queued event that reaches a decision logs exactly one
-outcome: `vm_submitted`, `already_exists` (duplicate delivery) or `policy_rejected` (bad `runs-on` labels). So the
+outcome: `vm_submitted`, `already_exists` (duplicate delivery), `policy_rejected` (bad `runs-on` labels) or
+`already_completed` (`queued` delivered after `completed`). So the
 ratio only drops for events that failed before any decision. The anchor line is written after the HMAC check, the
 RunnerForge label check and the installation allow-list, so ignored events and disallowed installations don't count. The alert fires when the ratio
 stays under 0.9 for 5 minutes, and stays quiet when no queued webhooks arrive.
@@ -47,7 +48,7 @@ An anchor with no `Queued webhook outcome` for the same `request_id` is a lost e
 | `Exception in ASGI application` | The handler failed before deciding (GitHub token call, or GCE insert error other than "already exists"). The request got a 5xx; see [Availability SLO](/docs/guides/runbooks/webhook-availability). |
 | Nothing | The instance died mid-request, or logging was lost. Follow one `request_id` end to end (step 2). |
 
-`policy_rejected` and `already_exists` outcomes are expected and never lower the ratio. Bad labels show up in
+`policy_rejected`, `already_exists` and `already_completed` outcomes are expected and never lower the ratio. Bad labels show up in
 "Machine policy rejects by reason" instead. If every job is being rejected, the
 [Policy rejection storm](/docs/guides/runbooks/policy-rejections) alert fires.
 

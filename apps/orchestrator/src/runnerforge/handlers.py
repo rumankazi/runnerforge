@@ -1,5 +1,6 @@
 import logging
-from typing import Literal
+from dataclasses import replace
+from typing import Any, Literal
 
 from opentelemetry import trace
 from opentelemetry.trace import (
@@ -21,6 +22,14 @@ from runnerforge.compute_client import (
 )
 from runnerforge.config import STARTUP_SCRIPT
 from runnerforge.github_client import get_installation_token, get_registration_token
+from runnerforge.job_store import (
+    CreateResult,
+    JobStore,
+    NoopJobStore,
+    base_fields,
+    get_job_store,
+    job_key,
+)
 from runnerforge.machine_policy import MachinePolicyError, resolve_labels
 from runnerforge.models import RunnerForgeVmLabels, WorkflowJobEvent
 
@@ -48,13 +57,28 @@ def _webhook_span_context(
 
 
 def _log_queued_outcome(
-    outcome: Literal["vm_submitted", "already_exists", "policy_rejected"],
+    outcome: Literal[
+        "vm_submitted", "already_exists", "policy_rejected", "already_completed"
+    ],
 ) -> None:
     """One line per queued event that reached a deliberate decision. The
     lost_webhook_ratio alert divides these by queued "Webhook event received"
     lines, so only a queued event with NO outcome (an exception, a crash)
-    counts as lost. Rejections and duplicates are decisions, not losses."""
+    counts as lost. Rejections, duplicates and late deliveries are decisions,
+    not losses."""
     logger.info("Queued webhook outcome", extra={"outcome": outcome})
+
+
+async def _record_errored(
+    store: JobStore,
+    key: str,
+    base: dict[str, Any],
+    stage: Literal["token", "gce_insert"],
+    exc: Exception,
+) -> None:
+    await store.record_fact(
+        key, base, "errored", {"stage": stage, "error_class": type(exc).__name__}
+    )
 
 
 async def handle_queued(
@@ -77,6 +101,28 @@ async def handle_queued(
         span.set_attribute("run_id", event.workflow_job.run_id)
         span.set_attribute("run_attempt", event.workflow_job.run_attempt)
 
+        # Job record (ADR-018). Every store call is bounded and fails open.
+        store = get_job_store()
+        key = job_key(
+            event.workflow_job.run_id,
+            event.workflow_job.id,
+            event.workflow_job.run_attempt,
+        )
+        base = base_fields(event, received_at)
+        # A closed record means `completed` arrived before this `queued`
+        # (reordered or redelivered): a VM now would only sit idle. No decision
+        # is written, because that would reopen the record.
+        created = await store.create_if_absent(key, base)
+        if created is CreateResult.EXISTS_CLOSED:
+            logger.info("Skipping VM: job already completed")
+            _log_queued_outcome("already_completed")
+            return None
+        if created is CreateResult.UNKNOWN:
+            # The store just failed or timed out (or is off): skip this
+            # request's other writes, so a degraded store costs one 2 s bound
+            # per webhook, not several. The reconciler fills what it can.
+            store = NoopJobStore()
+
         # Get requested machine type from labels
         try:
             policy = resolve_labels(event.workflow_job.labels)
@@ -87,17 +133,32 @@ async def handle_queued(
                 "Machine policy rejected",
                 extra={"reason": e.reason, "offending_tokens": e.offending_tokens},
             )
+            await store.record_fact(
+                key,
+                base,
+                "decision",
+                {
+                    "kind": "policy_rejected",
+                    "reason": e.reason,
+                    "offending_tokens": e.offending_tokens,
+                },
+            )
             _log_queued_outcome("policy_rejected")
             return None
         span.set_attribute("policy.machine_type", policy.machine_type)
         span.set_attribute("policy.spot", policy.spot)
 
         installation_id = event.installation.id
-        installation_token = await get_installation_token(installation_id)
-        registration_token = await get_registration_token(
-            installation_token=installation_token,
-            repo_full_name=event.repository.full_name,
-        )
+        try:
+            installation_token = await get_installation_token(installation_id)
+            registration_token = await get_registration_token(
+                installation_token=installation_token,
+                repo_full_name=event.repository.full_name,
+            )
+        except Exception as exc:
+            # Still a 500 with no outcome line; the record says why.
+            await _record_errored(store, key, base, "token", exc)
+            raise
         logger.info("Registration token received")
 
         # Create the VM with the registration token metadata
@@ -131,16 +192,30 @@ async def handle_queued(
             queued_received_at=str(int(received_at)),
         )
 
-        operation = await create_vm(
-            instance_name=vm_name,
-            machine_type=policy.machine_type,
-            spot=policy.spot,
-            labels=labels.model_dump(),
-            metadata=metadata,
-        )
+        try:
+            operation = await create_vm(
+                instance_name=vm_name,
+                machine_type=policy.machine_type,
+                spot=policy.spot,
+                labels=labels.model_dump(),
+                metadata=metadata,
+            )
+        except Exception as exc:
+            await _record_errored(store, key, base, "gce_insert", exc)
+            raise
         # create_vm returns None when the VM already exists (duplicate delivery).
-        _log_queued_outcome("vm_submitted" if operation else "already_exists")
-        return operation
+        kind = "vm_submitted" if operation else "already_exists"
+        await store.record_fact(
+            key,
+            base,
+            "decision",
+            {"kind": kind, "machine_type": policy.machine_type, "spot": policy.spot},
+        )
+        _log_queued_outcome(kind)
+        if operation is None:
+            return None
+        # The watcher records the `vm` fact with these.
+        return replace(operation, job_key=key, job_base=base)
 
 
 async def handle_in_progress(event: WorkflowJobEvent, received_at: float):

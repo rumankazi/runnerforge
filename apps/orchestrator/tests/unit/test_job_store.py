@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from google.api_core.exceptions import AlreadyExists, ServiceUnavailable
+from google.api_core.exceptions import AlreadyExists, NotFound, ServiceUnavailable
 from google.auth.exceptions import DefaultCredentialsError
 
 from runnerforge import job_store
@@ -402,3 +402,53 @@ async def test_close_job_store_after_finished_warm_up(monkeypatch, reset_store):
 
     assert not task.cancelled()
     assert job_store._warmup_task is None
+
+
+async def _record_without_reopen(doc: MagicMock) -> None:
+    await FirestoreJobStore(_client_with_doc(doc)).record_fact(
+        KEY, BASE, "preempted", {"phase": "mid_job"}, source="watcher", reopen=False
+    )
+
+
+async def test_record_fact_without_reopen_updates_existing_record():
+    """Facts that can land after `completed` must not reopen the record."""
+    doc = MagicMock()
+    doc.update = AsyncMock()
+    doc.create = AsyncMock()
+    doc.set = AsyncMock()
+
+    await _record_without_reopen(doc)
+
+    (data,), kwargs = doc.update.await_args
+    assert kwargs == {"retry": job_store._RETRY}
+    assert "open" not in data
+    assert data["preempted"]["phase"] == "mid_job"
+    doc.create.assert_not_awaited()
+    doc.set.assert_not_awaited()
+
+
+async def test_record_fact_without_reopen_creates_missing_record_open():
+    """A record created by a background fact must still be visible to the
+    reconciler's `open == true` query."""
+    doc = MagicMock()
+    doc.update = AsyncMock(side_effect=NotFound("missing"))
+    doc.create = AsyncMock()
+
+    await _record_without_reopen(doc)
+
+    (data,), _ = doc.create.await_args
+    assert data["open"] is True
+    assert data["installation_id"] == 7
+
+
+async def test_record_fact_without_reopen_merges_when_created_concurrently():
+    doc = MagicMock()
+    doc.update = AsyncMock(side_effect=NotFound("missing"))
+    doc.create = AsyncMock(side_effect=AlreadyExists("exists"))
+    doc.set = AsyncMock()
+
+    await _record_without_reopen(doc)
+
+    (data,), kwargs = doc.set.await_args
+    assert kwargs == {"merge": True, "retry": job_store._RETRY}
+    assert "open" not in data

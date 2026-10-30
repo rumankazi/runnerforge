@@ -82,3 +82,47 @@ def rsa_keys() -> tuple[bytes, bytes]:
         (_KEYS_DIR / "private_key.pem").read_bytes(),
         (_KEYS_DIR / "public_key.pem").read_bytes(),
     )
+
+
+class FakeJobStore:
+    """In-memory JobStore (ADR-018): records every call so tests assert on
+    the facts a request wrote. `create_result` sets what create_if_absent
+    reports."""
+
+    def __init__(self) -> None:
+        from runnerforge.job_store import CreateResult
+
+        self.create_result = CreateResult.CREATED
+        self.created: list[tuple[str, dict]] = []
+        self.facts: list[dict] = []
+
+    async def create_if_absent(self, key, base):
+        self.created.append((key, base))
+        return self.create_result
+
+    async def record_fact(self, key, base, name, fact, source="webhook", reopen=True):
+        self.facts.append(
+            {
+                "key": key,
+                "base": base,
+                "name": name,
+                "fact": fact,
+                "source": source,
+                "reopen": reopen,
+            }
+        )
+
+    def names(self) -> list[str]:
+        return [f["name"] for f in self.facts]
+
+    def fact(self, name: str) -> dict:
+        [found] = [f for f in self.facts if f["name"] == name]
+        return found
+
+
+@pytest.fixture
+def fake_job_store(monkeypatch) -> FakeJobStore:
+    """Swap the process-wide job store for an in-memory fake."""
+    store = FakeJobStore()
+    monkeypatch.setattr("runnerforge.job_store._store", store)
+    return store

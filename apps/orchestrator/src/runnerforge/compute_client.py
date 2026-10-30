@@ -4,7 +4,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 from google.api_core.exceptions import AlreadyExists, GoogleAPIError, NotFound
 from google.auth.exceptions import DefaultCredentialsError
@@ -19,6 +19,7 @@ from runnerforge.config import (
     RUNNER_IMAGE_PROJECT,
     RUNNER_VM_SA_EMAIL,
 )
+from runnerforge.job_store import get_job_store
 from runnerforge.models import RunnerForgeVmLabels, VmInfo
 
 _KNOWN_MACHINE_TYPES: set[str] | None = None
@@ -57,6 +58,11 @@ class OperationHandle:
     spot: bool
     machine_type: str
     image_version: str | None
+    # Job record (ADR-018), attached by handle_queued; the watcher writes the
+    # `vm` fact with these. The full base fields, not just the key, so a write
+    # that creates the record still gets its TTL.
+    job_key: str | None = None
+    job_base: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +75,9 @@ class PreemptionCheckRequest:
     vm_name: str
     job_id: int
     conclusion: str
+    # Job record (ADR-018), attached by main.py for allowed installations.
+    job_key: str | None = None
+    job_base: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +271,16 @@ async def cross_check_preemption(request: PreemptionCheckRequest) -> None:
                 "conclusion": request.conclusion,
             },
         )
+        if request.job_key is not None and request.job_base is not None:
+            # Lands after `completed`, so it must not reopen the record.
+            await get_job_store().record_fact(
+                request.job_key,
+                request.job_base,
+                "preempted",
+                {"phase": "mid_job"},
+                source="watcher",
+                reopen=False,
+            )
 
 
 async def create_vm(
@@ -406,6 +425,26 @@ async def create_vm(
 async def wait_for_vm_creation(
     handle: OperationHandle,
     timeout: float = 300.0,  # 5 minutes (under 10 minutes limit from github timeout)
+) -> OperationOutcome:
+    """BackgroundTask body: poll the create operation, then record the outcome
+    as the job's `vm` fact (ADR-018) when the handle carries a job record."""
+    outcome = await _poll_vm_creation(handle, timeout)
+    if handle.job_key is not None and handle.job_base is not None:
+        # Can land after `completed` (job cancelled while the VM boots), so it
+        # must not reopen the record.
+        await get_job_store().record_fact(
+            handle.job_key,
+            handle.job_base,
+            "vm",
+            {"outcome": outcome.outcome, "error_code": outcome.error_code},
+            source="watcher",
+            reopen=False,
+        )
+    return outcome
+
+
+async def _poll_vm_creation(
+    handle: OperationHandle, timeout: float
 ) -> OperationOutcome:
     """Poll a GCE create-instance operation until DONE or timeout.
 

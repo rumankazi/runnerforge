@@ -54,13 +54,23 @@ What limits exposure:
 
 ## What we store, and where
 
-There is no database. Everything below lives in the GCP project `runnerforge`. Cloud Run and the runner VMs run in `europe-west4` (VMs in zone `europe-west4-a`). Logs and traces use Cloud Logging and Cloud Trace with their default storage location and retention settings, which Terraform doesn't change.
+Everything below lives in the GCP project `runnerforge`. Cloud Run and the runner VMs run in `europe-west4` (VMs in zone `europe-west4-a`). Logs and traces use Cloud Logging and Cloud Trace with their default storage location and retention settings, which Terraform doesn't change.
 
 **On each VM, deleted with the VM:**
 
 - **Name:** `runnerforge-{run_id}-{job_id}-{run_attempt}`.
 - **Labels** (also on its disks): `runner`, `job_id`, `run_id`, `run_attempt`, `repository_id` (the numeric GitHub ID), `installation_id`, `webhook_trace_id`, `webhook_span_id` and `queued_received_at`.
 - **Metadata:** `registration-token` (the runner registration token, readable from inside the VM until it's deleted), `repo-url` (`https://github.com/{owner}/{repo}`), `runner-labels` (your job's `runs-on` labels) and `startup-script`.
+
+**In Firestore, one record per job, kept for 90 days:**
+
+The database `runnerforge` is in `europe-west4`. It holds a record only for jobs from approved installations ([ADR-018](/docs/design/decisions#per-job-state-in-firestore-behind-a-jobstore-protocol)), keyed `{run_id}-{job_id}-{run_attempt}`:
+
+- **Identity:** `installation_id`, `repository_id`, `repo` (`owner/name`), `run_id`, `job_id`, `run_attempt` and your job's labels.
+- **What happened:** the decision (VM submitted, duplicate, or label rejection with its reason and the offending labels), the VM creation outcome, the runner name, the job's conclusion, a preemption, or the step that failed and its error class. Each with a timestamp.
+- **Retention:** a TTL policy deletes each record after 90 days, usually within a day of expiry. Point-in-time recovery keeps 7 days of earlier versions.
+
+No tokens are stored there.
 
 **In Cloud Logging:**
 

@@ -623,6 +623,8 @@ RunnerForge started as a single-owner tool. Opening it up raises a set of questi
 
 <Callout type="info" title="Revisions">
   **2026-10-30**: accepted with R1 (Terraform). `roles/editor` lacks `datastore.databases.create`, so the apply SA got a custom `firestoreDatabaseCreator` role, created out-of-band and adopted by `terraform_ci.tf`. R2 and R3 are not built yet.
+
+  **2026-10-30** (R2): `errored` is recorded in `handle_queued` around each failing call, so its stage is exact, instead of by an `except` in `main.py`. Facts that can land after `completed` (the VM watcher's `vm`, the cross-check's `preempted`) no longer reopen the record. A `queued` that finds a closed record logs the new outcome `already_completed` and writes no decision. The timeout is a fixed 2 s hard bound rather than one tuned from measurements, and a `queued` request whose create fails skips its other writes. A background fact that finds no record creates it with `open: true`. The `Job store write failed` metric and alert are not built yet. R3 is not built yet.
 </Callout>
 
 ### Context
@@ -679,22 +681,22 @@ Every fact is a sub-map that carries `at` and `source` (`webhook`, `watcher` or 
 | `preempted.phase = before_pickup`, or `vm.outcome = missing` | Stuck: cancel and re-run |
 | anything else | Starting. The dashboard shows it as late once it passes a threshold of its own, at least the 5-minute Time-to-Register SLO. |
 
-**Writes.** Every write is a field-level merge (`set(..., merge=True)`) of one fact plus the base fields: identity, `queued_at`, `expire_at`, `schema_version` and `next_check_at`. That way a record created by whichever event arrives first still gets its TTL and is visible to the reconciler. Writing the same fact twice changes nothing, so no transactions are needed. A `completed` write sets `open: false`; every other write sets `open: true`. A late `in_progress` can therefore reopen a completed record; the reconciler closes it again on its next check.
+**Writes.** Every write is a field-level merge (`set(..., merge=True)`) of one fact plus the base fields: identity, `queued_at`, `expire_at`, `schema_version` and `next_check_at`. That way a record created by whichever event arrives first still gets its TTL and is visible to the reconciler. Writing the same fact twice changes nothing, so no transactions are needed. A `completed` write sets `open: false`. Webhook facts set `open: true`, so a late `in_progress` can reopen a completed record; the reconciler closes it again on its next check. The background tasks' facts (`vm`, `preempted`) leave `open` alone, because they can land after `completed`.
 
-The one conditional write is on the `queued` path, after admission: `create()`. If the document already exists and `open` is `false`, `completed` arrived first, so the handler skips the VM. In every other case it carries on, and GCE's `AlreadyExists` on the VM name decides duplicates, as it does today.
+The one conditional write is on the `queued` path, after admission: `create()`. If the document already exists and `open` is `false`, `completed` arrived first, so the handler skips the VM, logs the `Queued webhook outcome` `already_completed`, and writes no decision (which would reopen the record). In every other case it carries on, and GCE's `AlreadyExists` on the VM name decides duplicates, as it does today.
 
 | Fact | Written at |
 |---|---|
 | `decision` | `handle_queued`, next to each `Queued webhook outcome` line |
-| `errored` | A new `except` around the `handle_queued` call in `main.py` (the `queued` case only) that records the fact and re-raises (the response is still 500). Failures in `in_progress` and `completed` handling stay log-only. |
-| `in_progress`, `completed` | `handle_in_progress`, `handle_completed` |
-| `vm` | `wait_for_vm_creation` (best-effort). `OperationHandle` gains the job key. |
-| `preempted` (`mid_job`) | `cross_check_preemption` (best-effort). `PreemptionCheckRequest` gains `run_id` and `run_attempt`. |
+| `errored` | `handle_queued`, around the token fetches (`token`) and the GCE insert (`gce_insert`): records the fact and re-raises, so the response is still 500 with no outcome line. Failures in `in_progress` and `completed` handling stay log-only. |
+| `in_progress`, `completed` | `main.py`, before the handler runs, so a failing GCE lookup in the handler doesn't lose the fact |
+| `vm` | `wait_for_vm_creation` (best-effort). `OperationHandle` carries the job key and base fields. |
+| `preempted` (`mid_job`) | `cross_check_preemption`, positive result only (best-effort). `PreemptionCheckRequest` carries the job key and base fields. |
 | anything still missing | The reconciler |
 
 Only installations that pass admission get records. `Installation not allowed` stays log-only, and `in_progress` and `completed` facts are written only for allowed installations, even though those events skip the admission gate. Once the App is public, writing a document for every unapproved installation's jobs would let anyone grow the store. An installation removed mid-run gets its record closed by the reconciler. Approval state belongs to the tenant registry.
 
-**Failure policy: fail open.** Every store call runs under a short timeout, set from latency measured in R2 (expected 300–500 ms). On timeout or error, the handler logs `Job store write failed` (operation, error class), does not write the record, and carries on, so the job still gets its VM. A log-based metric and an alert watch that line. GitHub never retries, so failing closed would turn a store outage into stuck jobs for every tenant. The reconciler fills most of the gaps.
+**Failure policy: fail open.** Every store call runs inside a hard 2 s `asyncio.timeout` and retries only on `UNAVAILABLE` (the client's own `timeout=` bounds one attempt, and its default write retry lasts 60 s). On timeout or error, the handler logs `Job store write failed` (operation, error class), does not write the record, and carries on, so the job still gets its VM. On the `queued` path, a failed or timed-out create skips that request's other store writes, so a degraded store adds at most about 4 s to a webhook (today's slowest `queued` request takes 2.3 s of GitHub's 10 s). GitHub never retries, so failing closed would turn a store outage into stuck jobs for every tenant. The reconciler fills most of the gaps. A log-based metric and an alert on `Job store write failed` follow once the release that writes is at 100%.
 
 **Reconciler.** `POST /reconcile`, called by a second Cloud Scheduler job every 5 minutes and authenticated like `/sweep` (`verify_oidc_token`). Each run:
 

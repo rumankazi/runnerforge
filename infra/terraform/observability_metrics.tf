@@ -458,7 +458,7 @@ resource "google_logging_metric" "sweep_error_count" {
 
 # Numerator of lost_webhook_ratio: one "Queued webhook outcome" line per
 # queued event that reached a decision (vm_submitted / already_exists /
-# policy_rejected). A queued event with no outcome (exception, crash) is the
+# policy_rejected / already_completed). A queued event with no outcome (exception, crash) is the
 # only thing that should count as lost; deliberate no-VM decisions are not.
 resource "google_logging_metric" "queued_outcome_count" {
   name   = "queued_outcome_count"
