@@ -22,6 +22,8 @@ from tenacity import (
 
 from runnerforge.config import GITHUB_APP_ID, PRIVATE_KEY
 from runnerforge.models import (
+    AppInstallation,
+    AppInstallations,
     GitHubJob,
     InstallationTokenResponse,
     RegistrationTokenResponse,
@@ -234,3 +236,66 @@ async def get_job(
         )
         span.set_attribute("status", job.status)
         return job
+
+
+# GitHub's maximum page size for GET /app/installations.
+_PAGE_SIZE = 100
+
+
+async def list_app_installations() -> list[AppInstallation]:
+    """Every installation of the App, with its account and suspension, for the
+    registry backfill. Follows pagination to the end; any failure raises, so
+    a partial listing is never mistaken for the whole."""
+    assert _http_client is not None
+    with tracer.start_as_current_span("github.list_app_installations") as span:
+        headers = {
+            "Authorization": f"Bearer {generate_app_jwt()}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        installations: list[AppInstallation] = []
+        page = 1
+        while True:
+            url = (
+                "https://api.github.com/app/installations"
+                f"?{urlencode({'per_page': _PAGE_SIZE, 'page': page})}"
+            )
+            r = await _get_with_retry(client=_http_client, url=url, headers=headers)
+            batch = parse_github_response(
+                AppInstallations,
+                data=r.json(),
+                cause_hint="Github returned an unexpected response while listing installations.",
+                logger=logger,
+            ).root
+            installations.extend(batch)
+            if len(batch) < _PAGE_SIZE:
+                break
+            page += 1
+        span.set_attribute("count", len(installations))
+        return installations
+
+
+async def get_app_installation(installation_id: int) -> AppInstallation | None:
+    """One installation of the App, or None if GitHub says it's gone (404).
+    Other errors propagate."""
+    assert _http_client is not None
+    with tracer.start_as_current_span("github.get_app_installation") as span:
+        span.set_attribute("installation_id", installation_id)
+        url = f"https://api.github.com/app/installations/{installation_id}"
+        headers = {
+            "Authorization": f"Bearer {generate_app_jwt()}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        try:
+            r = await _get_with_retry(client=_http_client, url=url, headers=headers)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+        return parse_github_response(
+            AppInstallation,
+            data=r.json(),
+            cause_hint="Github returned an unexpected response while reading an installation.",
+            logger=logger,
+        )

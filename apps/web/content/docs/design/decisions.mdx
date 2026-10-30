@@ -27,7 +27,7 @@ The code is the source of truth. If an ADR here disagrees with `apps/orchestrato
 | [016](#multi-tenancy-scope-installation-as-tenant) | Multi-tenancy scope: installation = tenant | accepted |
 | [017](#docs-site-static-export-on-cloudflare-workers) | Docs site: static export on Cloudflare Workers | accepted |
 | [018](#per-job-state-in-firestore-behind-a-jobstore-protocol) | Per-job state in Firestore behind a `JobStore` protocol | accepted |
-| [019](#tenant-registry-install-to-register-admin-approval-per-installation-limits) | Tenant registry: install to register, admin approval, per-installation limits | proposed |
+| [019](#tenant-registry-install-to-register-admin-approval-per-installation-limits) | Tenant registry: install to register, admin approval, per-installation limits | accepted |
 
 ---
 
@@ -536,7 +536,7 @@ A runner VM that never gets its `completed` webhook (lost delivery, a stuck job,
 ## Installation allow-list as a stop-gap admission control
 
 <Callout type="info" title="Revisions">
-  **2026-10-30**: [ADR-019](#tenant-registry-install-to-register-admin-approval-per-installation-limits) (proposed) replaces the allow-list with a tenant registry. `ALLOWED_INSTALLATION_IDS` stays, holding installations that are always admitted, unlimited, without a registry read (the owner's), so they keep working when the registry can't be read.
+  **2026-10-30**: [ADR-019](#tenant-registry-install-to-register-admin-approval-per-installation-limits) replaces the allow-list with a tenant registry. `ALLOWED_INSTALLATION_IDS` stays, holding installations that are always admitted, unlimited, without a registry read (the owner's), so they keep working when the registry can't be read.
 </Callout>
 
 ### Context
@@ -781,9 +781,13 @@ Readers must tolerate missing fields and check `schema_version`, because a docum
 
 ---
 
-<Record type="adr" id="019" status="proposed" date="2026-10-30" />
+<Record type="adr" id="019" status="accepted" date="2026-10-30" />
 
 ## Tenant registry: install to register, admin approval, per-installation limits
+
+<Callout type="info" title="Revisions">
+  **2026-10-30**: accepted with rollout step 1: the registry (`registry.py`), `installation` events and the hourly backfill (`admission.py`, run by the reconciler in the first 5 minutes of each hour), and shadow mode. Shadow mode checks approval only (limits come with step 3) and runs before the allow-list gate, so it also covers jobs the allow-list turns away. A row with no decision reads as `pending`; an installation with no row is `not_registered`. Every status event creates a missing row as `pending`, not only `created`. The backfill reads the rows before GitHub's listing and marks an installation `deleted` only after `GET /app/installations/{id}` returns 404, because a page-numbered listing can skip a live installation and later steps treat `deleted` as final. The registry shares the job store's Firestore client. The TTL on `installations.expire_at` ships in a separate Terraform change.
+</Callout>
 
 ### Context
 

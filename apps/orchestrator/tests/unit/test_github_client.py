@@ -8,10 +8,12 @@ from pydantic import ValidationError
 from runnerforge.github_client import (
     JobNotFound,
     RepoNotFound,
+    get_app_installation,
     get_installation_token,
     get_job,
     get_registration_token,
     get_runner,
+    list_app_installations,
 )
 
 
@@ -494,3 +496,92 @@ async def test_get_job_propagates_other_errors():
         await get_job(
             installation_token="ghs_test", repo_full_name="RumanKazi/Foo.js", job_id=77
         )
+
+
+def _installations(start: int, count: int) -> list[dict]:
+    return [
+        {"id": i, "account": {"id": i, "login": f"a{i}", "type": "User"}}
+        for i in range(start, start + count)
+    ]
+
+
+@respx.mock
+async def test_list_app_installations_follows_pages():
+    route = respx.get("https://api.github.com/app/installations").mock(
+        side_effect=[
+            httpx.Response(200, json=_installations(0, 100)),
+            httpx.Response(200, json=_installations(100, 3)),
+        ]
+    )
+
+    installations = await list_app_installations()
+
+    assert [i.id for i in installations] == list(range(103))
+    assert [c.request.url.params["page"] for c in route.calls] == ["1", "2"]
+    assert route.calls.last.request.url.params["per_page"] == "100"
+    assert route.calls.last.request.headers["Authorization"].startswith("Bearer ")
+
+
+@respx.mock
+async def test_list_app_installations_raises_on_error():
+    respx.get("https://api.github.com/app/installations").mock(
+        return_value=httpx.Response(401, json={"message": "Bad credentials"})
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await list_app_installations()
+
+
+@respx.mock
+async def test_list_app_installations_raises_when_a_later_page_fails():
+    """A partial listing must never be returned as the whole."""
+    respx.get("https://api.github.com/app/installations").mock(
+        side_effect=[
+            httpx.Response(200, json=_installations(0, 100)),
+            httpx.Response(404, json={"message": "Not Found"}),
+        ]
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await list_app_installations()
+
+
+_INSTALLATION_URL = "https://api.github.com/app/installations/7"
+
+
+@respx.mock
+async def test_get_app_installation_returns_it():
+    respx.get(_INSTALLATION_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 7,
+                "account": {"id": 70, "login": "octo", "type": "User"},
+                "suspended_at": "2026-10-30T10:00:00Z",
+            },
+        )
+    )
+
+    installation = await get_app_installation(7)
+
+    assert installation.id == 7
+    assert installation.suspended_at is not None
+
+
+@respx.mock
+async def test_get_app_installation_returns_none_when_gone():
+    respx.get(_INSTALLATION_URL).mock(
+        return_value=httpx.Response(404, json={"message": "Not Found"})
+    )
+
+    assert await get_app_installation(7) is None
+
+
+@respx.mock
+async def test_get_app_installation_propagates_other_errors():
+    respx.get(_INSTALLATION_URL).mock(
+        return_value=httpx.Response(403, json={"message": "Forbidden"})
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await get_app_installation(7)

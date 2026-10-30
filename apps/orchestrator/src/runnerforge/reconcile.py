@@ -19,6 +19,7 @@ from typing import Any
 
 import httpx
 
+from runnerforge.admission import registry_backfill_due, sync_registry
 from runnerforge.compute_client import list_runnerforge_vms, preemption_status
 from runnerforge.github_client import JobNotFound, get_installation_token, get_job
 from runnerforge.job_store import (
@@ -75,6 +76,8 @@ async def run_reconcile(now: datetime | None = None) -> ReconcileResult:
         )
     now = now or datetime.now(UTC)
     counts: Counter[str] = Counter()
+    # ADR-019: keep the tenant registry in step with GitHub, once an hour.
+    registry_changes = await sync_registry() if registry_backfill_due(now) else 0
     errors: list[str] = []
 
     # One extra record tells us whether more were due than a batch holds.
@@ -125,6 +128,7 @@ async def run_reconcile(now: datetime | None = None) -> ReconcileResult:
         backfilled=counts["backfilled"],
         more_due=more_due,
         errors=errors,
+        registry_changes=registry_changes,
     )
 
 
