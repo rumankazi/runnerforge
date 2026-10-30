@@ -6,8 +6,10 @@ import respx
 from pydantic import ValidationError
 
 from runnerforge.github_client import (
+    JobNotFound,
     RepoNotFound,
     get_installation_token,
+    get_job,
     get_registration_token,
     get_runner,
 )
@@ -436,4 +438,59 @@ async def test_get_runner_propagates_5xx():
             installation_token="ghs_test",
             repo_full_name="RumanKazi/Foo.js",
             runner_name="runnerforge-1-2-1",
+        )
+
+
+_JOB_URL = "https://api.github.com/repos/RumanKazi/Foo.js/actions/jobs/77"
+
+
+@respx.mock
+async def test_get_job_returns_status_conclusion_and_runner():
+    route = respx.get(_JOB_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": 77,
+                "status": "completed",
+                "conclusion": "success",
+                "runner_name": "runnerforge-1-2-1",
+                "run_id": 1,
+            },
+        )
+    )
+
+    job = await get_job(
+        installation_token="ghs_test", repo_full_name="RumanKazi/Foo.js", job_id=77
+    )
+
+    assert (job.id, job.status, job.conclusion, job.runner_name) == (
+        77,
+        "completed",
+        "success",
+        "runnerforge-1-2-1",
+    )
+    assert route.calls.last.request.headers["Authorization"] == "Bearer ghs_test"
+
+
+@respx.mock
+async def test_get_job_raises_job_not_found_on_404():
+    respx.get(_JOB_URL).mock(
+        return_value=httpx.Response(404, json={"message": "Not Found"})
+    )
+
+    with pytest.raises(JobNotFound):
+        await get_job(
+            installation_token="ghs_test", repo_full_name="RumanKazi/Foo.js", job_id=77
+        )
+
+
+@respx.mock
+async def test_get_job_propagates_other_errors():
+    respx.get(_JOB_URL).mock(
+        return_value=httpx.Response(403, json={"message": "Forbidden"})
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await get_job(
+            installation_token="ghs_test", repo_full_name="RumanKazi/Foo.js", job_id=77
         )

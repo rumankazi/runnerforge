@@ -452,3 +452,120 @@ async def test_record_fact_without_reopen_merges_when_created_concurrently():
     (data,), kwargs = doc.set.await_args
     assert kwargs == {"merge": True, "retry": job_store._RETRY}
     assert "open" not in data
+
+
+# --- reconciler reads and patch ---
+
+
+class _AsyncSnapshots:
+    def __init__(self, snaps):
+        self._snaps = iter(snaps)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._snaps)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+
+def _snap(doc_id: str, data: dict | None) -> MagicMock:
+    snap = MagicMock()
+    snap.id = doc_id
+    snap.to_dict.return_value = data
+    return snap
+
+
+async def test_noop_store_reads_nothing():
+    store = NoopJobStore()
+
+    assert store.enabled is False
+    assert await store.list_due(datetime.now(UTC), 10) == []
+    assert await store.list_open(10) == []
+    assert await store.patch(KEY, {"open": False}) is None
+
+
+async def test_list_due_queries_open_records_due_earliest_first():
+    now = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
+    client = MagicMock()
+    query = client.collection.return_value.where.return_value.where.return_value
+    final = query.order_by.return_value.limit.return_value
+    final.stream = MagicMock(
+        return_value=_AsyncSnapshots([_snap("a", {"open": True}), _snap("b", None)])
+    )
+
+    store = FirestoreJobStore(client)
+    records = await store.list_due(now, 5)
+
+    assert store.enabled is True
+    assert records == [("a", {"open": True}), ("b", {})]
+    client.collection.assert_called_once_with("jobs")
+    first = client.collection.return_value.where.call_args.kwargs["filter"]
+    second = query.order_by.call_args
+    assert (first.field_path, first.op_string, first.value) == ("open", "==", True)
+    due_filter = client.collection.return_value.where.return_value.where.call_args
+    assert due_filter.kwargs["filter"].field_path == "next_check_at"
+    assert due_filter.kwargs["filter"].op_string == "<="
+    assert due_filter.kwargs["filter"].value == now
+    assert second.args == ("next_check_at",)
+    query.order_by.return_value.limit.assert_called_once_with(5)
+    final.stream.assert_called_once_with(retry=job_store._RETRY)
+
+
+async def test_list_open_queries_open_records():
+    client = MagicMock()
+    limited = client.collection.return_value.where.return_value.limit.return_value
+    limited.stream = MagicMock(return_value=_AsyncSnapshots([_snap("a", {"x": 1})]))
+
+    records = await FirestoreJobStore(client).list_open(500)
+
+    assert records == [("a", {"x": 1})]
+    client.collection.return_value.where.return_value.limit.assert_called_once_with(500)
+
+
+async def test_query_failure_fails_open(caplog):
+    client = MagicMock()
+    limited = client.collection.return_value.where.return_value.limit.return_value
+    limited.stream = MagicMock(side_effect=ServiceUnavailable("down"))
+
+    with caplog.at_level(logging.WARNING):
+        records = await FirestoreJobStore(client).list_open(500)
+
+    assert records == []
+    # A read: kept out of the write-failure alert.
+    assert _failure_records(caplog) == []
+    [record] = [r for r in caplog.records if r.message == "Job store read failed"]
+    assert getattr(record, "operation", None) == "list_open"
+    assert getattr(record, "error_class", None) == "ServiceUnavailable"
+
+
+async def test_patch_updates_existing_record():
+    doc = MagicMock()
+    doc.update = AsyncMock()
+
+    await FirestoreJobStore(_client_with_doc(doc)).patch(KEY, {"open": False})
+
+    doc.update.assert_awaited_once_with({"open": False}, retry=job_store._RETRY)
+
+
+async def test_patch_ignores_missing_record(caplog):
+    doc = MagicMock()
+    doc.update = AsyncMock(side_effect=NotFound("gone"))
+
+    with caplog.at_level(logging.WARNING):
+        await FirestoreJobStore(_client_with_doc(doc)).patch(KEY, {"open": False})
+
+    assert _failure_records(caplog) == []
+
+
+async def test_patch_fails_open(caplog):
+    doc = MagicMock()
+    doc.update = AsyncMock(side_effect=ServiceUnavailable("down"))
+
+    with caplog.at_level(logging.WARNING):
+        await FirestoreJobStore(_client_with_doc(doc)).patch(KEY, {"open": False})
+
+    [record] = _failure_records(caplog)
+    assert getattr(record, "operation", None) == "patch"

@@ -22,6 +22,7 @@ from tenacity import (
 
 from runnerforge.config import GITHUB_APP_ID, PRIVATE_KEY
 from runnerforge.models import (
+    GitHubJob,
     InstallationTokenResponse,
     RegistrationTokenResponse,
     Runner,
@@ -197,3 +198,39 @@ async def get_runner(
         if runner is not None:
             span.set_attribute("busy", runner.busy)
         return runner
+
+
+class JobNotFound(Exception):
+    """GitHub returned 404 for the job: the job, its repo, or the repo's
+    visibility to the installation is gone."""
+
+
+async def get_job(
+    installation_token: str, repo_full_name: str, job_id: int
+) -> GitHubJob:
+    """The job's current status, conclusion and runner, for the reconciler.
+    Raises JobNotFound on 404; other errors propagate."""
+    assert _http_client is not None
+    with tracer.start_as_current_span("github.get_job") as span:
+        span.set_attribute("repo", repo_full_name)
+        span.set_attribute("job_id", job_id)
+        url = f"https://api.github.com/repos/{repo_full_name}/actions/jobs/{job_id}"
+        headers = {
+            "Authorization": f"Bearer {installation_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        try:
+            r = await _get_with_retry(client=_http_client, url=url, headers=headers)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise JobNotFound(f"{repo_full_name}#{job_id}") from e
+            raise
+        job = parse_github_response(
+            GitHubJob,
+            data=r.json(),
+            cause_hint="Github returned an unexpected response while reading a job.",
+            logger=logger,
+        )
+        span.set_attribute("status", job.status)
+        return job

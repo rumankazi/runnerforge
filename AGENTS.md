@@ -43,6 +43,7 @@ apps/orchestrator/src/runnerforge/  FastAPI app
   main.py            routes (webhook, health, sweep)    handlers.py      workflow_job handling
   github_client.py   GitHub App JWT + API              compute_client.py GCE VM create/delete
   security.py        webhook HMAC + scheduler OIDC      sweep.py         stale-VM cleanup
+  reconcile.py       job-record reconciler (/reconcile, every 5 min; ADR-018)
   config.py          env-driven settings                machine_policy.py label → machine type
   job_store.py       per-job record store (ADR-018; Firestore or no-op, fail-open)
   validation.py / models.py / logger.py / tracing.py (OpenTelemetry)

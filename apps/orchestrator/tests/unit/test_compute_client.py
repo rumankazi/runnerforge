@@ -1323,3 +1323,31 @@ def test_cross_check_preemption_records_mid_job_preemption(
         assert fact["reopen"] is False
     else:
         assert fake_job_store.facts == []
+
+
+def test_list_runnerforge_vms_reads_runner_labels(monkeypatch):
+    """The reconciler needs the job's runs-on labels to backfill a record and
+    to tell whether a VM could take another job."""
+    vm = MagicMock()
+    vm.name = "runnerforge-3-2-1"
+    vm.creation_timestamp = "2026-10-30T12:00:00Z"
+    vm.labels = {
+        "runner": "runnerforge",
+        "job_id": "2",
+        "run_id": "3",
+        "run_attempt": "1",
+        "installation_id": "7",
+    }
+    vm.metadata = compute_v1.Metadata(
+        items=[
+            compute_v1.Items(key="repo-url", value="https://github.com/octo/repo"),
+            compute_v1.Items(key="runner-labels", value="runnerforge,small,spot"),
+        ]
+    )
+    client = MagicMock()
+    client.list.return_value = [vm]
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", client)
+
+    [info] = asyncio.run(list_runnerforge_vms())
+
+    assert info.runner_labels == ["runnerforge", "small", "spot"]

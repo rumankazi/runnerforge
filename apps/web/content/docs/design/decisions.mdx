@@ -34,6 +34,10 @@ The code is the source of truth. If an ADR here disagrees with `apps/orchestrato
 
 ## Cloud Run over GKE for the orchestrator
 
+<Callout type="info" title="Revisions">
+  **2026-10-30**: [ADR-018](#per-job-state-in-firestore-behind-a-jobstore-protocol) adds a second Scheduler-driven endpoint, `/reconcile`, called every 5 minutes. Like `/sweep`, it runs inside a request.
+</Callout>
+
 ### Context
 
 The orchestrator needs to receive HTTP webhooks, process them, and call external APIs (GitHub, GCE). Traffic is bursty and unpredictable: long idle periods followed by bursts when developers push code.
@@ -625,6 +629,15 @@ RunnerForge started as a single-owner tool. Opening it up raises a set of questi
   **2026-10-30**: accepted with R1 (Terraform). `roles/editor` lacks `datastore.databases.create`, so the apply SA got a custom `firestoreDatabaseCreator` role, created out-of-band and adopted by `terraform_ci.tf`. R2 and R3 are not built yet.
 
   **2026-10-30** (R2): `errored` is recorded in `handle_queued` around each failing call, so its stage is exact, instead of by an `except` in `main.py`. Facts that can land after `completed` (the VM watcher's `vm`, the cross-check's `preempted`) no longer reopen the record. A `queued` that finds a closed record logs the new outcome `already_completed` and writes no decision. The timeout is a fixed 2 s hard bound rather than one tuned from measurements, and a `queued` request whose create fails skips its other writes. A background fact that finds no record creates it with `open: true`. The `Job store write failed` metric and alert are not built yet. R3 is not built yet.
+
+  **2026-10-30** (R3): the reconciler is built (`reconcile.py`). Its Scheduler job `runnerforge-reconcile` and a `Reconcile completed` metric follow in a Terraform change; until then nothing calls `/reconcile`. It differs from the steps above:
+  - The preemption audit query runs per stuck candidate, not as one batched query (at most one per due record, against the 60-a-minute quota). If the query fails, nothing is recorded and the job is checked again: a verdict is permanent. It looks at the job's own VM only, so after a cross-assignment `vm: missing` also covers "the VM that would have taken it was preempted".
+  - A job's own VM counts as able to take it only if it isn't running another job (`in_progress.runner_name` of an open record). Another VM counts only if its runner labels cover the job's (GitHub's `self-hosted`/`linux`/`x64` included; unknown labels count).
+  - Mid-job preemptions stay with `cross_check_preemption`.
+  - A token failure closes records as `gone` only on a 404 (installation removed); other failures are errors, and the record is retried.
+  - Each run has a 120 s budget and each record 30 s; a run that runs out reports `more_due`. Records gain a `checks` counter for the backoff.
+  - Reconciler queries get a 10 s bound (a scheduled request, not a webhook), and their failures log `Job store read failed`, which the write alert doesn't count. Its writes (`patch`, `record_fact:completed`, `record_fact:in_progress`) are counted.
+  - The protocol gained `list_due`, `list_open` and `patch`; `get`, `list_by_installation` and `count_open` come with the dashboard.
 </Callout>
 
 ### Context

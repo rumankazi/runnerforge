@@ -12,7 +12,7 @@ deleting one VM.
 ```text
 GitHub ──workflow_job──▶ Cloud Run: orchestrator ──insert/delete──▶ GCE runner VMs (europe-west4-a)
    ▲                         │  ▲                                        │
-   │   registration token ◀──┘  └── POST /sweep (Cloud Scheduler, daily) │
+   │   registration token ◀──┘  └── POST /sweep (daily), /reconcile (5 min) │
    └──────────────── runner registers itself, runs one job ◀── Cloud NAT ┘
 ```
 
@@ -29,7 +29,7 @@ a token without them fails validation):
 
 | Permission | Used for |
 | --- | --- |
-| Actions: read | `workflow_job` webhooks |
+| Actions: read | `workflow_job` webhooks; `GET /repos/{repo}/actions/jobs/{id}` in the reconciler |
 | Administration: read & write | `POST /repos/{repo}/actions/runners/registration-token`; `GET /repos/{repo}/actions/runners?name=` in the sweep |
 | Metadata: read | Required by GitHub for repository access; not called directly |
 
@@ -44,10 +44,11 @@ A FastAPI service, `runnerforge-orchestrator`, in `europe-west4` (`infra/terrafo
 - **Routes:**
   - `POST /webhook` checks the HMAC signature. See [Webhook flow](/docs/design/webhook-flow).
   - `POST /sweep` accepts only a Cloud Scheduler OIDC token for the expected service account and audience.
+  - `POST /reconcile` accepts the same token as `/sweep`. See [Webhook flow → Reconciler](/docs/design/webhook-flow#reconciler).
   - `GET /health` is a liveness probe.
 - **Modules:** `handlers.py` (per-action logic), `machine_policy.py` (labels → machine type),
   `github_client.py` (App JWT → installation token → registration token), `compute_client.py` (GCE),
-  `sweep.py`, `security.py`.
+  `sweep.py`, `reconcile.py` (job records, ADR-018), `job_store.py`, `security.py`.
 - **Deploys:** on each orchestrator release, `deploy-orchestrator.yaml` builds the image and signs it with
   Cosign. It starts a new revision on 5% traffic, then ramps to 100% after approval.
 
@@ -127,7 +128,7 @@ Terraform covers Cloud Run, Cloud Scheduler, NAT, IAM, Workload Identity Federat
 | | `logging.logWriter`, `logging.viewer`, `cloudtrace.agent` | Write logs and traces; read audit logs for the preemption check |
 | | `datastore.user`, conditioned on the `runnerforge` Firestore database | Read and write job records (ADR-018) |
 | `runnerforge-runner-vm` | `logging.logWriter` | Ship VM logs. Nothing else. |
-| `runnerforge-scheduler` | none (signs OIDC tokens) | Identity that `/sweep` accepts |
+| `runnerforge-scheduler` | none (signs OIDC tokens) | Identity that `/sweep` and `/reconcile` accept |
 
 These are the runtime identities (`iam.tf`, `runner_vm.tf`, `scheduler.tf`, `firestore.tf`). CI authenticates through
 Workload Identity Federation with its own service accounts (`wif.tf`, `runner_image.tf`, `terraform_ci.tf`).
