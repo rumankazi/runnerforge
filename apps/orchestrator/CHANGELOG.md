@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.20.0...orchestrator-v0.21.0) (2026-10-30)
+
+
+### Features
+
+* **orchestrator:** write per-job records at every lifecycle point ([#328](https://github.com/rumankazi/runnerforge/issues/328)) ([4669b28](https://github.com/rumankazi/runnerforge/commit/4669b28e5874fb1a8891b4a2d0e54fd1532ec093))
+
 ## [0.20.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.19.0...orchestrator-v0.20.0) (2026-10-30)
 
 
