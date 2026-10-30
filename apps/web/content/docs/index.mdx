@@ -76,8 +76,8 @@ that asks for `runnerforge`, and deletes it when the job completes. Terraform ow
 ## Constraints
 
 - Provisioning is on-demand only, with no warm pool. See ADR-005 in [Decisions](/docs/design/decisions).
-- No always-on compute: Cloud Run scales to zero (`min_instance_count = 0`) and VMs are created only for
-  queued jobs. See [Cost when idle](/docs/design/architecture#cost-when-idle).
+- No always-on compute: Cloud Run has `min_instance_count = 0` and bills only time spent on requests, and VMs
+  are created only for queued jobs. See [Cost when idle](/docs/design/architecture#cost-when-idle).
 - VM state lives on the VM itself, in labels and metadata (ADR-004). Each job's history is a record in
   Firestore, written fail-open so a store problem never blocks a job (ADR-018).
 - The runner image ships through its own automated pipeline (`deploy-runner-image.yaml`): build, smoke
