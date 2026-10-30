@@ -38,7 +38,7 @@ In production, Terraform sets it from `var.allowed_installation_ids` (`variables
 
 ## Request paths: `/sweep` and `/reconcile`
 
-`/sweep` is called by the Cloud Scheduler job `runnerforge-sweep` daily at 00:12 UTC (`scheduler.tf`), and `/reconcile` every 5 minutes by `runnerforge-reconcile` once that Scheduler job is added (ADR-018 R3). Both use the same identity and checks. Each job sends a Google-signed OIDC token as the `runnerforge-scheduler` service account, with the Cloud Run URL as audience. `verify_oidc_token` (`security.py`) requires all of the following, and returns 401 otherwise:
+`/sweep` is called by the Cloud Scheduler job `runnerforge-sweep` daily at 00:12 UTC (`scheduler.tf`), and `/reconcile` every 5 minutes by `runnerforge-reconcile` (ADR-018). Both use the same identity and checks. Each job sends a Google-signed OIDC token as the `runnerforge-scheduler` service account, with the Cloud Run URL as audience. `verify_oidc_token` (`security.py`) requires all of the following, and returns 401 otherwise:
 
 - a `Bearer` prefix
 - a valid Google signature, issuer and expiry, and an audience equal to `EXPECTED_AUDIENCE`

@@ -448,6 +448,60 @@ resource "google_logging_metric" "sweep_error_count" {
   }
 }
 
+# Per-run count of job records the reconciler newly marked stuck (vm missing,
+# or preempted before pickup). Each run is one point, so the point count is
+# also the run count. Sustained non-zero values mean jobs are being stranded
+# (Spot preemptions before pickup, lost VMs).
+resource "google_logging_metric" "reconcile_stuck_count" {
+  name   = "reconcile_stuck_count"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Reconcile completed"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "DISTRIBUTION"
+    unit        = "1"
+  }
+
+  value_extractor = "EXTRACT(jsonPayload.stuck)"
+
+  bucket_options {
+    exponential_buckets {
+      num_finite_buckets = 12
+      growth_factor      = 2.0
+      scale              = 1.0
+    }
+  }
+}
+
+# Per-run count of records the reconciler failed on (each is retried later).
+# Sustained non-zero values mean GitHub or GCE calls are failing for it.
+resource "google_logging_metric" "reconcile_error_count" {
+  name   = "reconcile_error_count"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Reconcile completed"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "DISTRIBUTION"
+    unit        = "1"
+  }
+
+  value_extractor = "EXTRACT(jsonPayload.error_count)"
+
+  bucket_options {
+    exponential_buckets {
+      num_finite_buckets = 12
+      growth_factor      = 2.0
+      scale              = 1.0
+    }
+  }
+}
+
 # ---------------------------------------------------------------------------
 # Lost-webhook detection — "queued events accepted vs. queued events that
 # reached a decision". webhook_event_count counts every RunnerForge webhook
@@ -596,9 +650,12 @@ resource "google_logging_metric" "vm_preemption_count" {
   }
 }
 
-# Job store writes (ADR-018) that failed on the webhook path. Writes fail open,
-# so a failure never blocks a job; a sustained run of them means job records
-# are going missing. Background-task writes (the VM watcher's `vm`, the
+# Job store writes (ADR-018) that failed: webhook writes, plus the
+# reconciler's patch and completed/in_progress facts (its reads log "Job store
+# read failed" and aren't counted). `vm` and `preempted` facts are excluded
+# below from every caller, the reconciler's retried verdicts included. Writes
+# fail open, so a failure never blocks a job; a sustained run of them means
+# job records are going missing. Background-task writes (the VM watcher's `vm`, the
 # cross-check's `preempted`) are excluded on purpose: they run after the
 # response with CPU throttled (cpu_idle), so their 2 s timeout can fire late
 # even when the write landed (seen 2026-10-30), and they'd make this noisy.
@@ -663,6 +720,8 @@ resource "time_sleep" "wait_for_log_metrics" {
       google_logging_metric.vm_preemption_count.name,
       google_logging_metric.queued_outcome_count.name,
       google_logging_metric.job_store_write_failure_count.name,
+      google_logging_metric.reconcile_stuck_count.name,
+      google_logging_metric.reconcile_error_count.name,
     ])
   }
 

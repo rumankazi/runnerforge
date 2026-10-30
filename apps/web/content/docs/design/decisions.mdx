@@ -223,7 +223,7 @@ Structured JSON logs only (`logger.py`). Every metric is a log-based metric. All
 | `Webhook event received` | `webhook_event_count` |
 | `Sweep completed` | `sweep_checked_count`, `sweep_deleted_count`, `sweep_error_count` |
 
-The full surface (19 log-based metrics, 2 SLOs, 9 alert policies, the dashboard) is Terraform-managed in `infra/terraform/observability_*.tf`.
+The full surface (21 log-based metrics, 2 SLOs, 9 alert policies, the dashboard) is Terraform-managed in `infra/terraform/observability_*.tf`.
 
 ### Consequences
 
@@ -276,6 +276,10 @@ CI workflows need to act on GCP: push images to Artifact Registry, deploy Cloud 
 <Record type="adr" id="008" status="accepted" />
 
 ## Scale-to-zero orchestrator with skip-fast on non-runnerforge webhooks
+
+<Callout type="info" title="Revisions">
+  **2026-10-30**: the reconciler ([ADR-018](#per-job-state-in-firestore-behind-a-jobstore-protocol)) is called every 5 minutes, so one instance usually stays warm instead of scaling to zero. `min_instance_count` stays 0 and idle instances aren't billed under request-based billing; webhooks now see fewer cold starts.
+</Callout>
 
 ### Context
 
@@ -630,7 +634,7 @@ RunnerForge started as a single-owner tool. Opening it up raises a set of questi
 
   **2026-10-30** (R2): `errored` is recorded in `handle_queued` around each failing call, so its stage is exact, instead of by an `except` in `main.py`. Facts that can land after `completed` (the VM watcher's `vm`, the cross-check's `preempted`) no longer reopen the record. A `queued` that finds a closed record logs the new outcome `already_completed` and writes no decision. The timeout is a fixed 2 s hard bound rather than one tuned from measurements, and a `queued` request whose create fails skips its other writes. A background fact that finds no record creates it with `open: true`. The `Job store write failed` metric and alert are not built yet. R3 is not built yet.
 
-  **2026-10-30** (R3): the reconciler is built (`reconcile.py`). Its Scheduler job `runnerforge-reconcile` and a `Reconcile completed` metric follow in a Terraform change; until then nothing calls `/reconcile`. It differs from the steps above:
+  **2026-10-30** (R3): the reconciler is built (`reconcile.py`). Its Scheduler job `runnerforge-reconcile` runs every 5 minutes with a 180 s attempt deadline and no retry, so runs don't overlap (`scheduler.tf`); `reconcile_stuck_count` and `reconcile_error_count` chart its runs. It differs from the steps above:
   - The preemption audit query runs per stuck candidate, not as one batched query (at most one per due record, against the 60-a-minute quota). If the query fails, nothing is recorded and the job is checked again: a verdict is permanent. It looks at the job's own VM only, so after a cross-assignment `vm: missing` also covers "the VM that would have taken it was preempted".
   - A job's own VM counts as able to take it only if it isn't running another job (`in_progress.runner_name` of an open record). Another VM counts only if its runner labels cover the job's (GitHub's `self-hosted`/`linux`/`x64` included; unknown labels count).
   - Mid-job preemptions stay with `cross_check_preemption`.

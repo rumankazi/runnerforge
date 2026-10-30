@@ -278,7 +278,7 @@ resource "google_monitoring_alert_policy" "policy_reject_storm" {
   depends_on            = [time_sleep.wait_for_log_metrics]
 }
 
-# Job store writes failing on the webhook path. Writes fail open, so jobs keep
+# Job store writes failing (webhooks and reconciler). Writes fail open, so jobs keep
 # running; what's lost is their records (the dashboard and the reconciler
 # depend on them). An outage fails every webhook-path write, and jobs arrive
 # in bursts (3+ per push for test-jobs alone), so an outage passes 3 in 15
@@ -290,7 +290,7 @@ resource "google_monitoring_alert_policy" "job_store_write_failures" {
   severity     = "WARNING"
 
   conditions {
-    display_name = "Webhook-path job store write failures"
+    display_name = "Job store write failures (webhooks and reconciler)"
     condition_threshold {
       filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.job_store_write_failure_count.name}\" resource.type=\"cloud_run_revision\""
       comparison      = "COMPARISON_GT"

@@ -143,10 +143,12 @@ Workload Identity Federation with its own service accounts (`wif.tf`, `runner_im
 
 ## Cost when idle
 
-With no jobs, Cloud Run sits at zero instances and no runner VM is running. What remains is mostly
-storage (runner images, container images, logs, secrets, Terraform state) plus any fixed charges of the
-supporting services, such as Cloud NAT. Cloud Run over GKE was chosen for this (ADR-001 in
-[Decisions](/docs/design/decisions)).
+With no jobs, no runner VM is running and no CPU is billed. Cloud Scheduler calls `/reconcile` every 5
+minutes, so one Cloud Run instance usually stays warm, but with request-based billing and
+`min_instance_count = 0` only the time spent handling requests is billed (an empty run takes about a second,
+well inside Cloud Run's free tier). What remains is mostly storage (runner images, container images, logs,
+secrets, Terraform state, job records) plus any fixed charges of the supporting services, such as Cloud NAT.
+Cloud Run over GKE was chosen for this (ADR-001 in [Decisions](/docs/design/decisions)).
 
 ## Where this is going
 

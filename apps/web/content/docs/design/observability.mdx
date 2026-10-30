@@ -77,7 +77,7 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Sweep decision` | INFO / WARNING | `sweep.py` | `decision`, `reason`, `vm_name`, `age_minutes` | |
 | `Sweep failed for VM` | ERROR | `sweep.py` | `vm_name`, `error` | |
 | `Sweep completed` | INFO | `main.py` | `checked`, `deleted`, `skipped`, `error_count` | `sweep_*` |
-| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `more_due`, `error_count` | |
+| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `more_due`, `error_count` | `reconcile_stuck_count`, `reconcile_error_count` |
 | `Reconcile failed for record` | ERROR | `reconcile.py` | `job_key`, `error` | |
 | `Reconcile skipped record without identity` | WARNING | `reconcile.py` | `job_key` | |
 
@@ -134,7 +134,7 @@ If the VM is missing or its labels are malformed, `webhook.handle_in_progress` s
 
 ## Log-based metrics
 
-All 19 are in `observability_metrics.tf`. All but one scope to `resource.type="cloud_run_revision"` and
+All 21 are in `observability_metrics.tf`. All but one scope to `resource.type="cloud_run_revision"` and
 `service_name="runnerforge-orchestrator"`.
 
 | Metric | Kind | Source | Labels |
@@ -152,6 +152,7 @@ All 19 are in `observability_metrics.tf`. All but one scope to `resource.type="c
 | `time_to_runner_seconds` | distribution (s) | `Time for runner to be picked up by github` | `machine_type`, `image_version` |
 | `runner_vm_count` | distribution | `VM list scan` | |
 | `sweep_checked_count`, `sweep_deleted_count`, `sweep_error_count` | distribution | `Sweep completed` | |
+| `reconcile_stuck_count`, `reconcile_error_count` | distribution | `Reconcile completed` (`stuck`, `error_count`); one point per run, so the point count is the run count | |
 | `machine_policy_reject_count` | counter | `Machine policy rejected` | `reason` |
 | `job_preempted_count` | counter | `Job ended due to spot preemption` | `conclusion` |
 | `vm_preemption_count` | counter | GCE audit log `compute.instances.preempted` on `instances/runnerforge-*` | `zone` |
@@ -209,7 +210,7 @@ others, use the runbook column.
 | VM creation failure ratio > 5% (5m) | `failure` + `timeout` outcomes over all outcomes > 0.05, 5-minute alignment, held 5 min | ERROR | [VM creation failures](/docs/guides/runbooks/vm-creation-failures) |
 | Lost-webhook ratio &lt; 0.9 (5m) | `queued_outcome_count` over queued `webhook_event_count` below 0.9, 5-minute alignment, held 5 min. Inactive when there's no data. Label-policy rejections and duplicates are outcomes, so they don't lower it. | ERROR | [Lost webhooks](/docs/guides/runbooks/lost-webhooks) |
 | Every queued job rejected by label policy (1h) | PromQL: ≥ 3 `machine_policy_reject_count` in 1 h `unless` any `vm_creation_count` in that hour. Evaluated every 60 s. | WARNING | [Policy rejection storm](/docs/guides/runbooks/policy-rejections) |
-| Job store write failures >= 3 (15m) | More than 2 `job_store_write_failure_count` in a 15-minute window. Background-task writes are excluded from the metric. | WARNING | [Job store write failures](/docs/guides/runbooks/job-store-writes) |
+| Job store write failures >= 3 (15m) | More than 2 `job_store_write_failure_count` in a 15-minute window: webhook writes, plus the reconciler's `patch` and `completed`/`in_progress` facts. `record_fact:vm` and `record_fact:preempted` are excluded from every caller (the reconciler's stuck verdicts included; it retries those), and so are reconciler reads. | WARNING | [Job store write failures](/docs/guides/runbooks/job-store-writes) |
 | Webhook rejections > 5/min (10m) | More than 50 `webhook_rejection_count` in a 10-minute window, held 10 min | WARNING | [Webhook rejections](/docs/guides/runbooks/webhook-rejections) |
 | Cold-start latency p95 > 30s (5m) | Cloud Run `container/startup_latencies` p95 > 30 000 ms, 5-minute alignment, held 5 min. Inactive when there's no data. | WARNING | [Cold-start latency](/docs/guides/runbooks/cold-start-latency) |
 | Cloud Run instance count > 40 (80% of max=50) | Cloud Run `container/instance_count` max > 40, 1-minute alignment, held 10 min | WARNING | [Instance saturation](/docs/guides/runbooks/instance-saturation) |
