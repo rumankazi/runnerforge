@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 from fastapi.testclient import TestClient
 from httpx import AsyncClient, Timeout
 
-from runnerforge import compute_client, github_client
+from runnerforge import compute_client, github_client, job_store
 from runnerforge.main import app
 
 
@@ -64,6 +64,8 @@ def test_lifespan_initializes_and_closes_clients(monkeypatch):
     init_cache = MagicMock()
     init_logging = MagicMock()
     close_compute = MagicMock()
+    init_store = AsyncMock()
+    close_store = AsyncMock()
 
     monkeypatch.setattr(github_client, "init_http_client", init_http)
     monkeypatch.setattr(github_client, "close_http_client", close_http)
@@ -72,6 +74,8 @@ def test_lifespan_initializes_and_closes_clients(monkeypatch):
     monkeypatch.setattr(compute_client, "init_machine_types_cache", init_cache)
     monkeypatch.setattr(compute_client, "init_logging_client", init_logging)
     monkeypatch.setattr(compute_client, "close_compute_client", close_compute)
+    monkeypatch.setattr(job_store, "init_job_store", init_store)
+    monkeypatch.setattr(job_store, "close_job_store", close_store)
 
     with TestClient(app):
         init_http.assert_awaited_once()
@@ -79,9 +83,11 @@ def test_lifespan_initializes_and_closes_clients(monkeypatch):
         init_image.assert_called_once()
         init_cache.assert_called_once()
         init_logging.assert_called_once()
+        init_store.assert_awaited_once()
     # After exiting the context, shutdown has run
     close_http.assert_awaited_once()
     close_compute.assert_called_once()
+    close_store.assert_awaited_once()
 
 
 def test_close_compute_client_closes_both_transports(monkeypatch):
