@@ -76,6 +76,22 @@ resource "google_firestore_index" "jobs_due_for_check" {
   depends_on = [google_firestore_index.jobs_by_installation]
 }
 
+# Tenant registry (ADR-019): a row of an uninstalled installation gets
+# expire_at = +30 days; other rows have none, so they never expire. Same
+# shape as jobs.expire_at, and chained after the job indexes for the same
+# 409 reason.
+resource "google_firestore_field" "installations_expire_at" {
+  project    = data.google_project.current.project_id
+  database   = google_firestore_database.runnerforge.name
+  collection = "installations"
+  field      = "expire_at"
+
+  ttl_config {}
+  index_config {}
+
+  depends_on = [google_firestore_index.jobs_due_for_check]
+}
+
 # Read/write on documents in this database only. Firestore has no
 # database-level IAM resource, so this is a conditional project binding, in the
 # form Firestore's per-database access docs give. Project-level calls (listing
