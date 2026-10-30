@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.10.0](https://github.com/rumankazi/runnerforge/compare/web-v1.9.0...web-v1.10.0) (2026-10-30)
+
+
+### Features
+
+* **infra:** Firestore job store for ADR-018 (R1) ([#324](https://github.com/rumankazi/runnerforge/issues/324)) ([5152243](https://github.com/rumankazi/runnerforge/commit/515224370d39b75908a6c6d05683c541b351e944))
+* **web:** enable per-version preview URLs ([#318](https://github.com/rumankazi/runnerforge/issues/318)) ([8a771ea](https://github.com/rumankazi/runnerforge/commit/8a771eaf37b5dea91e888e572c39b74e4e7ffbb5))
+* **web:** static export for Cloudflare Workers static assets ([#315](https://github.com/rumankazi/runnerforge/issues/315)) ([5cb03c2](https://github.com/rumankazi/runnerforge/commit/5cb03c299f5d1bcba5dbf028aa948633330d8f34))
+
 ## [1.9.0](https://github.com/rumankazi/runnerforge/compare/web-v1.8.0...web-v1.9.0) (2026-10-28)
 
 
