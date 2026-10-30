@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.21.0...orchestrator-v0.22.0) (2026-10-30)
+
+
+### Features
+
+* **orchestrator:** reconcile job records with GitHub and GCE ([#333](https://github.com/rumankazi/runnerforge/issues/333)) ([69e2ee7](https://github.com/rumankazi/runnerforge/commit/69e2ee7cfac881cf542d04451759db2fce8d5b4c))
+
 ## [0.21.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.20.0...orchestrator-v0.21.0) (2026-10-30)
 
 
