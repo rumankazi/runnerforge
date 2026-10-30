@@ -12,9 +12,9 @@ The code is the source of truth. If an ADR here disagrees with `apps/orchestrato
 | [001](#cloud-run-over-gke-for-the-orchestrator) | Cloud Run over GKE for the orchestrator | accepted |
 | [002](#gce-vms-over-kubernetes-pods-for-runners) | GCE VMs over Kubernetes pods for runners | accepted |
 | [003](#python-fastapi-over-rust-or-go-for-the-orchestrator) | Python (FastAPI) for the orchestrator | accepted |
-| [004](#gce-vm-labels-over-a-database-for-state-tracking) | VM labels and metadata instead of a database | accepted, revised |
+| [004](#gce-vm-labels-over-a-database-for-state-tracking) | VM labels and metadata as the authority for VM state | accepted, revised |
 | [005](#on-demand-provisioning-over-warm-pools) | On-demand provisioning over warm pools | accepted |
-| [006](#structured-logging-over-firestore-for-initial-observability) | Structured logs and log-based metrics, no database | accepted, revised |
+| [006](#structured-logging-over-firestore-for-initial-observability) | Structured logs and log-based metrics for observability | accepted, revised |
 | [007](#workload-identity-federation-over-service-account-keys-for-ci-auth) | Workload Identity Federation for CI auth | accepted |
 | [008](#scale-to-zero-orchestrator-with-skip-fast-on-non-runnerforge-webhooks) | Scale-to-zero with skip-fast | accepted |
 | [009](#self-observed-vm-provisioning-with-nat-based-egress) | Self-observed VM provisioning | accepted, revised |
@@ -25,7 +25,8 @@ The code is the source of truth. If an ADR here disagrees with `apps/orchestrato
 | [014](#gce-enforced-runtime-cap-with-delete) | GCE-enforced runtime cap with DELETE | accepted |
 | [015](#installation-allow-list-as-a-stop-gap-admission-control) | Installation allow-list as stop-gap admission control | accepted |
 | [016](#multi-tenancy-scope-installation-as-tenant) | Multi-tenancy scope: installation = tenant | accepted |
-| [017](#docs-site-hosting-as-a-static-export) | Docs site hosting as a static export | proposed |
+| [017](#docs-site-static-export-on-cloudflare-workers) | Docs site: static export on Cloudflare Workers | accepted |
+| [018](#per-job-state-in-firestore-behind-a-jobstore-protocol) | Per-job state in Firestore behind a `JobStore` protocol | proposed |
 
 ---
 
@@ -114,8 +115,10 @@ Python with FastAPI. The value is in the orchestration design, not the implement
 
 ## GCE VM labels over a database for state tracking
 
-<Callout type="info" title="Revised 2026-10-27 (orchestrator 0.17.4 and 0.17.5)">
-  The original text said the `completed` path finds the VM by its `job_id` label and that VMs carry a `repo` label. Neither is true any more. The `completed` path deletes the VM named in the payload's `runner_name`, and only after an ownership check. The `repo` label was replaced by the numeric `repository_id`, and the sweep reads the exact `owner/repo` from the `repo-url` metadata key. The decision itself (no database) is unchanged.
+<Callout type="info" title="Revisions">
+  **2026-10-27** (orchestrator 0.17.4 and 0.17.5): the original text said the `completed` path finds the VM by its `job_id` label and that VMs carry a `repo` label. Neither is true any more. The `completed` path deletes the VM named in the payload's `runner_name`, and only after an ownership check. The `repo` label was replaced by the numeric `repository_id`, and the sweep reads the exact `owner/repo` from the `repo-url` metadata key.
+
+  **2026-10-28**: [ADR-018](#per-job-state-in-firestore-behind-a-jobstore-protocol) (proposed, not built) adds a per-job store for job history and status. This ADR still decides VM lifecycle: labels and metadata remain the authority for which VMs exist, who owns them, and what the delete paths and the sweep act on. Once ADR-018's database exists, the consequence "No database to provision, manage, or pay for" no longer holds; the orchestrator process itself stays stateless.
 </Callout>
 
 ### Context
@@ -188,8 +191,10 @@ On-demand only. Zero idle cost is a hard constraint, and boot latency fits withi
 
 ## Structured logging over Firestore for initial observability
 
-<Callout type="info" title="Revised 2026-10-27">
-  The original text promised Firestore "in Phase 4" for user-facing dashboards and listed log fields (`signature_validated_ms`, `token_fetched_ms`, `vm_created_ms`) that the orchestrator never emitted. Both are removed. Firestore is not planned. Tracing is covered separately in [ADR-012](#opentelemetry-traces-exported-to-cloud-trace).
+<Callout type="info" title="Revisions">
+  **2026-10-27**: the original text promised Firestore "in Phase 4" for user-facing dashboards and listed log fields (`signature_validated_ms`, `token_fetched_ms`, `vm_created_ms`) that the orchestrator never emitted. Both were removed. Tracing is covered separately in [ADR-012](#opentelemetry-traces-exported-to-cloud-trace).
+
+  **2026-10-28**: [ADR-018](#per-job-state-in-firestore-behind-a-jobstore-protocol) (proposed, not built) adds a Firestore job store for product reads (dashboard, tenant registry). This ADR still holds for observability: log lines and log-based metrics remain the source for metrics, SLOs and alerts. The consequence "no database write in the critical webhook path" no longer holds once ADR-018's writes ship: each write is bounded by a timeout and fails open.
 </Callout>
 
 ### Context
@@ -596,7 +601,7 @@ RunnerForge started as a single-owner tool. Opening it up raises a set of questi
 
 - `next.config.mjs` sets `output: 'export'`; every route is pre-rendered (`revalidate = false`, `generateStaticParams`).
 - Served by the assets-only Worker `runnerforge-web` (`apps/web/wrangler.jsonc`) on the custom domain **`runnerforge.com`**. Cloudflare manages the DNS record and certificate. `www` is a proxied placeholder record with a Redirect Rule to the apex. The production `workers.dev` URL is off.
-- **Deploys: Workers Builds** (Cloudflare's Git integration). A merge to `main` builds `apps/web` and runs `wrangler deploy`; other branches run `wrangler versions upload` and get a preview URL (`<version>-runnerforge-web.runnerforge.workers.dev`, `preview_urls: true`).
+- **Deploys: Workers Builds** (Cloudflare's Git integration). A merge to `main` builds `apps/web` and runs `wrangler deploy`; other branches run `wrangler preview` (Workers Previews) and get a per-branch preview URL (`<branch>-runnerforge-web.runnerforge.workers.dev`, posted on the PR). This needs `preview_urls: true` and the `previews` block in `wrangler.jsonc`.
 - **No Cloudflare API token in GitHub.** Cloudflare has no keyless OIDC login for wrangler in GitHub Actions, so a GitHub Actions deploy would need a long-lived token. Workers Builds pulls from GitHub instead; the repo is public, so its read access grants nothing new. This keeps the repo's rule of no long-lived deploy secrets (see ADR-007).
 
 ### Consequences
@@ -608,3 +613,140 @@ RunnerForge started as a single-owner tool. Opening it up raises a set of questi
 - Preview URLs are public; acceptable for public docs. Cloudflare Access can protect them later.
 - The `web` release-please component still produces versions and changelogs; deploys follow merges to `main`, not releases.
 
+
+---
+
+
+<Record type="adr" id="018" status="proposed" date="2026-10-28" />
+
+## Per-job state in Firestore behind a JobStore protocol
+
+### Context
+
+- What happened to a job exists only in log lines today: `Machine policy rejected`, `Queued webhook outcome`, `VM creation outcome`, `Job ended due to spot preemption`, and the rest. The dashboard needs each job's true status, with advice such as "fix `runs-on`" or "cancel and re-run". The tenant registry and its limits, and usage tracking, need per-installation reads (phases 4.2 and 4.4 on the [roadmap](/docs/development#phase-41-onward-planned)). Logs can't serve any of these: Cloud Logging's `entries.list` quota is 60 requests a minute per project, can't be raised, and the preemption cross-check already spends it.
+- GitHub delivers `workflow_job` webhooks out of order, never retries them, and gives the handler 10 seconds. A state machine that assumes `queued → in_progress → completed` breaks on the first reordered delivery.
+- Three facts happen outside any request:
+  - **VM creation outcome**: logged by a post-response background task ([ADR-009](#self-observed-vm-provisioning-with-nat-based-egress)). With `cpu_idle = true` that task is best-effort.
+  - **Mid-job preemption**: found by the `cross_check_preemption` background task after `completed`.
+  - **Preemption before pickup**: no webhook and no orchestrator log line. Only the GCE audit log `compute.instances.preempted` records it, and GCE deletes the VM, so the sweep never sees it either. This is what left a job queued for good on 2026-10-28.
+- GitHub gives a queued job to any idle runner whose labels match. The VM created for job A can run job B. The `completed` path already deletes the VM named in `runner_name` for this reason, so a VM's name says which job caused it, not which job it ran.
+- Cloud Run instances of the old and new revision serve traffic at the same time (5% canary, rollback), so the record format has to change by expand/contract.
+- The whole backend should be self-hostable later ([ADR-016](#multi-tenancy-scope-installation-as-tenant)).
+
+### Options considered
+
+Monthly costs are list prices for europe-west4, checked on 2026-10-28, at about 50k jobs a month.
+
+- **Firestore Standard, Native mode** (chosen): about $0–1, nothing billed when idle, an async Python client (`AsyncClient`), Terraform resources for the database, TTL and indexes, and schemaless documents, which suits expand/contract. Can't be self-hosted, and there's no emulator in our tests.
+- **Cloud SQL for PostgreSQL** (`db-f1-micro`): real SQL, and the same engine a self-hoster would run. About $10 a month even when idle, a shared-core tier with no SLA, a 25-connection default, and schema migrations across overlapping revisions.
+- **Spanner, AlloyDB**: minimums of $65+ a month, and neither scales to zero.
+- **Neon, Supabase**: Neon scales to zero but wakes in hundreds of milliseconds, runs only in AWS regions, and needs a long-lived password, which breaks the no-long-lived-secrets rule ([ADR-007](#workload-identity-federation-over-service-account-keys-for-ci-auth)). Supabase Pro starts at $25.
+- **Cloudflare D1**: free, but from Cloud Run its REST API is an account-wide control-plane path (1,200 requests per 5 minutes). Using it properly would need a Worker in front that verifies Google ID tokens.
+- **GCS objects, BigQuery, Cloud Logging as the store**: no indexed queries, write and DML limits, or the 60/min read cap.
+- **No store**: the dashboard calls GitHub live and limits count GCE VMs. No history, and no record of the states that never reach a VM (rejected, errored).
+
+For facts outside requests: a Cloud Scheduler reconciler; a log sink to Pub/Sub push to an authenticated endpoint; Eventarc (its filters are exact-match only, and it reports Compute events as `us-central1`); Cloud Tasks per job (still can't see preemption); or the daily sweep only.
+
+### Decision
+
+**Store.** A Firestore Standard, Native-mode database named `runnerforge`, regional in `europe-west4`, created by Terraform with delete protection and point-in-time recovery on. The orchestrator SA gets `roles/datastore.user`, limited to that database by an IAM condition if the condition works for the role's project-level permissions (checked in R1, below).
+
+**Record.** One document per job in a top-level `jobs` collection. Its ID is `{run_id}-{job_id}-{run_attempt}`, the VM name without `runnerforge-`. The ID includes `run_attempt`, so it stays unique whether or not GitHub reuses `job_id` on a re-run (GitHub doesn't document which).
+
+| Field | Holds |
+|---|---|
+| `installation_id`, `repository_id`, `repo`, `run_id`, `job_id`, `run_attempt`, `labels` | Identity. `repo` is `owner/name`, needed to ask GitHub about the job. |
+| `queued_at`, `expire_at`, `schema_version` | `queued_at` is the payload's `workflow_job.created_at`, or the time received if that is missing. `expire_at` is `queued_at` plus 90 days and drives a TTL policy; it is exempt from indexing. |
+| `open`, `next_check_at` | `open` is `false` once the job is closed. `next_check_at` is when the reconciler should look at the job again. |
+| `decision` | `kind` (`vm_submitted`, `already_exists`, `policy_rejected`), plus `reason`, `offending_tokens`, `machine_type`, `spot` |
+| `errored` | `stage` (`token` or `gce_insert`) and `error_class`, when the `queued` path raised before a decision |
+| `vm` | Creation `outcome` (`success`, `failure`, `timeout`, `missing`), `error_code`. `timeout` only means the watcher stopped polling; the VM may still have started. |
+| `in_progress`, `completed` | `runner_name`; `conclusion` |
+| `preempted` | `phase` (`before_pickup` or `mid_job`) |
+
+Every fact is a sub-map that carries `at` and `source` (`webhook`, `watcher` or `reconcile`). The record holds facts, not a status. One pure function derives the status when the record is read. Rows are checked top to bottom and the first match wins, so a reordered delivery can't move a job backwards:
+
+| Facts | Derived status |
+|---|---|
+| `completed` | Done, with `conclusion` and any `mid_job` preemption |
+| `in_progress` | Running |
+| `decision.kind = policy_rejected` | Rejected: fix `runs-on` (shows `reason`, `offending_tokens`) |
+| `errored` newer than any `decision`, or `vm.outcome = failure` | Failed to start: re-run |
+| `preempted.phase = before_pickup`, or `vm.outcome = missing` | Stuck: cancel and re-run |
+| anything else | Starting. The dashboard shows it as late once it passes a threshold of its own, at least the 5-minute Time-to-Register SLO. |
+
+**Writes.** Every write is a field-level merge (`set(..., merge=True)`) of one fact plus the base fields: identity, `queued_at`, `expire_at`, `schema_version` and `next_check_at`. That way a record created by whichever event arrives first still gets its TTL and is visible to the reconciler. Writing the same fact twice changes nothing, so no transactions are needed. A `completed` write sets `open: false`; every other write sets `open: true`. A late `in_progress` can therefore reopen a completed record; the reconciler closes it again on its next check.
+
+The one conditional write is on the `queued` path, after admission: `create()`. If the document already exists and `open` is `false`, `completed` arrived first, so the handler skips the VM. In every other case it carries on, and GCE's `AlreadyExists` on the VM name decides duplicates, as it does today.
+
+| Fact | Written at |
+|---|---|
+| `decision` | `handle_queued`, next to each `Queued webhook outcome` line |
+| `errored` | A new `except` around the `handle_queued` call in `main.py` (the `queued` case only) that records the fact and re-raises (the response is still 500). Failures in `in_progress` and `completed` handling stay log-only. |
+| `in_progress`, `completed` | `handle_in_progress`, `handle_completed` |
+| `vm` | `wait_for_vm_creation` (best-effort). `OperationHandle` gains the job key. |
+| `preempted` (`mid_job`) | `cross_check_preemption` (best-effort). `PreemptionCheckRequest` gains `run_id` and `run_attempt`. |
+| anything still missing | The reconciler |
+
+Only installations that pass admission get records. `Installation not allowed` stays log-only, and `in_progress` and `completed` facts are written only for allowed installations, even though those events skip the admission gate. Once the App is public, writing a document for every unapproved installation's jobs would let anyone grow the store. An installation removed mid-run gets its record closed by the reconciler. Approval state belongs to the tenant registry.
+
+**Failure policy: fail open.** Every store call runs under a short timeout, set from latency measured in R2 (expected 300–500 ms). On timeout or error, the handler logs `Job store write failed` (operation, error class), does not write the record, and carries on, so the job still gets its VM. A log-based metric and an alert watch that line. GitHub never retries, so failing closed would turn a store outage into stuck jobs for every tenant. The reconciler fills most of the gaps.
+
+**Reconciler.** `POST /reconcile`, called by a second Cloud Scheduler job every 5 minutes and authenticated like `/sweep` (`verify_oidc_token`). Each run:
+
+1. Queries `open == true` jobs whose `next_check_at` has passed, earliest first, up to a fixed batch. It logs how many it left for the next run. New records start with `next_check_at` 5 minutes after `queued_at` (the Time-to-Register SLO threshold). Each check pushes it back with a backoff, longer for jobs already known to be rejected or running, so jobs that can't be closed yet don't crowd out new ones.
+2. Lists `runnerforge` VMs once. It makes one paged `entries.list` query for `compute.instances.preempted` on `runnerforge-*` VMs, from the oldest `queued_at` in the batch (capped at 24 hours) to now. That is one logical query per run, against the 60-a-minute quota. A VM with no record (its `queued` write failed) gets one, built from its GCE labels and its `repo-url` and `runner-labels` metadata, with `queued_at` from the `queued_received_at` label.
+3. For each job, calls GitHub `GET /repos/{repo}/actions/jobs/{job_id}`:
+   - A completed job gets its `completed` fact. A 404, or an installation token that can't be fetched, writes `completed` with `conclusion: gone`. Either way the record is closed.
+   - A job still queued is matched to VMs by `in_progress.runner_name` across records, not by VM name. If its own VM is gone and no other RunnerForge VM for the same repository could still pick it up, it gets `preempted` (`before_pickup`) when the audit query names that VM, and `vm.outcome = missing` when it doesn't. Otherwise it waits for a later check. A preempted VM that appears as another job's `runner_name` is that job's `mid_job` preemption.
+   - A VM that exists with no `vm` fact gets `success`. Records with a `policy_rejected` decision or an `errored` fact get no `vm` facts.
+   - Every fact it writes has `source: reconcile`.
+4. Logs one `Reconcile completed` line with counts.
+
+Nothing here is GCP-specific beyond the GCE and Logging clients, so a self-hosted install keeps the reconciler. The push path (log sink → Pub/Sub → an OIDC-authenticated `/events/gce`) is deferred. It would deliver preemptions in seconds instead of minutes. On GCP it would also let `cross_check_preemption`, the reconciler's audit query (step 2) and `roles/logging.viewer` be removed; an install without the push path keeps the query and the role. It is blocked on two checks: whether GCE insert audit entries contain the registration-token metadata, and how a sink follows VMs into a separate pool project (4.3).
+
+**What stays as it is.** VM labels and metadata remain the authority for which VMs exist, who owns them, and what the delete paths and the sweep act on ([ADR-004](#gce-vm-labels-over-a-database-for-state-tracking)). Log lines and log-based metrics remain the source for metrics, SLOs and alerts ([ADR-006](#structured-logging-over-firestore-for-initial-observability)). The store adds to both and replaces neither. Every existing log line stays.
+
+**Self-host seam.** The orchestrator talks to a `JobStore` Protocol (`record_fact`, `create_if_absent`, `get`, `list_by_installation`, `list_due`, `count_open`), never to the Firestore client directly. A `JOB_STORE` setting selects `firestore` or `none` (a no-op; the default when unset). Tests use an in-memory fake for handler behaviour and patch `AsyncClient` in `conftest.py` for the adapter, the same way the GCE clients are patched. A SQL adapter (SQLite for one process, Postgres for more) ships with the self-host work, not before. SQLite is single-process only, because Cloud Run's GCS volume mounts have no file locking.
+
+**Not decided here.** The tenant-registry ADR (4.2) decides:
+
+- how usage limits count active VMs (from the store or from a GCE list);
+- whether limits are hard or soft;
+- what happens when an admission read fails.
+
+Counting from the store can overshoot by a whole matrix burst, because concurrent webhooks read the count before any of them write.
+
+### Rollout
+
+1. **R1, Terraform:**
+   - Enable `firestore.googleapis.com`.
+   - Add the database, the `expire_at` TTL field, the `(installation_id, queued_at)` and `(open, next_check_at)` indexes, and the IAM binding.
+   - Before applying, check that the apply SA can create Firestore databases; if it can't, bootstrap it out-of-band first.
+2. **R2, orchestrator writes:**
+   - Add the protocol, the fake, the Firestore adapter and the write points. Terraform sets `JOB_STORE` first.
+   - Nothing reads the records yet. A revision that doesn't write is harmless, so the canary and rollback are safe.
+   - Check every query against the production database (Query Explain) before anything reads from it.
+   - In the same release, update the docs that say there is no database: `AGENTS.md`, `docs/index.mdx`, and "What we store, and where" in `trust.mdx`.
+3. **R3, reconciler:**
+   - Add `/reconcile`, the Scheduler job and the `Reconcile completed` metric.
+   - In the same release, add a revision note to ADR-001, whose consequences list `/sweep` as the only Scheduler-driven work.
+   - In the same release, add the jobs call and the 5-minute token mint to the list of GitHub API calls in `trust.mdx`, and the reconciler to the Actions: Read rationale in `trust.mdx` and `architecture.mdx`.
+4. **Later:** a read API for the dashboard (4.5), the tenant registry (4.2), the push path and its contract step.
+
+Readers must tolerate missing fields and check `schema_version`, because a document may have been written by an older revision.
+
+### Consequences
+
+- About $0–1 a month at beta scale, with nothing billed when idle. The reconciler calls Cloud Run 288 times a day, each billed only for its request time. That is the first scheduled traffic beyond the daily sweep.
+- **Coverage gaps:**
+  - Out-of-band facts arrive within about 5 minutes (one reconciler interval), later if the batch is full.
+  - A job whose `queued` write failed during a store outage gets a record only if its VM still exists when the reconciler runs.
+  - A rejected or errored job whose write failed has no record at all; its details stay in the logs only.
+- A new dependency (`google-cloud-firestore`) and a new failure mode on the webhook path, bounded by the timeout and fail-open.
+- No emulator means the fake can't catch Firestore index or query mistakes, and there is no staging project. R2's check against the production database covers that.
+- **Data held:**
+  - Records hold repository names, GitHub job IDs, runner names and labels for 90 days. They hold no tokens.
+  - TTL deletion can lag by up to a day after `expire_at`, so readers also filter on it.
+  - Deleting an installation's records when the App is uninstalled needs the `installation` event, which 4.2 adds. Until then, the TTL bounds how long they stay.
+- Two places describe a job: GCE for the VM and the store for its history. When they disagree about whether a VM exists, GCE wins, and the reconciler brings the record into line.
