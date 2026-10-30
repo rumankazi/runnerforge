@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.11.0](https://github.com/rumankazi/runnerforge/compare/web-v1.10.0...web-v1.11.0) (2026-10-30)
+
+
+### Features
+
+* **infra:** alert on job store write failures ([#331](https://github.com/rumankazi/runnerforge/issues/331)) ([8138ca3](https://github.com/rumankazi/runnerforge/commit/8138ca3ec4df68d2a153a07da898cfaf8c5e6fae))
+* **infra:** schedule the job-record reconciler every 5 minutes ([#335](https://github.com/rumankazi/runnerforge/issues/335)) ([2585def](https://github.com/rumankazi/runnerforge/commit/2585def635962d3adcf927ac9e1c0bfad90207d6))
+* **orchestrator:** reconcile job records with GitHub and GCE ([#333](https://github.com/rumankazi/runnerforge/issues/333)) ([69e2ee7](https://github.com/rumankazi/runnerforge/commit/69e2ee7cfac881cf542d04451759db2fce8d5b4c))
+* **orchestrator:** tenant registry from installation events, in shadow mode ([#337](https://github.com/rumankazi/runnerforge/issues/337)) ([fe8614c](https://github.com/rumankazi/runnerforge/commit/fe8614c797d8daf0274e695b21a41f0885b992aa))
+* **orchestrator:** write per-job records at every lifecycle point ([#328](https://github.com/rumankazi/runnerforge/issues/328)) ([4669b28](https://github.com/rumankazi/runnerforge/commit/4669b28e5874fb1a8891b4a2d0e54fd1532ec093))
+
 ## [1.10.0](https://github.com/rumankazi/runnerforge/compare/web-v1.9.0...web-v1.10.0) (2026-10-30)
 
 
