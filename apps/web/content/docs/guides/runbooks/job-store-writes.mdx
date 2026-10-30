@@ -1,0 +1,78 @@
+---
+title: Job store write failures
+description: Runbook for "Job store write failures >= 3 (15m)", job records going missing while jobs keep running.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Symptom
+
+Email from "RunnerForge Alerts": **Job store write failures >= 3 (15m)**, severity WARNING.
+
+It fires when at least 3 `Job store write failed` lines on the webhook path land in a 15-minute window
+(`job_store_write_failure_count`). Writes from background tasks (`record_fact:vm`, `record_fact:preempted`) are left
+out of the metric: they run after the response while Cloud Run throttles the CPU, so their timeout can fire late
+even when the write landed.
+
+## Impact
+
+Jobs are not affected. Every store call is bounded at 2 s and fails open, so VMs are still created and deleted
+([ADR-018](/docs/design/decisions#per-job-state-in-firestore-behind-a-jobstore-protocol)). What's lost is the
+jobs' records in the Firestore database `runnerforge`: a webhook whose write failed leaves a gap in that job's
+history. A degraded store also adds up to about 4 s to each `queued` webhook.
+
+## Diagnose
+
+All commands are read-only.
+
+**1. See which writes fail and why.**
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  jsonPayload.message="Job store write failed"
+' --project=runnerforge --freshness=1h --limit=50 \
+  --format='table(timestamp, jsonPayload.operation, jsonPayload.error_class, jsonPayload.job_key, resource.labels.revision_name)'
+```
+
+| `error_class` | Likely cause |
+|---|---|
+| `TimeoutError` (a call hung), `RetryError` (`UNAVAILABLE` retried for the full 2 s), `DeadlineExceeded` | Firestore is slow or unavailable. Check the [Google Cloud status page](https://status.cloud.google.com/) for Firestore in `europe-west4`. |
+| `RefreshError` | The orchestrator couldn't get an access token from the metadata server: a platform problem, not the store. |
+| `PermissionDenied` on every operation | The orchestrator's `roles/datastore.user` binding or its condition on `projects/runnerforge/databases/runnerforge` changed (`firestore.tf`), or `FIRESTORE_DATABASE` on the revision doesn't name `runnerforge`: the condition denies any other database before it is looked up. Check step 2. |
+| Anything else (`ValueError`, `TypeError`, …) | A bug in a write. Compare `app_version` with the last release. |
+
+**2. Check the revision's settings and the database.**
+
+```bash
+gcloud run services describe runnerforge-orchestrator --region europe-west4 --project runnerforge \
+  --format='yaml(spec.template.spec.containers[0].env)'
+```
+
+```bash
+gcloud firestore databases describe --database=runnerforge --project=runnerforge
+```
+
+**3. Check Firestore's own view.** In Cloud Monitoring, chart `firestore.googleapis.com/api/request_count`
+grouped by `response_code` for database `runnerforge`. Non-`OK` codes confirm the store side; only `OK` codes
+point back at the orchestrator.
+
+## Mitigate
+
+<Callout type="warn" title="Mutations">
+  A rollback or a Terraform change touches production.
+</Callout>
+
+- **Firestore incident:** nothing to change. Writes fail open and recover when Firestore does. Records for jobs that
+  ran during the incident stay incomplete.
+- **IAM or env change:** restore it through Terraform (`firestore.tf`, `cloud_run.tf`). An env fix takes effect
+  with the next orchestrator release.
+- **Regression after a release:** roll back with the `rollback` mode of `deploy-orchestrator.yaml`
+  (approval-gated).
+- **To stop the writes entirely:** set `JOB_STORE=none` in `cloud_run.tf`. It takes effect with the next release.
+
+## Escalate
+
+If failures continue with Firestore healthy and IAM unchanged, open a GitHub issue with the `operation` and
+`error_class` values from step 1.
