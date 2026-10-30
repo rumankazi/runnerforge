@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.19.0...orchestrator-v0.20.0) (2026-10-30)
+
+
+### Features
+
+* **orchestrator:** add the per-job store, inert until JOB_STORE=firestore ([#325](https://github.com/rumankazi/runnerforge/issues/325)) ([1e0491c](https://github.com/rumankazi/runnerforge/commit/1e0491c96edfdf17a448499d6b207ca8571b8cee))
+
 ## [0.19.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.18.0...orchestrator-v0.19.0) (2026-10-28)
 
 
