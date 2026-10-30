@@ -20,6 +20,7 @@ from google.api_core.exceptions import AlreadyExists, NotFound, ServiceUnavailab
 from google.api_core.retry import AsyncRetry, if_exception_type
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud import firestore
+from google.cloud.firestore import FieldFilter
 
 from runnerforge.config import FIRESTORE_DATABASE, GCP_PROJECT_ID, JOB_STORE
 from runnerforge.models import WorkflowJobEvent
@@ -38,6 +39,9 @@ FIRST_CHECK_DELAY = timedelta(minutes=5)
 CALL_TIMEOUT_SECONDS = 2.0
 # Bound for the startup warm-up read, which runs in the background.
 WARMUP_TIMEOUT_SECONDS = 3.0
+# Reconciler queries run inside a scheduled request, not a webhook, and return
+# many documents, so they get a longer bound.
+QUERY_TIMEOUT_SECONDS = 10.0
 # Only UNAVAILABLE is retried (e.g. a stale connection after an idle period);
 # the hard timeout above still ends the call.
 _RETRY = AsyncRetry(
@@ -59,7 +63,13 @@ class CreateResult(StrEnum):
     UNKNOWN = "unknown"
 
 
+Record = tuple[str, dict[str, Any]]
+
+
 class JobStore(Protocol):
+    # False for the no-op store: the reconciler then has nothing to do.
+    enabled: bool
+
     async def create_if_absent(self, key: str, base: dict[str, Any]) -> CreateResult:
         """Create the job's record; if it already exists, report whether it
         is still open (a closed record means `completed` arrived first)."""
@@ -79,6 +89,18 @@ class JobStore(Protocol):
         `completed` closes the record. Other facts reopen it unless
         `reopen=False`, for facts that can land after `completed`
         (the VM watcher, the preemption cross-check)."""
+        ...
+
+    async def list_due(self, now: datetime, limit: int) -> list[Record]:
+        """Open records whose `next_check_at` has passed, earliest first."""
+        ...
+
+    async def list_open(self, limit: int) -> list[Record]:
+        """Open records, any order."""
+        ...
+
+    async def patch(self, key: str, fields: dict[str, Any]) -> None:
+        """Update fields of an existing record; never creates one."""
         ...
 
 
@@ -123,6 +145,8 @@ def _log_failure(operation: str, key: str, exc: BaseException) -> None:
 class NoopJobStore:
     """`JOB_STORE=none`: the default, so an install without Firestore runs."""
 
+    enabled = False
+
     async def create_if_absent(self, key: str, base: dict[str, Any]) -> CreateResult:
         return CreateResult.UNKNOWN
 
@@ -137,10 +161,21 @@ class NoopJobStore:
     ) -> None:
         return None
 
+    async def list_due(self, now: datetime, limit: int) -> list[Record]:
+        return []
+
+    async def list_open(self, limit: int) -> list[Record]:
+        return []
+
+    async def patch(self, key: str, fields: dict[str, Any]) -> None:
+        return None
+
 
 class FirestoreJobStore:
     # Every call catches Exception on purpose: failing open covers bugs and
     # auth errors too, not only GoogleAPIError. Each failure is logged.
+
+    enabled = True
 
     def __init__(self, client: firestore.AsyncClient):
         self._client = client
@@ -219,6 +254,49 @@ class FirestoreJobStore:
         except AlreadyExists:
             # Another write created it in between: merge without `open`.
             await doc.set(data, merge=True, retry=_RETRY)
+
+    async def list_due(self, now: datetime, limit: int) -> list[Record]:
+        query = (
+            self._client.collection(JOBS_COLLECTION)
+            .where(filter=FieldFilter("open", "==", True))
+            .where(filter=FieldFilter("next_check_at", "<=", now))
+            .order_by("next_check_at")
+            .limit(limit)
+        )
+        return await self._run_query("list_due", query)
+
+    async def list_open(self, limit: int) -> list[Record]:
+        query = (
+            self._client.collection(JOBS_COLLECTION)
+            .where(filter=FieldFilter("open", "==", True))
+            .limit(limit)
+        )
+        return await self._run_query("list_open", query)
+
+    async def _run_query(self, operation: str, query) -> list[Record]:
+        try:
+            async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
+                return [
+                    (snap.id, snap.to_dict() or {})
+                    async for snap in query.stream(retry=_RETRY)
+                ]
+        except Exception as exc:  # noqa: BLE001
+            # Not "write failed": the write alert counts only writes.
+            logger.warning(
+                "Job store read failed",
+                extra={"operation": operation, "error_class": type(exc).__name__},
+            )
+            return []
+
+    async def patch(self, key: str, fields: dict[str, Any]) -> None:
+        try:
+            async with asyncio.timeout(CALL_TIMEOUT_SECONDS):
+                await self._doc(key).update(fields, retry=_RETRY)
+        except NotFound:
+            # Deleted by TTL in between: nothing to update.
+            pass
+        except Exception as exc:  # noqa: BLE001
+            _log_failure("patch", key, exc)
 
     async def warm_up(self) -> None:
         """One bounded read so channel, TLS and token setup happen at startup."""

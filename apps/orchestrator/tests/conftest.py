@@ -89,12 +89,18 @@ class FakeJobStore:
     the facts a request wrote. `create_result` sets what create_if_absent
     reports."""
 
+    enabled = True
+
     def __init__(self) -> None:
         from runnerforge.job_store import CreateResult
 
         self.create_result = CreateResult.CREATED
         self.created: list[tuple[str, dict]] = []
         self.facts: list[dict] = []
+        # Reconciler reads: what list_due / list_open return, and patches made.
+        self.due: list[tuple[str, dict]] = []
+        self.open: list[tuple[str, dict]] = []
+        self.patches: list[tuple[str, dict]] = []
 
     async def create_if_absent(self, key, base):
         self.created.append((key, base))
@@ -111,6 +117,15 @@ class FakeJobStore:
                 "reopen": reopen,
             }
         )
+
+    async def list_due(self, now, limit):
+        return self.due[:limit]
+
+    async def list_open(self, limit):
+        return self.open[:limit]
+
+    async def patch(self, key, fields):
+        self.patches.append((key, fields))
 
     def names(self) -> list[str]:
         return [f["name"] for f in self.facts]

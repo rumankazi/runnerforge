@@ -213,17 +213,23 @@ def is_valid_machine_type(machine_type: str) -> bool:
 
 
 async def was_preempted(vm_name: str) -> bool:
+    """True if the VM was reclaimed by GCE's Spot scheduler; False otherwise,
+    including when the answer is unknown (no client, API error)."""
+    return await preemption_status(vm_name) is True
+
+
+async def preemption_status(vm_name: str) -> bool | None:
     """Query Cloud Audit Log for `compute.instances.preempted` entries matching
-    the given VM. Returns True if the VM was reclaimed by GCE's Spot scheduler,
-    False otherwise (including the degraded-client case, on API error, or when
-    no matching entry exists).
+    the given VM. True if found, False if not, None if the answer is unknown
+    (no logging client, or the query failed). The reconciler waits on None
+    instead of recording a permanent verdict.
 
     24h lookback covers any reasonable runner lifetime (sweep HARD_LIMIT=6h;
     GH job timeout ~24h). Filter is VM-name-scoped so it's specific even
     without a tighter timestamp bound.
     """
     if _logging_client is None:
-        return False
+        return None
     # The name comes from a webhook payload and is interpolated into a regex
     # filter: anything that isn't a valid GCE instance name can't be ours.
     if not _GCE_INSTANCE_NAME_RE.fullmatch(vm_name):
@@ -248,7 +254,7 @@ async def was_preempted(vm_name: str) -> bool:
             "Failed to query audit log for preemption check",
             extra={"vm_name": vm_name, "reason": str(e)},
         )
-        return False
+        return None
 
     return bool(entries)
 
@@ -744,6 +750,9 @@ async def list_runnerforge_vms(
                 if repo_url.startswith(GITHUB_REPO_URL_PREFIX)
                 else None
             )
+            runner_labels = [
+                label for label in metadata.get("runner-labels", "").split(",") if label
+            ]
             valid_vms.append(
                 VmInfo.model_validate(
                     {
@@ -751,6 +760,7 @@ async def list_runnerforge_vms(
                         "creation_timestamp": i.creation_timestamp,
                         "labels": labels,
                         "repo_full_name": repo_full_name,
+                        "runner_labels": runner_labels,
                     }
                 )
             )

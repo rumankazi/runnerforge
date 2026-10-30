@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class WorkflowJob(BaseModel):
@@ -71,6 +71,15 @@ class Runner(BaseModel):
     busy: bool
 
 
+class GitHubJob(BaseModel):
+    # GET /repos/{owner}/{repo}/actions/jobs/{job_id}, the fields the
+    # reconciler reads.
+    id: int
+    status: str  # queued | in_progress | completed | waiting | requested | pending
+    conclusion: str | None = None
+    runner_name: str | None = None
+
+
 class RunnersResponse(BaseModel):
     total_count: int
     runners: list[Runner]
@@ -106,6 +115,8 @@ class VmInfo(BaseModel):
     labels: RunnerForgeVmLabels
     # Exact owner/repo from the VM's repo-url metadata; None if unreadable.
     repo_full_name: str | None = None
+    # The job's runs-on labels, from the VM's runner-labels metadata.
+    runner_labels: list[str] = Field(default_factory=list)
 
 
 class SweepResult(BaseModel):
@@ -115,3 +126,13 @@ class SweepResult(BaseModel):
     errors: list[
         str
     ]  # any VM deletion or API failures (don't fail whole sweep on one VM)
+
+
+class ReconcileResult(BaseModel):
+    checked: int  # due records looked at this run
+    closed: int  # records closed (completed on GitHub, gone, or already completed)
+    facts: int  # facts written
+    stuck: int  # records newly marked stuck (vm missing / preempted before pickup)
+    backfilled: int  # records created for VMs that had none
+    more_due: bool  # more records were due than one batch holds
+    errors: list[str]  # per-record failures (one record never aborts a run)

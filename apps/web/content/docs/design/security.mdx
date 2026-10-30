@@ -36,9 +36,9 @@ In production, Terraform sets it from `var.allowed_installation_ids` (`variables
   The allow-list is the only per-tenant gate today. Within it, a single installation can request any valid machine type and as many concurrent jobs as GitHub sends. The ceilings are project-wide GCE quotas in `europe-west4`, which every installation shares: the quota preferences in `quotas.tf` (200 instances, 1,500 GB SSD) and GCP's default per-family CPU quotas. Per-installation limits are planned.
 </Callout>
 
-## Request path: `/sweep`
+## Request paths: `/sweep` and `/reconcile`
 
-`/sweep` is called by the Cloud Scheduler job `runnerforge-sweep` daily at 00:12 UTC (`scheduler.tf`). The job sends a Google-signed OIDC token as the `runnerforge-scheduler` service account, with the Cloud Run URL as audience. `verify_oidc_token` (`security.py`) requires all of the following, and returns 401 otherwise:
+`/sweep` is called by the Cloud Scheduler job `runnerforge-sweep` daily at 00:12 UTC (`scheduler.tf`), and `/reconcile` every 5 minutes by `runnerforge-reconcile` once that Scheduler job is added (ADR-018 R3). Both use the same identity and checks. Each job sends a Google-signed OIDC token as the `runnerforge-scheduler` service account, with the Cloud Run URL as audience. `verify_oidc_token` (`security.py`) requires all of the following, and returns 401 otherwise:
 
 - a `Bearer` prefix
 - a valid Google signature, issuer and expiry, and an audience equal to `EXPECTED_AUDIENCE`
@@ -104,7 +104,7 @@ Terraform creates only the secret containers. No `google_secret_manager_secret_v
 |---|---|---|
 | `runnerforge-orchestrator` (Cloud Run) | Project: `compute.instanceAdmin.v1`, `compute.imageUser`, `logging.logWriter`, `cloudtrace.agent`, `logging.viewer`; `datastore.user` limited by an IAM condition to the `runnerforge` Firestore database (`firestore.tf`). Per secret: `secretmanager.secretAccessor` on the two secrets. Per SA: `iam.serviceAccountUser` on `runnerforge-runner-vm` (`iam.tf`, `runner_vm.tf`) | `logging.viewer` is for the spot-preemption audit-log cross-check. `instanceAdmin.v1` is project-wide, so the ownership rules above are enforced in code, not IAM. |
 | `runnerforge-runner-vm` (every runner VM) | Project: `logging.logWriter` only (`runner_vm.tf`) | The VM gets the `cloud-platform` scope, so IAM is the only limit. A job can get this SA's token from the metadata server, but can only write logs with it. |
-| `runnerforge-scheduler` | No role bindings in Terraform (`scheduler.tf`) | It exists only as the identity in the `/sweep` OIDC token. |
+| `runnerforge-scheduler` | No role bindings in Terraform (`scheduler.tf`) | It exists only as the identity in the `/sweep` and `/reconcile` OIDC tokens. |
 
 On the runner image, the `runner` user isn't in `sudo` but is in the `docker` group (`infra/packer/scripts/install-runner.sh`). That makes it effectively root on its VM. Treat the VM as fully controlled by the job it runs.
 

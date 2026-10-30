@@ -178,6 +178,31 @@ name exactly. The repo comes from the VM's `repo-url` metadata, never from label
 lowercase and at most 63 characters, so they can't hold an exact `owner/repo`. If one VM fails, the error is recorded and the sweep moves on to the next. The
 response reports `checked`, `deleted`, `skipped` and `errors`.
 
+## Reconciler
+
+Cloud Scheduler calls `POST /reconcile` every 5 minutes with the same OIDC identity as the sweep. It brings
+open job records ([ADR-018](/docs/design/decisions#per-job-state-in-firestore-behind-a-jobstore-protocol)) in
+line with GitHub and GCE, for what the webhooks and background tasks missed. It deletes nothing. Each run:
+
+1. Takes up to 25 open records whose next check is due, earliest first.
+2. Lists RunnerForge VMs once. A VM whose job has no open record gets one, built from its labels and metadata.
+3. For each record: one already holding `completed` is closed. Otherwise it asks GitHub
+   (`GET /repos/{owner}/{repo}/actions/jobs/{job_id}`):
+
+| GitHub says | Reconciler |
+| --- | --- |
+| `completed` | Records the conclusion and runner, and closes the record. |
+| 404, or the App installation is gone | Records `conclusion: gone` and closes the record. |
+| `in_progress` | Records the runner if missing. |
+| Still queued, and its own VM exists and isn't running another job | Records `vm: success` if the watcher never did. |
+| Still queued, own VM gone (or running another job), no other VM can take it | Records `preempted: before_pickup` if the audit log names its VM, otherwise `vm: missing`. The dashboard shows it as stuck. If the audit log can't answer, it records nothing and asks again next time. |
+| Still queued, another VM could take it | Waits. A VM can take it if it's for the same repository, isn't running another job, and its labels cover the job's. |
+
+Every record it doesn't close is checked again after a backoff: 5 min, 15 min, 1 h, then every 6 h. Rejected,
+errored and running jobs start at 1 h. One failing record is logged and retried later; it doesn't stop the run.
+A run stops starting records after 120 s (each record is bounded at 30 s) and reports `more_due`; the rest wait
+for the next run. The run logs `Reconcile completed` with its counts.
+
 ## Runtime cap
 
 Every VM is created with `max_run_duration` = 6 h 15 min and termination action `DELETE`. GCE deletes the VM

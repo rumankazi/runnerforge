@@ -27,6 +27,7 @@ from runnerforge.logger import (
     with_log_context,
 )
 from runnerforge.models import WorkflowJobEvent
+from runnerforge.reconcile import run_reconcile
 from runnerforge.security import verify_github_signature, verify_oidc_token
 from runnerforge.sweep import run_sweep
 from runnerforge.tracing import setup_tracing
@@ -285,6 +286,38 @@ async def sweep(authorization: Annotated[str, Header()]):
             "checked": result.checked,
             "deleted": result.deleted,
             "skipped": result.skipped,
+            "error_count": len(result.errors),
+        },
+    )
+    return result.model_dump()
+
+
+@app.post(
+    "/reconcile",
+    status_code=200,
+    summary="Job record reconciler",
+    description="Brings open job records in line with GitHub and GCE (ADR-018). Auth via bearer token.",
+    tags=["reconcile"],
+)
+async def reconcile(authorization: Annotated[str, Header()]):
+    # Same caller and audience as /sweep: the runnerforge-scheduler SA.
+    if not verify_oidc_token(
+        authorization,
+        expected_audience=EXPECTED_AUDIENCE,
+        expected_email=EXPECTED_SCHEDULER_SA_EMAIL,
+    ):
+        raise HTTPException(status_code=401, detail="Invalid auth")
+
+    result = await run_reconcile()
+    logger.info(
+        "Reconcile completed",
+        extra={
+            "checked": result.checked,
+            "closed": result.closed,
+            "facts": result.facts,
+            "stuck": result.stuck,
+            "backfilled": result.backfilled,
+            "more_due": result.more_due,
             "error_count": len(result.errors),
         },
     )
