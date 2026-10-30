@@ -54,6 +54,36 @@ resource "google_project_iam_member" "ci_terraform_apply_iam_role_admin" {
   member  = "serviceAccount:${google_service_account.ci_terraform_apply.email}"
 }
 
+# Lets ci-terraform-apply create Firestore databases (firestore.tf). roles/editor
+# covers database updates, indexes and TTL fields, but not
+# datastore.databases.create or datastore.locations.get. No databases.delete on
+# purpose: the job store is delete-protected.
+# Bootstrapped out-of-band with gcloud before the first apply (the apply SA can't
+# grant itself a new permission in the apply that needs it); the import adopts
+# the role, and re-adding the existing member is a no-op.
+import {
+  to = google_project_iam_custom_role.ci_firestore_database_creator
+  id = "projects/runnerforge/roles/firestoreDatabaseCreator"
+}
+
+resource "google_project_iam_custom_role" "ci_firestore_database_creator" {
+  role_id     = "firestoreDatabaseCreator"
+  title       = "RunnerForge Firestore Database Creator (CI)"
+  description = "Create-only Firestore database permissions for the ci-terraform-apply SA (ADR-018)."
+  project     = data.google_project.current.project_id
+  permissions = [
+    "datastore.databases.create",
+    "datastore.locations.get",
+    "datastore.locations.list",
+  ]
+}
+
+resource "google_project_iam_member" "ci_terraform_apply_firestore_database_creator" {
+  project = data.google_project.current.project_id
+  role    = google_project_iam_custom_role.ci_firestore_database_creator.name
+  member  = "serviceAccount:${google_service_account.ci_terraform_apply.email}"
+}
+
 resource "google_project_iam_member" "ci_terraform_apply_editor" {
   project = data.google_project.current.project_id
   role    = "roles/editor"

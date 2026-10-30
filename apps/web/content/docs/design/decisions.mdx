@@ -26,7 +26,7 @@ The code is the source of truth. If an ADR here disagrees with `apps/orchestrato
 | [015](#installation-allow-list-as-a-stop-gap-admission-control) | Installation allow-list as stop-gap admission control | accepted |
 | [016](#multi-tenancy-scope-installation-as-tenant) | Multi-tenancy scope: installation = tenant | accepted |
 | [017](#docs-site-static-export-on-cloudflare-workers) | Docs site: static export on Cloudflare Workers | accepted |
-| [018](#per-job-state-in-firestore-behind-a-jobstore-protocol) | Per-job state in Firestore behind a `JobStore` protocol | proposed |
+| [018](#per-job-state-in-firestore-behind-a-jobstore-protocol) | Per-job state in Firestore behind a `JobStore` protocol | accepted |
 
 ---
 
@@ -118,7 +118,7 @@ Python with FastAPI. The value is in the orchestration design, not the implement
 <Callout type="info" title="Revisions">
   **2026-10-27** (orchestrator 0.17.4 and 0.17.5): the original text said the `completed` path finds the VM by its `job_id` label and that VMs carry a `repo` label. Neither is true any more. The `completed` path deletes the VM named in the payload's `runner_name`, and only after an ownership check. The `repo` label was replaced by the numeric `repository_id`, and the sweep reads the exact `owner/repo` from the `repo-url` metadata key.
 
-  **2026-10-28**: [ADR-018](#per-job-state-in-firestore-behind-a-jobstore-protocol) (proposed, not built) adds a per-job store for job history and status. This ADR still decides VM lifecycle: labels and metadata remain the authority for which VMs exist, who owns them, and what the delete paths and the sweep act on. Once ADR-018's database exists, the consequence "No database to provision, manage, or pay for" no longer holds; the orchestrator process itself stays stateless.
+  **2026-10-28**: [ADR-018](#per-job-state-in-firestore-behind-a-jobstore-protocol) adds a per-job store for job history and status. This ADR still decides VM lifecycle: labels and metadata remain the authority for which VMs exist, who owns them, and what the delete paths and the sweep act on. Once ADR-018's database exists, the consequence "No database to provision, manage, or pay for" no longer holds; the orchestrator process itself stays stateless.
 </Callout>
 
 ### Context
@@ -194,7 +194,7 @@ On-demand only. Zero idle cost is a hard constraint, and boot latency fits withi
 <Callout type="info" title="Revisions">
   **2026-10-27**: the original text promised Firestore "in Phase 4" for user-facing dashboards and listed log fields (`signature_validated_ms`, `token_fetched_ms`, `vm_created_ms`) that the orchestrator never emitted. Both were removed. Tracing is covered separately in [ADR-012](#opentelemetry-traces-exported-to-cloud-trace).
 
-  **2026-10-28**: [ADR-018](#per-job-state-in-firestore-behind-a-jobstore-protocol) (proposed, not built) adds a Firestore job store for product reads (dashboard, tenant registry). This ADR still holds for observability: log lines and log-based metrics remain the source for metrics, SLOs and alerts. The consequence "no database write in the critical webhook path" no longer holds once ADR-018's writes ship: each write is bounded by a timeout and fails open.
+  **2026-10-28**: [ADR-018](#per-job-state-in-firestore-behind-a-jobstore-protocol) adds a Firestore job store for product reads (dashboard, tenant registry). This ADR still holds for observability: log lines and log-based metrics remain the source for metrics, SLOs and alerts. The consequence "no database write in the critical webhook path" no longer holds once ADR-018's writes ship: each write is bounded by a timeout and fails open.
 </Callout>
 
 ### Context
@@ -617,9 +617,13 @@ RunnerForge started as a single-owner tool. Opening it up raises a set of questi
 ---
 
 
-<Record type="adr" id="018" status="proposed" date="2026-10-28" />
+<Record type="adr" id="018" status="accepted" date="2026-10-28" />
 
 ## Per-job state in Firestore behind a JobStore protocol
+
+<Callout type="info" title="Revisions">
+  **2026-10-30**: accepted with R1 (Terraform). `roles/editor` lacks `datastore.databases.create`, so the apply SA got a custom `firestoreDatabaseCreator` role, created out-of-band and adopted by `terraform_ci.tf`. R2 and R3 are not built yet.
+</Callout>
 
 ### Context
 
@@ -649,7 +653,7 @@ For facts outside requests: a Cloud Scheduler reconciler; a log sink to Pub/Sub 
 
 ### Decision
 
-**Store.** A Firestore Standard, Native-mode database named `runnerforge`, regional in `europe-west4`, created by Terraform with delete protection and point-in-time recovery on. The orchestrator SA gets `roles/datastore.user`, limited to that database by an IAM condition if the condition works for the role's project-level permissions (checked in R1, below).
+**Store.** A Firestore Standard, Native-mode database named `runnerforge`, regional in `europe-west4`, created by Terraform with delete protection and point-in-time recovery on. The orchestrator SA gets `roles/datastore.user` with an IAM condition that limits it to that database (`firestore.tf`), in the form Firestore's per-database access docs give.
 
 **Record.** One document per job in a top-level `jobs` collection. Its ID is `{run_id}-{job_id}-{run_attempt}`, the VM name without `runnerforge-`. The ID includes `run_attempt`, so it stays unique whether or not GitHub reuses `job_id` on a re-run (GitHub doesn't document which).
 
@@ -722,7 +726,7 @@ Counting from the store can overshoot by a whole matrix burst, because concurren
 1. **R1, Terraform:**
    - Enable `firestore.googleapis.com`.
    - Add the database, the `expire_at` TTL field, the `(installation_id, queued_at)` and `(open, next_check_at)` indexes, and the IAM binding.
-   - Before applying, check that the apply SA can create Firestore databases; if it can't, bootstrap it out-of-band first.
+   - The apply SA can't create Firestore databases: `roles/editor` lacks `datastore.databases.create`. A custom `firestoreDatabaseCreator` role is created and granted out-of-band first, then adopted by `terraform_ci.tf`.
 2. **R2, orchestrator writes:**
    - Add the protocol, the fake, the Firestore adapter and the write points. Terraform sets `JOB_STORE` first.
    - Nothing reads the records yet. A revision that doesn't write is harmless, so the canary and rollback are safe.

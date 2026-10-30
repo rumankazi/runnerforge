@@ -24,6 +24,7 @@ protected_resources := {
 	"google_cloud_run_v2_service.orchestrator",
 	"google_secret_manager_secret.github_webhook_secret",
 	"google_secret_manager_secret.github_app_private_key",
+	"google_firestore_database.runnerforge",
 }
 
 deny contains msg if {
