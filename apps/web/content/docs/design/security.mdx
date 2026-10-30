@@ -102,7 +102,7 @@ Terraform creates only the secret containers. No `google_secret_manager_secret_v
 
 | Service account | Grants (source) | Notes |
 |---|---|---|
-| `runnerforge-orchestrator` (Cloud Run) | Project: `compute.instanceAdmin.v1`, `compute.imageUser`, `logging.logWriter`, `cloudtrace.agent`, `logging.viewer`. Per secret: `secretmanager.secretAccessor` on the two secrets. Per SA: `iam.serviceAccountUser` on `runnerforge-runner-vm` (`iam.tf`, `runner_vm.tf`) | `logging.viewer` is for the spot-preemption audit-log cross-check. `instanceAdmin.v1` is project-wide, so the ownership rules above are enforced in code, not IAM. |
+| `runnerforge-orchestrator` (Cloud Run) | Project: `compute.instanceAdmin.v1`, `compute.imageUser`, `logging.logWriter`, `cloudtrace.agent`, `logging.viewer`; `datastore.user` limited by an IAM condition to the `runnerforge` Firestore database (`firestore.tf`). Per secret: `secretmanager.secretAccessor` on the two secrets. Per SA: `iam.serviceAccountUser` on `runnerforge-runner-vm` (`iam.tf`, `runner_vm.tf`) | `logging.viewer` is for the spot-preemption audit-log cross-check. `instanceAdmin.v1` is project-wide, so the ownership rules above are enforced in code, not IAM. |
 | `runnerforge-runner-vm` (every runner VM) | Project: `logging.logWriter` only (`runner_vm.tf`) | The VM gets the `cloud-platform` scope, so IAM is the only limit. A job can get this SA's token from the metadata server, but can only write logs with it. |
 | `runnerforge-scheduler` | No role bindings in Terraform (`scheduler.tf`) | It exists only as the identity in the `/sweep` OIDC token. |
 
@@ -133,11 +133,13 @@ A token from any other repository, including forks, fails the exchange. The prov
 |---|---|---|
 | `ci-build` | `workflow_path` = `.github/workflows/deploy-orchestrator.yaml` | `artifactregistry.writer` on the orchestrator repository, `run.developer` on the orchestrator service, `iam.serviceAccountUser` on the orchestrator SA |
 | `ci-terraform-plan` | `attribute.repository` = `rumankazi/runnerforge`, which means any workflow in the repo (used by `_qualify-infra.yaml` and `drift-detection.yaml`) | Project `viewer` and `iam.securityReviewer`; `storage.objectUser` on the state bucket |
-| `ci-terraform-apply` | `workflow_path` = `.github/workflows/deploy-infra.yaml`, which runs on push to `main` (or manual dispatch) in the `prod-infra` environment | Project `editor`, `iam.securityAdmin`, `iam.roleAdmin`, `secretmanager.admin`; `storage.objectAdmin` on the state bucket |
+| `ci-terraform-apply` | `workflow_path` = `.github/workflows/deploy-infra.yaml`, which runs on push to `main` (or manual dispatch) in the `prod-infra` environment | Project `editor`, `iam.securityAdmin`, `iam.roleAdmin`, `secretmanager.admin`, the custom `firestoreDatabaseCreator` role; `storage.objectAdmin` on the state bucket |
 | `ci-runner-image-build` | `workflow_path` = `.github/workflows/deploy-runner-image.yaml` | `compute.instanceAdmin.v1`, the custom `runnerImageManager` role, `logging.viewer`, `iam.serviceAccountUser` on `ci-vm-logger` |
 | `ci-vm-logger` | No WIF binding. `ci-runner-image-build` attaches it to the Packer build VM and smoke-test VMs. | `logging.logWriter` |
 
 `runnerImageManager` is a project custom role that replaced `roles/compute.storageAdmin`. It holds exactly these permissions: `compute.images.create`, `delete`, `deprecate`, `get`, `list`, `setLabels`, `update` and `useReadOnly`.
+
+`firestoreDatabaseCreator` is a project custom role holding `datastore.databases.create`, `datastore.locations.get` and `datastore.locations.list`, which `editor` lacks. It has no delete permission; the database is delete-protected.
 
 The `workflow_path` bindings pin a workflow **file**, not a branch. Which refs can run that file is controlled by the workflow's triggers and its GitHub environment: In `deploy-orchestrator.yaml`, the 5% canary runs without approval, while the 100% ramp and rollbacks are gated behind the `prod` environment. Orchestrator images are signed with keyless Cosign during the build.
 
@@ -148,7 +150,7 @@ Every infra PR runs `conftest test` against the Terraform plan JSON in `_qualify
 | Policy | Blocks |
 |---|---|
 | `no_basic_roles.rego` | Any IAM binding with `roles/owner`, `roles/editor` or `roles/viewer`, except for `ci-terraform-plan` and `ci-terraform-apply` |
-| `no_destroy_protected.rego` | Delete or replace of 14 critical resources, including the state bucket, the WIF pool and provider, every service account, the Cloud Run service and both secrets. Removing one takes three PRs. |
+| `no_destroy_protected.rego` | Delete or replace of 15 critical resources, including the state bucket, the WIF pool and provider, every service account, the Cloud Run service, both secrets and the Firestore database. Removing one takes three PRs. |
 | `no_wif_condition_modificaiton.rego` (sic) | Any change to the WIF provider's `attribute_condition`, tightening included |
 
 These resources also have `lifecycle { prevent_destroy = true }`. `.github/CODEOWNERS` names the owner for every path, with explicit entries for `/infra/`, `/.github/`, the orchestrator source and this directory.

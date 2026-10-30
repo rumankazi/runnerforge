@@ -11,6 +11,7 @@ locals {
     "monitoring.googleapis.com",
     "logging.googleapis.com",
     "cloudquotas.googleapis.com",
+    "firestore.googleapis.com",
   ]
 }
 

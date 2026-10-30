@@ -43,3 +43,14 @@ test_allows_update_of_protected_resource if {
 		}],
 	}
 }
+
+test_denies_replace_of_job_store_database if {
+	some msg in deny with input as {
+		"resource_changes": [{
+			"address": "google_firestore_database.runnerforge",
+			"type": "google_firestore_database",
+			"change": {"actions": ["delete", "create"]},
+		}],
+	}
+	contains(msg, "protected-destroy allowlist")
+}

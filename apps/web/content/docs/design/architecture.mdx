@@ -115,7 +115,7 @@ lookup fails, VMs boot from the family alias. The image lives in `RUNNER_IMAGE_P
 A single root module in `infra/terraform/` with a GCS backend. Pull requests get a plan (tfaction) and OPA
 policy checks (`infra/policies/`). On merge to `main`, `deploy-infra.yaml` applies after approval in the
 `prod-infra` environment. A daily drift check (`drift-detection.yaml`) opens issues.
-Terraform covers Cloud Run, Cloud Scheduler, NAT, IAM, Workload Identity Federation for CI, secrets, observability (metrics, dashboard, SLOs, alerts), and quota preferences (`quotas.tf`).
+Terraform covers Cloud Run, Cloud Scheduler, NAT, IAM, Workload Identity Federation for CI, secrets, observability (metrics, dashboard, SLOs, alerts), quota preferences (`quotas.tf`), and the Firestore job store: database, TTL field and indexes (`firestore.tf`).
 
 ## Identities
 
@@ -125,17 +125,18 @@ Terraform covers Cloud Run, Cloud Scheduler, NAT, IAM, Workload Identity Federat
 | | `iam.serviceAccountUser` on the runner VM SA | Attach that SA to the VMs it creates |
 | | `secretmanager.secretAccessor` on two secrets | Read the webhook secret and the App private key |
 | | `logging.logWriter`, `logging.viewer`, `cloudtrace.agent` | Write logs and traces; read audit logs for the preemption check |
+| | `datastore.user`, conditioned on the `runnerforge` Firestore database | Read and write job records (ADR-018) |
 | `runnerforge-runner-vm` | `logging.logWriter` | Ship VM logs. Nothing else. |
 | `runnerforge-scheduler` | none (signs OIDC tokens) | Identity that `/sweep` accepts |
 
-These are the runtime identities (`iam.tf`, `runner_vm.tf`, `scheduler.tf`). CI authenticates through
+These are the runtime identities (`iam.tf`, `runner_vm.tf`, `scheduler.tf`, `firestore.tf`). CI authenticates through
 Workload Identity Federation with its own service accounts (`wif.tf`, `runner_image.tf`, `terraform_ci.tf`).
 
 ## What changes when
 
 | Layer | Owns | Changes | Tool |
 | --- | --- | --- | --- |
-| Infrastructure | Cloud Run service, IAM, NAT, scheduler, observability, quotas | On merge, after approval | Terraform via CI |
+| Infrastructure | Cloud Run service, IAM, NAT, scheduler, observability, quotas, Firestore job store | On merge, after approval | Terraform via CI |
 | Image | Runner binary, Docker, OS packages | On a `runner-image` release | Packer via CI |
 | Per job | One VM per queued job, deleted on completion | Every webhook | Orchestrator |
 
