@@ -82,6 +82,16 @@ resource "google_cloud_run_v2_service" "orchestrator" {
         name  = "ALLOWED_INSTALLATION_IDS"
         value = join(",", var.allowed_installation_ids)
       }
+      # Per-job store (ADR-018, firestore.tf). Like the allow-list, takes effect
+      # with the next orchestrator release.
+      env {
+        name  = "JOB_STORE"
+        value = "firestore"
+      }
+      env {
+        name  = "FIRESTORE_DATABASE"
+        value = google_firestore_database.runnerforge.name
+      }
       # --- File mount for the PEM private key ---
       volume_mounts {
         name       = "github-app-private-key"
