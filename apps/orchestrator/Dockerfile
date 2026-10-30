@@ -11,7 +11,7 @@ FROM ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d
 # public.ecr.aws hit its shared-IP quota (429 toomanyrequests) on GitHub-hosted
 # runners; mirror.gcr.io serves the identical image (same index digest) and
 # Renovate looks updates up on Docker Hub (see renovate.json registryAliases).
-FROM mirror.gcr.io/library/python:3.15-slim@sha256:80cd82871b55326f05d4c3a3b714b371b0e9833891de4be4eb4b99d3092e0029 AS base
+FROM mirror.gcr.io/library/python:3.15-slim@sha256:94d3426f1def7db4a106a232ac121bfd975393e5dfd40a619b955fae45fe7913 AS base
 
 # Pull latest OS-level security patches at build time. The python:3.14-slim
 # tag itself lags behind Debian's security repo by days when a CVE drops;
