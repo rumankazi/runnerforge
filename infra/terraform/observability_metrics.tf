@@ -110,8 +110,9 @@ resource "google_logging_metric" "vm_creation_outcome_count" {
 # ---------------------------------------------------------------------------
 
 # Counts every submitted VM deletion request. The `reason` label slices
-# webhook-completion deletions from sweep-driven (orphan) deletions —
-# sustained growth on the sweep side signals webhook-path failures.
+# webhook-completion deletions from orphan deletions by the reconciler
+# (`reconcile`, every 5 min) and the daily sweep (`sweep`). Sustained growth
+# on either signals VMs the webhook path didn't delete.
 resource "google_logging_metric" "vm_deletion_count" {
   name   = "vm_deletion_count"
   filter = <<-EOT
@@ -535,6 +536,33 @@ resource "google_logging_metric" "reconcile_started_count" {
   }
 
   value_extractor = "EXTRACT(jsonPayload.started)"
+
+  bucket_options {
+    exponential_buckets {
+      num_finite_buckets = 12
+      growth_factor      = 2.0
+      scale              = 1.0
+    }
+  }
+}
+
+# Orphan VMs the reconciler deleted per run: runners GitHub no longer lists,
+# or lists idle with no job they could take. Sustained non-zero means VMs are
+# outliving their jobs (cancelled before pickup, lost completed webhooks).
+resource "google_logging_metric" "reconcile_orphans_deleted_count" {
+  name   = "reconcile_orphans_deleted_count"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Reconcile completed"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "DISTRIBUTION"
+    unit        = "1"
+  }
+
+  value_extractor = "EXTRACT(jsonPayload.orphans_deleted)"
 
   bucket_options {
     exponential_buckets {

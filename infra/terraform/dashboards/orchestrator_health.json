@@ -988,7 +988,7 @@
       {
         "height": 16,
         "widget": {
-          "title": "Reconciler per run: stuck / errors / started",
+          "title": "Reconciler per run: stuck / errors / started / orphans deleted",
           "xyChart": {
             "chartOptions": {
               "mode": "COLOR"
@@ -1041,10 +1041,26 @@
                   }
                 },
                 "legendTemplate": "started"
+              },
+              {
+                "minAlignmentPeriod": "300s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_DELTA"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/reconcile_orphans_deleted_count\" resource.type=\"cloud_run_revision\""
+                  }
+                },
+                "legendTemplate": "orphans deleted"
               }
             ],
             "yAxis": {
-              "label": "records",
+              "label": "per run",
               "scale": "LINEAR"
             }
           }
