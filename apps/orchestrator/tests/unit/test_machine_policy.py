@@ -43,7 +43,7 @@ def test_empty_label_list_returns_default_machine_no_spot():
 )
 def test_literal_gce_type_passes_through_verbatim(literal_token):
     policy = resolve_labels(["runnerforge", literal_token])
-    assert policy == MachinePolicy(machine_type=literal_token, spot=False)
+    assert policy == MachinePolicy(machine_type=literal_token, spot=False, literal=True)
 
 
 def test_spot_token_alone_uses_default_machine():
@@ -58,7 +58,9 @@ def test_spot_with_tshirt_token_combines_both():
 
 def test_spot_with_literal_combines_both():
     policy = resolve_labels(["runnerforge", "n2-standard-16", "spot"])
-    assert policy == MachinePolicy(machine_type="n2-standard-16", spot=True)
+    assert policy == MachinePolicy(
+        machine_type="n2-standard-16", spot=True, literal=True
+    )
 
 
 def test_only_spot_no_runnerforge_returns_defaults_with_spot():
@@ -148,7 +150,10 @@ def test_machine_policy_error_str_includes_reason_and_tokens():
             ["runnerforge", "Linux", "X64", "Small"],
             MachinePolicy("n2-standard-2", False),
         ),
-        (["RunnerForge", "N2-Standard-8"], MachinePolicy("n2-standard-8", False)),
+        (
+            ["RunnerForge", "N2-Standard-8"],
+            MachinePolicy("n2-standard-8", False, literal=True),
+        ),
     ],
     ids=["self-hosted", "all-defaults", "mixed-case-defaults", "mixed-case-literal"],
 )

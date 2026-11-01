@@ -63,7 +63,7 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Job store write failed` | WARNING | `job_store.py` | `operation`, `job_key`, `error_class` | `job_store_write_failure_count` (all but the background `record_fact:vm` and `record_fact:preempted`) |
 | `Installation event` | INFO | `admission.py` | `action`, `installation_id` | |
 | `Ignoring installation action` | INFO | `admission.py` | `action` (e.g. `new_permissions_accepted`) | |
-| `Admission shadow decision` | INFO | `admission.py` | `would_admit`, `reason` (`allowlisted`, `approved`, `not_approved`, `not_registered`, `registry_unavailable`), `allowlist_admits`, `agrees` | |
+| `Admission shadow decision` | INFO | `admission.py` | `would_admit`, `reason` (`allowlisted`, `approved`, `not_registered`, `pending`, `suspended`, `github_inactive`, `registry_unavailable`), `allowlist_admits`, `agrees` | |
 | `Registry read failed`, `Registry write failed` | WARNING | `registry.py` | `operation`, `installation_id`, `error_class` | |
 | `Registry backfill skipped` | WARNING | `admission.py` | `reason` (`list_failed`, `read_failed`), `error_class` (`list_failed`) | |
 | `Registry backfill could not confirm installation` | WARNING | `admission.py` | `installation_id`, `error_class` | |
@@ -166,14 +166,17 @@ All 21 are in `observability_metrics.tf`. All but one scope to `resource.type="c
 
 What the latency metrics measure (from `handlers.handle_in_progress`):
 
-- `runner_readiness_seconds`: GitHub's `started_at` for the job minus the time the orchestrator received the
-  `queued` webhook (stored as the `queued_received_at` VM label). This is the latency on our side.
-- `github_queued_delivery_lag_seconds`: our `queued` receipt time minus the job's `created_at`.
+- `runner_readiness_seconds`: GitHub's `started_at` for the job minus the later of the job's `created_at` and the
+  time the orchestrator received the `queued` webhook that booted the runner's VM (its `queued_received_at` label).
+  The runner's VM is the one in `runner_name`, which after a swap was booted for another job. This is the latency
+  on our side.
+- `github_queued_delivery_lag_seconds`: our `queued` receipt time minus the job's `created_at`, only when the
+  runner's VM was booted for this job.
 - `github_in_progress_delivery_lag_seconds`: our `in_progress` receipt time minus `started_at`.
 - `time_to_runner_seconds`: `started_at` minus `created_at`, so it includes GitHub's delivery delay.
 
-The first three are floored at zero to absorb clock skew, and are only emitted when the VM created for that job
-still exists at `in_progress` time (its labels hold `queued_received_at`).
+The first three are floored at zero to absorb clock skew, and are only emitted when the runner's VM still exists at
+`in_progress` time and its labels say RunnerForge made it for the same installation.
 
 Things to know when reading them:
 

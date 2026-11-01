@@ -138,8 +138,9 @@ async def test_shadow_admits_allowlisted_installation(
     [
         (None, False, False, "not_registered"),
         (RegistryEntry(7, "approved", "active"), False, True, "approved"),
-        (RegistryEntry(7, "pending", "active"), False, False, "not_approved"),
-        (RegistryEntry(7, "approved", "suspended"), False, False, "not_approved"),
+        (RegistryEntry(7, "pending", "active"), False, False, "pending"),
+        (RegistryEntry(7, "suspended", "active"), False, False, "suspended"),
+        (RegistryEntry(7, "approved", "suspended"), False, False, "github_inactive"),
         (None, True, False, "registry_unavailable"),
     ],
 )

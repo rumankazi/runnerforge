@@ -217,13 +217,14 @@ async def test_running_job_gets_in_progress_fact_once(world):
     "facts",
     [
         {"decision": {"kind": "policy_rejected"}},
+        {"decision": {"kind": "rejected", "reason": "limit_size"}},
         {"errored": {"stage": "token", "at": NOW}},
         {
             "decision": {"kind": "vm_submitted", "at": NOW - timedelta(minutes=1)},
             "errored": {"stage": "token", "at": NOW},
         },
     ],
-    ids=["rejected", "errored", "errored-after-decision"],
+    ids=["policy-rejected", "limit-rejected", "errored", "errored-after-decision"],
 )
 async def test_queued_job_that_failed_to_start_gets_no_vm_fact(world, facts):
     world.store.due = [(KEY, _record(**facts))]
@@ -233,6 +234,20 @@ async def test_queued_job_that_failed_to_start_gets_no_vm_fact(world, facts):
     assert world.store.facts == []
     world.preempted.assert_not_awaited()
     assert _patch(world)["next_check_at"] == NOW + timedelta(hours=1)
+
+
+async def test_deferred_job_is_waiting_not_stuck(world):
+    """ADR-019: no VM was made for it on purpose, so it is checked again on
+    the normal backoff with no verdict."""
+    world.store.due = [
+        (KEY, _record(decision={"kind": "deferred", "reason": "limit_concurrency"}))
+    ]
+
+    await run_reconcile(NOW)
+
+    assert world.store.facts == []
+    world.preempted.assert_not_awaited()
+    assert _patch(world)["next_check_at"] == NOW + timedelta(minutes=5)
 
 
 async def test_redelivery_after_error_is_judged_by_its_vm(world):

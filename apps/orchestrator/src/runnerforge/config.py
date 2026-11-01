@@ -59,6 +59,24 @@ def parse_job_store(value: str) -> Literal["none", "firestore"]:
     raise ValueError(f"JOB_STORE must be 'none' or 'firestore', got {value!r}")
 
 
+def parse_admission(value: str) -> Literal["allowlist", "registry"]:
+    """A typo raises at import, so a bad revision fails its canary instead of
+    admitting by the wrong rule."""
+    normalized = value.strip().lower()
+    if normalized == "allowlist":
+        return "allowlist"
+    if normalized == "registry":
+        return "registry"
+    raise ValueError(f"ADMISSION must be 'allowlist' or 'registry', got {value!r}")
+
+
+# Admission (ADR-019). "allowlist" (the default) admits by
+# ALLOWED_INSTALLATION_IDS alone, so an install without a registry still runs.
+# "registry" admits listed IDs as unlimited and everyone else by their
+# registry row and limits; an unset list then means nobody, not everyone.
+ADMISSION = parse_admission(os.environ.get("ADMISSION", "allowlist"))
+
+
 # Per-job store (ADR-018). "none" (the default) writes nothing, so an install
 # without Firestore still runs.
 JOB_STORE = parse_job_store(os.environ.get("JOB_STORE", "none"))

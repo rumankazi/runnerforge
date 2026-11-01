@@ -1,5 +1,7 @@
+import asyncio
 import logging
 from dataclasses import replace
+from datetime import timedelta
 from typing import Any, Literal
 
 from opentelemetry import trace
@@ -10,10 +12,14 @@ from opentelemetry.trace import (
     set_span_in_context,
 )
 
+from runnerforge.admission import ALLOWLISTED, Admission, exceeds_size
 from runnerforge.compute_client import (
+    ACTIVE_VMS_TIMEOUT_SECONDS,
     GITHUB_REPO_URL_PREFIX,
+    MAX_VM_RUN_DURATION,
     OperationHandle,
     PreemptionCheckRequest,
+    active_vm_names,
     create_vm,
     delete_vm,
     get_vm_labels_by_job,
@@ -56,17 +62,30 @@ def _webhook_span_context(
     )
 
 
+# Added to a limited tenant's runtime cap for the VM's boot (ADR-019).
+_BOOT_ALLOWANCE = timedelta(minutes=15)
+
+
 def _log_queued_outcome(
     outcome: Literal[
-        "vm_submitted", "already_exists", "policy_rejected", "already_completed"
+        "vm_submitted",
+        "already_exists",
+        "policy_rejected",
+        "already_completed",
+        "rejected",
+        "deferred",
     ],
+    reason: str | None = None,
 ) -> None:
     """One line per queued event that reached a deliberate decision. The
     lost_webhook_ratio alert divides these by queued "Webhook event received"
     lines, so only a queued event with NO outcome (an exception, a crash)
     counts as lost. Rejections, duplicates and late deliveries are decisions,
     not losses."""
-    logger.info("Queued webhook outcome", extra={"outcome": outcome})
+    extra: dict[str, str] = {"outcome": outcome}
+    if reason is not None:
+        extra["reason"] = reason
+    logger.info("Queued webhook outcome", extra=extra)
 
 
 async def _record_errored(
@@ -82,7 +101,7 @@ async def _record_errored(
 
 
 async def handle_queued(
-    event: WorkflowJobEvent, received_at: float
+    event: WorkflowJobEvent, received_at: float, admission: Admission = ALLOWLISTED
 ) -> OperationHandle | None:
     # Anchor on the outer (auto-instrumented `POST /webhook`) server span —
     # captured BEFORE we enter our own span. handle_in_progress later parents
@@ -102,7 +121,8 @@ async def handle_queued(
         span.set_attribute("run_attempt", event.workflow_job.run_attempt)
 
         # Job record (ADR-018). Every store call is bounded and fails open.
-        store = get_job_store()
+        # Installations never approved get none (ADR-019).
+        store = get_job_store() if admission.record else NoopJobStore()
         key = job_key(
             event.workflow_job.run_id,
             event.workflow_job.id,
@@ -122,6 +142,16 @@ async def handle_queued(
             # request's other writes, so a degraded store costs one 2 s bound
             # per webhook, not several. The reconciler fills what it can.
             store = NoopJobStore()
+
+        if not admission.admitted:
+            logger.warning(
+                "Installation not admitted", extra={"reason": admission.reason}
+            )
+            await store.record_fact(
+                key, base, "decision", {"kind": "rejected", "reason": admission.reason}
+            )
+            _log_queued_outcome("rejected", admission.reason)
+            return None
 
         # Get requested machine type from labels
         try:
@@ -146,9 +176,77 @@ async def handle_queued(
             _log_queued_outcome("policy_rejected")
             return None
         span.set_attribute("policy.machine_type", policy.machine_type)
-        span.set_attribute("policy.spot", policy.spot)
-
         installation_id = event.installation.id
+        vm_name = f"runnerforge-{event.workflow_job.run_id}-{event.workflow_job.id}-{event.workflow_job.run_attempt}"
+        spot = policy.spot
+        max_run_duration = MAX_VM_RUN_DURATION
+        deferral_unrecorded = False
+        limits = admission.limits
+        if limits is not None:
+            if exceeds_size(policy, limits):
+                logger.warning(
+                    "Limit rejected",
+                    extra={
+                        "reason": "limit_size",
+                        "machine_type": policy.machine_type,
+                        "max_size": limits.max_size,
+                    },
+                )
+                await store.record_fact(
+                    key,
+                    base,
+                    "decision",
+                    {
+                        "kind": "rejected",
+                        "reason": "limit_size",
+                        "machine_type": policy.machine_type,
+                    },
+                )
+                _log_queued_outcome("rejected", "limit_size")
+                return None
+            spot = spot or limits.spot_only
+            max_run_duration = (
+                timedelta(minutes=limits.max_runtime_minutes) + _BOOT_ALLOWANCE
+            )
+            try:
+                # to_thread can't be cancelled, so the list has its own
+                # timeout too; this bounds the wait either way.
+                async with asyncio.timeout(ACTIVE_VMS_TIMEOUT_SECONDS + 1):
+                    names = await active_vm_names(installation_id)
+            except Exception as exc:  # noqa: BLE001
+                # Limits are soft and GCE quotas are the backstop: admit.
+                logger.warning(
+                    "Concurrency check failed, admitting",
+                    extra={"error_class": type(exc).__name__},
+                )
+                names = set()
+            # A redelivered `queued` finds its own VM: that's a duplicate for
+            # create_vm to report, not a reason to defer.
+            active = len(names - {vm_name})
+            if vm_name not in names and active >= limits.max_concurrent_vms:
+                deferred = await store.record_fact(
+                    key,
+                    base,
+                    "decision",
+                    {
+                        "kind": "deferred",
+                        "reason": "limit_concurrency",
+                        "active_vms": active,
+                        "machine_type": policy.machine_type,
+                        "spot": spot,
+                    },
+                )
+                if deferred:
+                    # The reconciler starts it when a slot frees (ADR-019).
+                    logger.info("Job deferred", extra={"active_vms": active})
+                    _log_queued_outcome("deferred", "limit_concurrency")
+                    return None
+                # A deferral nobody recorded would be lost silently.
+                logger.warning(
+                    "Deferral not recorded, admitting", extra={"active_vms": active}
+                )
+                deferral_unrecorded = True
+        span.set_attribute("policy.spot", spot)
         try:
             installation_token = await get_installation_token(installation_id)
             registration_token = await get_registration_token(
@@ -162,8 +260,6 @@ async def handle_queued(
         logger.info("Registration token received")
 
         # Create the VM with the registration token metadata
-        vm_name = f"runnerforge-{event.workflow_job.run_id}-{event.workflow_job.id}-{event.workflow_job.run_attempt}"
-
         metadata = {
             "registration-token": registration_token,
             "repo-url": f"{GITHUB_REPO_URL_PREFIX}{event.repository.full_name}",
@@ -196,26 +292,58 @@ async def handle_queued(
             operation = await create_vm(
                 instance_name=vm_name,
                 machine_type=policy.machine_type,
-                spot=policy.spot,
+                spot=spot,
                 labels=labels.model_dump(),
                 metadata=metadata,
+                max_run_duration=max_run_duration,
             )
         except Exception as exc:
             await _record_errored(store, key, base, "gce_insert", exc)
             raise
         # create_vm returns None when the VM already exists (duplicate delivery).
         kind = "vm_submitted" if operation else "already_exists"
-        await store.record_fact(
-            key,
-            base,
-            "decision",
-            {"kind": kind, "machine_type": policy.machine_type, "spot": policy.spot},
+        decision: dict[str, Any] = {
+            "kind": kind,
+            "machine_type": policy.machine_type,
+            "spot": spot,
+        }
+        if deferral_unrecorded:
+            decision["deferral_unrecorded"] = True
+        await store.record_fact(key, base, "decision", decision)
+        _log_queued_outcome(
+            kind, "deferral_unrecorded" if deferral_unrecorded else None
         )
-        _log_queued_outcome(kind)
         if operation is None:
             return None
         # The watcher records the `vm` fact with these.
         return replace(operation, job_key=key, job_base=base)
+
+
+async def _runner_vm_labels(event: WorkflowJobEvent) -> dict[str, str] | None:
+    """Labels of the VM running the job. GitHub gives a queued job to any
+    idle runner with matching labels, so that can be the VM made for another
+    job; readiness then runs from that VM's admission, whichever job it was
+    made for (ADR-019), and neither a swap nor a deferral reads as slow
+    registration."""
+    runner_name = event.workflow_job.runner_name
+    if not runner_name:
+        return await get_vm_labels_by_job(
+            job_id=str(event.workflow_job.id),
+            run_id=str(event.workflow_job.run_id),
+            run_attempt=str(event.workflow_job.run_attempt),
+        )
+    if not runner_name.startswith("runnerforge-"):
+        return None
+    labels = await get_vm_labels_by_name(runner_name)
+    # Whoever registers a runner chooses its name: trust the VM only if its
+    # own labels say we made it for this installation.
+    if (
+        labels is None
+        or labels.get("runner") != "runnerforge"
+        or labels.get("installation_id") != str(event.installation.id)
+    ):
+        return None
+    return labels
 
 
 async def handle_in_progress(event: WorkflowJobEvent, received_at: float):
@@ -239,11 +367,7 @@ async def handle_in_progress(event: WorkflowJobEvent, received_at: float):
     """
     # Labels lookup BEFORE starting our own span so we can parent it under
     # the queued request when the VM exists.
-    vm_labels = await get_vm_labels_by_job(
-        job_id=str(event.workflow_job.id),
-        run_id=str(event.workflow_job.run_id),
-        run_attempt=str(event.workflow_job.run_attempt),
-    )
+    vm_labels = await _runner_vm_labels(event)
     queued_ctx = (
         _webhook_span_context(
             vm_labels.get("webhook_trace_id", ""), vm_labels.get("webhook_span_id", "")
@@ -297,9 +421,13 @@ async def handle_in_progress(event: WorkflowJobEvent, received_at: float):
         if event.workflow_job.started_at and queued_received_at_str:
             queued_received_at_float = float(queued_received_at_str)
             started_at_epoch = event.workflow_job.started_at.timestamp()
-            runner_readiness_seconds = max(
-                0.0, started_at_epoch - queued_received_at_float
-            )
+            # A runner already waiting when the job was created (an idle VM
+            # left by a cancelled job) is ready at once: start from the later
+            # of the VM's admission and the job's creation.
+            ready_from = queued_received_at_float
+            if event.workflow_job.created_at:
+                ready_from = max(ready_from, event.workflow_job.created_at.timestamp())
+            runner_readiness_seconds = max(0.0, started_at_epoch - ready_from)
             in_progress_delivery_lag = max(0.0, received_at - started_at_epoch)
 
             extras: dict[str, float | str | int] = {
@@ -308,7 +436,12 @@ async def handle_in_progress(event: WorkflowJobEvent, received_at: float):
                 "runner_readiness_seconds": runner_readiness_seconds,
                 "github_in_progress_delivery_lag_seconds": in_progress_delivery_lag,
             }
-            if event.workflow_job.created_at:
+            # The queued delivery lag is this job's only if the VM was made
+            # for it.
+            own_vm = vm_labels is not None and vm_labels.get("job_id") == str(
+                event.workflow_job.id
+            )
+            if event.workflow_job.created_at and own_vm:
                 created_at_epoch = event.workflow_job.created_at.timestamp()
                 extras["github_queued_delivery_lag_seconds"] = max(
                     0.0, queued_received_at_float - created_at_epoch

@@ -238,6 +238,11 @@ async def _reconcile_one(
         # No VM was made for it; the record already says why.
         await _reschedule(store, key, rec, now, slow=True)
         return
+    if _decision_kind(rec) == "deferred":
+        # Waiting for a free slot under its installation's limit (ADR-019),
+        # not stuck: no VM was made for it on purpose.
+        await _reschedule(store, key, rec, now)
+        return
     own_vm = f"runnerforge-{key}"
     if any(vm.name == own_vm for vm in vms) and own_vm not in busy_runners:
         if not isinstance(rec.get("vm"), dict):
@@ -264,10 +269,16 @@ async def _reconcile_one(
     await _reschedule(store, key, rec, now)
 
 
+def _decision_kind(rec: dict[str, Any]) -> str | None:
+    decision = rec.get("decision")
+    return decision.get("kind") if isinstance(decision, dict) else None
+
+
 def _failed_to_start(rec: dict[str, Any]) -> bool:
     decision = rec.get("decision") if isinstance(rec.get("decision"), dict) else None
     errored = rec.get("errored") if isinstance(rec.get("errored"), dict) else None
-    if decision is not None and decision.get("kind") == "policy_rejected":
+    # Label policy, or a tenant's limit or admission (ADR-019).
+    if _decision_kind(rec) in ("policy_rejected", "rejected"):
         return True
     if errored is None:
         return False

@@ -83,8 +83,9 @@ class JobStore(Protocol):
         fact: dict[str, Any],
         source: Source = "webhook",
         reopen: bool = True,
-    ) -> None:
-        """Merge one fact plus the base fields into the job's record.
+    ) -> bool:
+        """Merge one fact plus the base fields into the job's record, and
+        report whether it was written.
 
         `completed` closes the record. Other facts reopen it unless
         `reopen=False`, for facts that can land after `completed`
@@ -158,8 +159,8 @@ class NoopJobStore:
         fact: dict[str, Any],
         source: Source = "webhook",
         reopen: bool = True,
-    ) -> None:
-        return None
+    ) -> bool:
+        return False
 
     async def list_due(self, now: datetime, limit: int) -> list[Record]:
         return []
@@ -218,7 +219,7 @@ class FirestoreJobStore:
         fact: dict[str, Any],
         source: Source = "webhook",
         reopen: bool = True,
-    ) -> None:
+    ) -> bool:
         data: dict[str, Any] = {
             **base,
             name: {**fact, "at": datetime.now(UTC), "source": source},
@@ -237,6 +238,8 @@ class FirestoreJobStore:
                     await self._merge_keeping_open(doc, data)
         except Exception as exc:  # noqa: BLE001
             _log_failure(f"record_fact:{name}", key, exc)
+            return False
+        return True
 
     async def _merge_keeping_open(self, doc, data: dict[str, Any]) -> None:
         """For facts that can land after `completed` (background tasks only):

@@ -10,9 +10,15 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from opentelemetry import trace
 
 from runnerforge import compute_client, github_client, job_store, registry
-from runnerforge.admission import handle_installation_event, log_shadow_admission
+from runnerforge.admission import (
+    ALLOWLISTED,
+    decide_admission,
+    handle_installation_event,
+    log_shadow_admission,
+)
 from runnerforge.compute_client import cross_check_preemption, wait_for_vm_creation
 from runnerforge.config import (
+    ADMISSION,
     ALLOWED_INSTALLATION_IDS,
     EXPECTED_AUDIENCE,
     EXPECTED_SCHEDULER_SA_EMAIL,
@@ -46,6 +52,19 @@ def installation_allowed(installation_id: int) -> bool:
 
 
 def log_admission_mode() -> None:
+    if ADMISSION == "registry":
+        logger.info(
+            "Admission by tenant registry",
+            extra={
+                "allowed_installation_count": len(ALLOWED_INSTALLATION_IDS or ()),
+            },
+        )
+        if not registry.get_registry().enabled:
+            logger.warning(
+                "ADMISSION=registry without a registry: only allow-listed "
+                "installations can create VMs"
+            )
+        return
     if ALLOWED_INSTALLATION_IDS is None:
         logger.warning(
             "ALLOWED_INSTALLATION_IDS unset: every installation can create VMs"
@@ -60,7 +79,6 @@ def log_admission_mode() -> None:
 # Setup client context lifespan and FastAPI App
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log_admission_mode()
     await github_client.init_http_client()
     compute_client.init_compute_client()
     compute_client.init_runner_image()
@@ -68,6 +86,8 @@ async def lifespan(app: FastAPI):
     compute_client.init_logging_client()
     await job_store.init_job_store()
     registry.init_registry(job_store.get_client())
+    # After the registry, so registry mode can say whether it has one.
+    log_admission_mode()
     logger.info("Clients initialized")
     yield
     await github_client.close_http_client()
@@ -207,7 +227,10 @@ async def webhook(
     # Admission: only `queued` creates VMs, so only `queued` is gated.
     # in_progress/completed always pass — VMs of an installation removed from
     # the list mid-job must still be deleted when their jobs finish.
-    if event.action == "queued":
+    # ADMISSION=allowlist turns installations away here, before the
+    # lost-webhook anchor; ADMISSION=registry decides after it (below), so
+    # every rejection's outcome line has a matching anchor line.
+    if event.action == "queued" and ADMISSION == "allowlist":
         admitted = installation_allowed(event.installation.id)
         # ADR-019 step 1: log what the registry would decide; it decides nothing.
         await log_shadow_admission(event.installation.id, admitted)
@@ -228,7 +251,26 @@ async def webhook(
     # App is public, anyone's in_progress/completed events would otherwise
     # grow the store. Written before the handler, so a failing GCE lookup in
     # the handler doesn't lose the fact. Bounded and fail-open.
-    record_job = installation_allowed(event.installation.id)
+    if ADMISSION == "registry":
+        # Records follow "allow-listed, or approved at least once", so a
+        # tenant suspended mid-job still gets its in_progress/completed facts.
+        admission = await decide_admission(event.installation.id)
+        if event.action == "queued":
+            logger.info(
+                "Admission decision",
+                extra={
+                    "admitted": admission.admitted,
+                    "reason": admission.reason,
+                    "limited": admission.limits is not None,
+                },
+            )
+    else:
+        admission = ALLOWLISTED
+    record_job = (
+        admission.record
+        if ADMISSION == "registry"
+        else (installation_allowed(event.installation.id))
+    )
     key = job_key(
         event.workflow_job.run_id, event.workflow_job.id, event.workflow_job.run_attempt
     )
@@ -236,7 +278,9 @@ async def webhook(
 
     match event.action:
         case "queued":
-            handle = await handle_queued(event, received_at=received_at)
+            handle = await handle_queued(
+                event, received_at=received_at, admission=admission
+            )
             if handle is not None:
                 # Snapshot context now; background task re-installs it before polling
                 # so log correlation (request_id/job_id/repo) survives across the

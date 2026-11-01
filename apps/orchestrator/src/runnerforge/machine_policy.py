@@ -9,6 +9,8 @@ SIZE_TABLE = {
     "xlarge": "n2-standard-16",
 }
 DEFAULT_MACHINE_TYPE = "n2-standard-4"
+# vCPUs of each size's machine type, for limits (ADR-019).
+SIZE_VCPUS = {"small": 2, "medium": 4, "large": 8, "xlarge": 16}
 LITERAL_RE = re.compile(r"^[a-z][a-z0-9]+-[a-z]+(?:-\d+)?$")
 # Labels GitHub applies to every self-hosted runner we boot (Linux x64; we don't
 # pass --no-default-labels). GitHub recommends `self-hosted` in runs-on, so
@@ -21,6 +23,8 @@ GITHUB_DEFAULT_LABELS = frozenset({"self-hosted", "linux", "x64"})
 class MachinePolicy:
     machine_type: str
     spot: bool
+    # A GCE type named in the labels, not a size label (or no size label).
+    literal: bool = False
 
 
 @dataclass
@@ -36,6 +40,7 @@ def resolve_labels(labels: list[str]) -> MachinePolicy:
     """Processes the list of labels to allocate proper machine policy for VM instance creation"""
     chosen: str | None = None
     spot = False
+    literal = False
     unknown: list[str] = []
     for raw in labels:
         # GitHub matches labels case-insensitively; the payload keeps the
@@ -52,6 +57,7 @@ def resolve_labels(labels: list[str]) -> MachinePolicy:
             gce_type = SIZE_TABLE[t]
         elif LITERAL_RE.match(t):
             gce_type = t
+            literal = True
         else:
             gce_type = None
 
@@ -69,4 +75,6 @@ def resolve_labels(labels: list[str]) -> MachinePolicy:
         chosen = gce_type
     if unknown:
         raise MachinePolicyError("unknown_token", unknown)
-    return MachinePolicy(machine_type=chosen or DEFAULT_MACHINE_TYPE, spot=spot)
+    return MachinePolicy(
+        machine_type=chosen or DEFAULT_MACHINE_TYPE, spot=spot, literal=literal
+    )

@@ -116,7 +116,7 @@ async def test_noop_store_reports_unknown_and_writes_nothing():
     store = NoopJobStore()
 
     assert await store.create_if_absent(KEY, BASE) is CreateResult.UNKNOWN
-    assert await store.record_fact(KEY, BASE, "decision", {"kind": "x"}) is None
+    assert await store.record_fact(KEY, BASE, "decision", {"kind": "x"}) is False
 
 
 # --- Firestore store: create_if_absent ---
@@ -216,10 +216,11 @@ async def test_record_fact_merges_fact_and_base_fields():
     doc = MagicMock()
     doc.set = AsyncMock()
 
-    await FirestoreJobStore(_client_with_doc(doc)).record_fact(
+    written = await FirestoreJobStore(_client_with_doc(doc)).record_fact(
         KEY, BASE, "decision", {"kind": "vm_submitted"}
     )
 
+    assert written is True
     doc.set.assert_awaited_once()
     (data,), kwargs = doc.set.await_args
     assert kwargs == {"merge": True, "retry": job_store._RETRY}
@@ -254,7 +255,7 @@ async def test_record_fact_fails_open(caplog):
             KEY, BASE, "in_progress", {"runner_name": "runnerforge-111-222-1"}
         )
 
-    assert result is None
+    assert result is False
     [record] = _failure_records(caplog)
     assert getattr(record, "operation", None) == "record_fact:in_progress"
     assert getattr(record, "error_class", None) == "RuntimeError"

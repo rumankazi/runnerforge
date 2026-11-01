@@ -95,6 +95,8 @@ class FakeJobStore:
         from runnerforge.job_store import CreateResult
 
         self.create_result = CreateResult.CREATED
+        # What record_fact reports: whether the write landed.
+        self.record_result = True
         self.created: list[tuple[str, dict]] = []
         self.facts: list[dict] = []
         # Reconciler reads: what list_due / list_open return, and patches made.
@@ -117,6 +119,7 @@ class FakeJobStore:
                 "reopen": reopen,
             }
         )
+        return self.record_result
 
     async def list_due(self, now, limit):
         return self.due[:limit]
