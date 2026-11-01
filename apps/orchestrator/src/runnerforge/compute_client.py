@@ -22,7 +22,8 @@ from runnerforge.config import (
 from runnerforge.job_store import get_job_store
 from runnerforge.models import RunnerForgeVmLabels, VmInfo
 
-_KNOWN_MACHINE_TYPES: set[str] | None = None
+# Machine type name -> vCPUs in GCP_ZONE; None when the cache is degraded.
+_KNOWN_MACHINE_TYPES: dict[str, int] | None = None
 _logging_client: gcp_logging.Client | None = None
 _RUNNER_IMAGE_NAME: str | None = None  # full GCE name, used as source_image pin
 _RUNNER_IMAGE_VERSION: str | None = None  # dotted semver, used in logs/metrics
@@ -182,7 +183,7 @@ def init_machine_types_cache(zone: str = GCP_ZONE) -> None:
     try:
         client = compute_v1.MachineTypesClient()
         request = compute_v1.ListMachineTypesRequest(project=GCP_PROJECT_ID, zone=zone)
-        types = [t.name for t in client.list(request=request)]
+        types = {t.name: t.guest_cpus for t in client.list(request=request)}
         client.transport.close()
     except (GoogleAPIError, DefaultCredentialsError) as e:
         logger.warning(
@@ -198,7 +199,7 @@ def init_machine_types_cache(zone: str = GCP_ZONE) -> None:
         )
         _KNOWN_MACHINE_TYPES = None
         return
-    _KNOWN_MACHINE_TYPES = set(types)
+    _KNOWN_MACHINE_TYPES = types
     logger.info(
         "Loaded machine types cache",
         extra={"zone": zone, "count": len(_KNOWN_MACHINE_TYPES)},
@@ -210,6 +211,13 @@ def is_valid_machine_type(machine_type: str) -> bool:
     if _KNOWN_MACHINE_TYPES is None:
         return True
     return machine_type in _KNOWN_MACHINE_TYPES
+
+
+def machine_type_vcpus(machine_type: str) -> int | None:
+    """vCPUs of a machine type, or None if unknown or the cache is degraded."""
+    if _KNOWN_MACHINE_TYPES is None:
+        return None
+    return _KNOWN_MACHINE_TYPES.get(machine_type)
 
 
 async def was_preempted(vm_name: str) -> bool:
@@ -295,6 +303,7 @@ async def create_vm(
     labels: dict[str, str],
     spot: bool = False,
     metadata: dict[str, str] | None = None,
+    max_run_duration: timedelta = MAX_VM_RUN_DURATION,
     data_disk_size_gb: int = _DATA_DISK_SIZE_GB,
     zone: str = GCP_ZONE,
     project_id: str = GCP_PROJECT_ID,
@@ -380,7 +389,7 @@ async def create_vm(
         scheduling = compute_v1.Scheduling(
             instance_termination_action="DELETE",
             max_run_duration=compute_v1.Duration(
-                seconds=int(MAX_VM_RUN_DURATION.total_seconds())
+                seconds=int(max_run_duration.total_seconds())
             ),
         )
         if spot:
@@ -605,6 +614,10 @@ async def get_vm_labels_by_name(
     ValidationError like RunnerForgeVmLabels.model_validate would.
     """
     assert _compute_client is not None
+    # Callers pass runner names from payloads, chosen by whoever registered
+    # the runner. GCE answers 400, not 404, for a name it can't hold.
+    if not _GCE_INSTANCE_NAME_RE.fullmatch(instance_name):
+        return None
     with tracer.start_as_current_span("compute.get_vm_labels_by_name") as span:
         span.set_attribute("instance_name", instance_name)
         try:
@@ -775,3 +788,38 @@ async def list_runnerforge_vms(
         span.set_attribute("result_count", len(valid_vms))
         span.set_attribute("skipped_malformed_count", skipped_malformed)
         return valid_vms
+
+
+# Statuses that hold a slot under a concurrency limit (ADR-019): not VMs being
+# stopped or deleted.
+_ACTIVE_STATUSES = frozenset({"PROVISIONING", "STAGING", "RUNNING"})
+
+
+# On the `queued` path: a slow list fails the check (and admits) instead of
+# eating GitHub's 10 s.
+ACTIVE_VMS_TIMEOUT_SECONDS = 2.0
+
+
+async def active_vm_names(
+    installation_id: int, zone: str = GCP_ZONE, project_id: str = GCP_PROJECT_ID
+) -> set[str]:
+    """Names of the installation's RunnerForge VMs that count against its
+    limit."""
+    assert _compute_client is not None
+    with tracer.start_as_current_span("compute.active_vm_names") as span:
+        span.set_attribute("installation_id", installation_id)
+        client = _compute_client
+        request = compute_v1.ListInstancesRequest()
+        request.zone = zone
+        request.project = project_id
+        request.filter = (
+            f"labels.runner=runnerforge AND labels.installation_id={installation_id}"
+        )
+        instances = await asyncio.to_thread(
+            lambda: list(
+                client.list(request=request, timeout=ACTIVE_VMS_TIMEOUT_SECONDS)
+            )
+        )
+        names = {i.name for i in instances if i.status in _ACTIVE_STATUSES}
+        span.set_attribute("result_count", len(names))
+        return names

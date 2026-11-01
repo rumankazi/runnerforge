@@ -113,12 +113,16 @@ A re-run of the job has a new `run_attempt`, so it gets a new name and a new VM.
 
 ## In progress
 
-There is no VM action. The orchestrator finds the VM booted for this job by its `job_id`, `run_id` and
-`run_attempt` labels, then:
+There is no VM action. GitHub gives a queued job to any idle runner with matching labels, so the VM running the
+job can be one booted for another job. The orchestrator reads the VM named in `runner_name`, if its labels say
+RunnerForge made it for the same installation (without a `runner_name`, the VM booted for this job, found by its
+`job_id`, `run_id` and `run_attempt` labels), then:
 
-- parents this request's trace under the queued request's trace, so registration shows up as one trace;
-- logs `Runner registration outcome` with `runner_readiness_seconds`, the time from receiving the queued
-  webhook to the job starting. This is the source of the time-to-register SLO.
+- parents this request's trace under the trace of the queued request that booted that VM;
+- logs `Runner registration outcome` with `runner_readiness_seconds`: from the later of that VM's admission
+  (its `queued_received_at` label) and the job's `created_at`, to the job starting. A swapped VM then isn't slow
+  registration, and an idle VM left by a cancelled job counts as ready at once. This is the source of the
+  time-to-register SLO.
 
 ## Completed
 

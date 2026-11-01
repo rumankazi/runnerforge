@@ -10,7 +10,8 @@ import { Callout } from 'fumadocs-ui/components/callout';
 Email from "RunnerForge Alerts": **Time-to-Register SLO fast burn (10x over 1h)**, severity CRITICAL.
 
 The SLO (`observability_slos.tf`) is built on `runner_readiness_seconds`: the time from the orchestrator receiving
-a job's `queued` webhook to GitHub's `started_at` for that job. A 5-minute window is bad when more than 0.5% of its
+the `queued` webhook that booted the job's runner VM (the VM in `runner_name`), or from the job's `created_at` if
+that is later, to GitHub's `started_at` for that job. A 5-minute window is bad when more than 0.5% of its
 samples are over 300 s. The alert fires when the burn rate over the last hour is above 10.
 
 <Callout type="info" title="One slow job is enough">
@@ -56,7 +57,8 @@ gcloud logging read '
   with backoff each) or a slow GCE insert call. Compare the `github.*` and `compute.create_vm` spans in the trace.
 - High `duration_ms` on `VM creation outcome`: GCE took long to create the VM.
 - VM created quickly but readiness still high: the time went into boot, runner registration, or GitHub assigning the
-  job. Check the VM's boot output if it still exists:
+  job. The VM that ran the job is the one in the job's `runner_name`, which can be a VM booted for another job.
+  Check its boot output if it still exists:
 
   ```bash
   gcloud compute instances get-serial-port-output <VM_NAME> --zone=europe-west4-a --project=runnerforge

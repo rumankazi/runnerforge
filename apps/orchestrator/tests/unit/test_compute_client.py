@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -895,19 +895,20 @@ def test_create_vm_falls_back_to_family_alias_when_image_name_unset(monkeypatch)
 # -----------------------------------------------------------------------------
 
 
-def _mock_machine_type(name: str):
+def _mock_machine_type(name: str, guest_cpus: int = 2):
     """Build a MagicMock that mimics a GCE MachineType resource."""
     m = MagicMock()
     m.name = name
+    m.guest_cpus = guest_cpus
     return m
 
 
 def test_init_machine_types_cache_populates_cache_on_success(monkeypatch, caplog):
     mock_client = MagicMock()
     mock_client.list.return_value = [
-        _mock_machine_type("n2-standard-2"),
-        _mock_machine_type("n2-standard-4"),
-        _mock_machine_type("e2-small"),
+        _mock_machine_type("n2-standard-2", 2),
+        _mock_machine_type("n2-standard-4", 4),
+        _mock_machine_type("e2-small", 2),
     ]
     monkeypatch.setattr(
         "runnerforge.compute_client.compute_v1.MachineTypesClient",
@@ -919,9 +920,9 @@ def test_init_machine_types_cache_populates_cache_on_success(monkeypatch, caplog
         compute_client.init_machine_types_cache()
 
     assert compute_client._KNOWN_MACHINE_TYPES == {
-        "n2-standard-2",
-        "n2-standard-4",
-        "e2-small",
+        "n2-standard-2": 2,
+        "n2-standard-4": 4,
+        "e2-small": 2,
     }
     # The transport is closed after the one-shot list call — no client retained.
     mock_client.transport.close.assert_called_once()
@@ -947,7 +948,9 @@ def test_init_machine_types_cache_degrades_on_default_credentials_error(
         _raise,
     )
     # Pre-populate to a sentinel so we can verify the degraded path resets to None
-    monkeypatch.setattr("runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel"})
+    monkeypatch.setattr(
+        "runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel": 1}
+    )
 
     with caplog.at_level(logging.WARNING):
         compute_client.init_machine_types_cache()
@@ -973,7 +976,9 @@ def test_init_machine_types_cache_degrades_on_google_api_error(monkeypatch, capl
         "runnerforge.compute_client.compute_v1.MachineTypesClient",
         lambda: mock_client,
     )
-    monkeypatch.setattr("runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel"})
+    monkeypatch.setattr(
+        "runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel": 1}
+    )
 
     with caplog.at_level(logging.WARNING):
         compute_client.init_machine_types_cache()
@@ -998,7 +1003,9 @@ def test_init_machine_types_cache_degrades_on_empty_response(monkeypatch, caplog
         "runnerforge.compute_client.compute_v1.MachineTypesClient",
         lambda: mock_client,
     )
-    monkeypatch.setattr("runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel"})
+    monkeypatch.setattr(
+        "runnerforge.compute_client._KNOWN_MACHINE_TYPES", {"sentinel": 1}
+    )
 
     with caplog.at_level(logging.WARNING):
         compute_client.init_machine_types_cache()
@@ -1023,7 +1030,7 @@ def test_init_machine_types_cache_degrades_on_empty_response(monkeypatch, caplog
 def test_is_valid_machine_type_returns_true_for_cached_type(monkeypatch):
     monkeypatch.setattr(
         "runnerforge.compute_client._KNOWN_MACHINE_TYPES",
-        {"n2-standard-2", "n2-standard-4"},
+        {"n2-standard-2": 2, "n2-standard-4": 4},
     )
     assert compute_client.is_valid_machine_type("n2-standard-4") is True
 
@@ -1031,7 +1038,7 @@ def test_is_valid_machine_type_returns_true_for_cached_type(monkeypatch):
 def test_is_valid_machine_type_returns_false_for_uncached_type(monkeypatch):
     monkeypatch.setattr(
         "runnerforge.compute_client._KNOWN_MACHINE_TYPES",
-        {"n2-standard-2", "n2-standard-4"},
+        {"n2-standard-2": 2, "n2-standard-4": 4},
     )
     assert compute_client.is_valid_machine_type("n2-malformed-name") is False
 
@@ -1119,6 +1126,28 @@ def test_create_vm_caps_runtime_for_on_demand_vms_too(monkeypatch):
     assert scheduling.instance_termination_action == "DELETE"
     assert scheduling.max_run_duration.seconds == 6 * 3600 + 15 * 60
     assert scheduling.on_host_maintenance == ""
+
+
+def test_create_vm_uses_a_tenants_runtime_cap(monkeypatch):
+    """A limited tenant's cap (ADR-019) replaces the global one."""
+    mock_client = MagicMock()
+    mock_client.insert.return_value.name = "op-limited-1"
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
+
+    asyncio.run(
+        create_vm(
+            instance_name="test-limited-vm",
+            machine_type="n2-standard-4",
+            labels={"runner": "runnerforge"},
+            spot=True,
+            max_run_duration=timedelta(minutes=75),
+        )
+    )
+
+    scheduling = mock_client.insert.call_args.kwargs[
+        "request"
+    ].instance_resource.scheduling
+    assert scheduling.max_run_duration.seconds == 75 * 60
 
 
 def test_create_vm_labels_both_disks(monkeypatch):

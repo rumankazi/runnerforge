@@ -1,25 +1,115 @@
 """Admission by the tenant registry (ADR-019).
 
-Step 1 is shadow mode: admission still uses the env allow-list, and each
-`queued` logs what the registry would have decided next to it, so a wrong
-rejection shows up before the registry decides anything.
+With ADMISSION=allowlist (the default) the env allow-list admits, and each
+`queued` logs what the registry would have decided next to it (shadow mode),
+so a wrong rejection shows up before the registry decides anything. With
+ADMISSION=registry, `decide_admission` admits, and its limits apply.
 """
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
+from runnerforge.compute_client import machine_type_vcpus
 from runnerforge.config import ALLOWED_INSTALLATION_IDS
 from runnerforge.github_client import get_app_installation, list_app_installations
+from runnerforge.machine_policy import SIZE_TABLE, SIZE_VCPUS, MachinePolicy
 from runnerforge.models import AppInstallation, InstallationEvent
 from runnerforge.registry import (
+    BETA_DEFAULTS,
     Account,
     GitHubStatus,
+    Limits,
     RegistryUnavailable,
     get_cached_registry,
     get_registry,
 )
 
 logger = logging.getLogger(__name__)
+
+Reason = Literal[
+    "allowlisted",
+    "approved",
+    "not_registered",
+    "pending",
+    "suspended",
+    "github_inactive",
+    "registry_unavailable",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class Admission:
+    admitted: bool
+    reason: Reason
+    # None means unlimited.
+    limits: Limits | None = None
+    # Job records and the preemption cross-check: allow-listed, or approved
+    # at least once (`approved_at`), so strangers can't grow the store.
+    record: bool = False
+
+
+# What ADMISSION=allowlist gives every installation it lets through.
+ALLOWLISTED = Admission(admitted=True, reason="allowlisted", record=True)
+
+
+def _row_limits(installation_id: int, raw: object) -> Limits | None:
+    if raw is None:
+        # Approved without limits: only a hand edit does that.
+        return BETA_DEFAULTS
+    try:
+        limits = Limits.from_dict(raw)
+    except ValueError:
+        logger.warning(
+            "Registry limits invalid, using the beta defaults",
+            extra={"installation_id": installation_id},
+        )
+        return BETA_DEFAULTS
+    return None if limits.unlimited else limits
+
+
+async def decide_admission(installation_id: int) -> Admission:
+    """Registry-mode admission for one installation: allow-listed IDs are
+    always admitted and unlimited; others need an approved row of an
+    installation GitHub shows as active."""
+    if ALLOWED_INSTALLATION_IDS is not None and installation_id in (
+        ALLOWED_INSTALLATION_IDS
+    ):
+        return ALLOWLISTED
+    try:
+        entry = await get_cached_registry().get(installation_id)
+    except RegistryUnavailable:
+        return Admission(admitted=False, reason="registry_unavailable")
+    if entry is None:
+        return Admission(admitted=False, reason="not_registered")
+    record = entry.approved_at is not None
+    if entry.github_status != "active":
+        return Admission(admitted=False, reason="github_inactive", record=record)
+    if entry.state != "approved":
+        reason: Reason = "suspended" if entry.state == "suspended" else "pending"
+        return Admission(admitted=False, reason=reason, record=record)
+    return Admission(
+        admitted=True,
+        reason="approved",
+        limits=_row_limits(installation_id, entry.limits),
+        record=True,
+    )
+
+
+def exceeds_size(policy: MachinePolicy, limits: Limits) -> bool:
+    """Whether the job's machine is bigger than `max_size` allows. A literal
+    type needs `literal_machine_types` and is capped by vCPUs; with the
+    machine-types cache degraded its size is unknown, so it's refused."""
+    cap = SIZE_VCPUS[limits.max_size]
+    if not policy.literal:
+        size = next(k for k, v in SIZE_TABLE.items() if v == policy.machine_type)
+        return SIZE_VCPUS[size] > cap
+    if not limits.literal_machine_types:
+        return True
+    vcpus = machine_type_vcpus(policy.machine_type)
+    return vcpus is None or vcpus > cap
+
 
 # `installation` actions that change GitHub's view of an installation. Others
 # (e.g. new_permissions_accepted) don't affect admission.
@@ -65,30 +155,14 @@ async def log_shadow_admission(installation_id: int, allowlist_admits: bool) -> 
     allow-list did. Logs only; nothing acts on it."""
     if not get_registry().enabled:
         return
-    if ALLOWED_INSTALLATION_IDS is not None and installation_id in (
-        ALLOWED_INSTALLATION_IDS
-    ):
-        # Always admitted in registry mode (the owner's installation).
-        would_admit, reason = True, "allowlisted"
-    else:
-        try:
-            entry = await get_cached_registry().get(installation_id)
-        except RegistryUnavailable:
-            would_admit, reason = False, "registry_unavailable"
-        else:
-            if entry is None:
-                would_admit, reason = False, "not_registered"
-            elif entry.admitted:
-                would_admit, reason = True, "approved"
-            else:
-                would_admit, reason = False, "not_approved"
+    decision = await decide_admission(installation_id)
     logger.info(
         "Admission shadow decision",
         extra={
-            "would_admit": would_admit,
-            "reason": reason,
+            "would_admit": decision.admitted,
+            "reason": decision.reason,
             "allowlist_admits": allowlist_admits,
-            "agrees": would_admit == allowlist_admits,
+            "agrees": decision.admitted == allowlist_admits,
         },
     )
 

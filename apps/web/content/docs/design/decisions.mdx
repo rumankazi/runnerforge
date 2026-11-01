@@ -647,6 +647,8 @@ RunnerForge started as a single-owner tool. Opening it up raises a set of questi
   - Each run has a 120 s budget and each record 30 s; a run that runs out reports `more_due`. Records gain a `checks` counter for the backoff.
   - Reconciler queries get a 10 s bound (a scheduled request, not a webhook), and their failures log `Job store read failed`, which the write alert doesn't count. Its writes (`patch`, `record_fact:completed`, `record_fact:in_progress`) are counted.
   - The protocol gained `list_due`, `list_open` and `patch`; `get`, `list_by_installation` and `count_open` come with the dashboard.
+
+  **2026-11-01** ([ADR-019](#tenant-registry-install-to-register-admin-approval-per-installation-limits) step 3a): two decision kinds, `rejected` (with `reason`: `limit_size` plus `machine_type`, or `suspended` and `github_inactive` for a tenant approved before) and `deferred` (`reason: limit_concurrency`, `active_vms`), with their status rows. A decision admitted only because its deferral couldn't be stored carries `deferral_unrecorded: true`. `record_fact` reports whether its write landed, which is how a deferral knows it was stored. Records are gated on "allow-listed, or approved at least once" in registry mode.
 </Callout>
 
 ### Context
@@ -686,7 +688,7 @@ For facts outside requests: a Cloud Scheduler reconciler; a log sink to Pub/Sub 
 | `installation_id`, `repository_id`, `repo`, `run_id`, `job_id`, `run_attempt`, `labels` | Identity. `repo` is `owner/name`, needed to ask GitHub about the job. |
 | `queued_at`, `expire_at`, `schema_version` | `queued_at` is the payload's `workflow_job.created_at`, or the time received if that is missing. `expire_at` is `queued_at` plus 90 days and drives a TTL policy; it is exempt from indexing. |
 | `open`, `next_check_at` | `open` is `false` once the job is closed. `next_check_at` is when the reconciler should look at the job again. |
-| `decision` | `kind` (`vm_submitted`, `already_exists`, `policy_rejected`), plus `reason`, `offending_tokens`, `machine_type`, `spot` |
+| `decision` | `kind` (`vm_submitted`, `already_exists`, `policy_rejected`, `rejected`, `deferred`), plus `reason`, `offending_tokens`, `machine_type`, `spot`, `active_vms` |
 | `errored` | `stage` (`token` or `gce_insert`) and `error_class`, when the `queued` path raised before a decision |
 | `vm` | Creation `outcome` (`success`, `failure`, `timeout`, `missing`), `error_code`. `timeout` only means the watcher stopped polling; the VM may still have started. |
 | `in_progress`, `completed` | `runner_name`; `conclusion` |
@@ -699,6 +701,8 @@ Every fact is a sub-map that carries `at` and `source` (`webhook`, `watcher` or 
 | `completed` | Done, with `conclusion` and any `mid_job` preemption |
 | `in_progress` | Running |
 | `decision.kind = policy_rejected` | Rejected: fix `runs-on` (shows `reason`, `offending_tokens`) |
+| `decision.kind = rejected` | Limit reached: a smaller `runs-on` (`limit_size`), or not admitted (`suspended`, `github_inactive`) |
+| `decision.kind = deferred` | Waiting for a free runner |
 | `errored` newer than any `decision`, or `vm.outcome = failure` | Failed to start: re-run |
 | `preempted.phase = before_pickup`, or `vm.outcome = missing` | Stuck: cancel and re-run |
 | anything else | Starting. The dashboard shows it as late once it passes a threshold of its own, at least the 5-minute Time-to-Register SLO. |
@@ -787,6 +791,18 @@ Readers must tolerate missing fields and check `schema_version`, because a docum
 
 <Callout type="info" title="Revisions">
   **2026-10-30**: accepted with rollout step 1: the registry (`registry.py`), `installation` events and the hourly backfill (`admission.py`, run by the reconciler in the first 5 minutes of each hour), and shadow mode. Shadow mode checks approval only (limits come with step 3) and runs before the allow-list gate, so it also covers jobs the allow-list turns away. A row with no decision reads as `pending`; an installation with no row is `not_registered`. Every status event creates a missing row as `pending`, not only `created`. The backfill reads the rows before GitHub's listing and marks an installation `deleted` only after `GET /app/installations/{id}` returns 404, because a page-numbered listing can skip a live installation and later steps treat `deleted` as final. The registry shares the job store's Firestore client. The TTL on `installations.expire_at` ships in a separate Terraform change.
+
+  **2026-11-01**: rollout step 3 is split in three. **3a** (this change) brings admission on the webhook path behind `ADMISSION=allowlist`, the default, so production is unchanged; **3b** brings the reconciler's capacity starts; **3c** switches Terraform to `ADMISSION=registry` and adds the alert, applied only after 3b is released, because a deferral nothing starts would wait for GitHub's 24-hour cancel. Changes from the decision above:
+  - **Reasons are split:** `not_registered`, `pending`, `suspended` (by the owner), `github_inactive`, `limit_size` and `registry_unavailable` replace `not_approved`. Shadow mode logs the same reasons except `limit_size`, which only the job checks in registry mode produce.
+  - **One alert,** on `registry_unavailable` (at least 3 in 15 minutes, like the job store's). The alert on `not_approved` for installations approved before is dropped: it would fire on the owner's own suspends.
+  - **Literal machine types** are capped by vCPUs: allowed only with `literal_machine_types`, and only up to `max_size`'s vCPUs (the machine-types cache now keeps each type's `guestCpus`). With the cache degraded, a literal type's size is unknown, so a limited tenant's is rejected. A size label, or none (`medium`), is compared by its size.
+  - A rejection of a tenant approved before (`suspended`, `github_inactive`) is recorded, as the record gate says; one that was never approved is log-only.
+  - An approved row with no limits or invalid ones (only a hand edit makes either) gets the beta defaults, with a warning for invalid ones.
+  - If the concurrency count (a GCE list) fails, the job is admitted: limits are soft and the quotas are the backstop.
+  - Registry mode logs an `Admission decision` line for each `queued` (`admitted`, `reason`, `limited`). A typo in `ADMISSION` fails at startup.
+  - Readiness reads the `runner_name` VM only if its labels say RunnerForge made it for the same installation; without a `runner_name` it falls back to the job's own VM. It runs from the later of that VM's `queued_received_at` and the job's `created_at`, so an idle VM left by a cancelled job counts as ready at once, and the queued delivery lag is logged only when the VM was made for this job. This applies in both modes. A runner name GCE can't hold is not looked up.
+  - The concurrency count leaves out the job's own VM, so a redelivered `queued` is a duplicate for `create_vm`, not a deferral. The GCE list is bounded at 2 s; a timeout admits.
+  - The reconciler treats a `rejected` decision like `policy_rejected` (no VM, slow backoff, no verdict) and a `deferred` one as waiting: normal backoff, never stuck. Starting deferred jobs comes with 3b.
 
   **2026-11-01**: rollout step 2, `runnerforge-admin` ([Approving tenants](/docs/guides/runbooks/tenants)). It uses the sync Firestore client and fails loudly instead of open. Each write shows the change and asks first (`--yes` skips), and is conditional on the row's update time, so a concurrent webhook write fails it instead of being overwritten. `approve` writes the beta defaults only when a row has no limits, so re-approving after a suspend keeps custom ones. It refuses rows that don't exist, and approving or limiting a `deleted` one. `set-limits` merges named limits; `--unlimited` and `--defaults` replace them all. Limits are validated by a shared `Limits` type in `registry.py` (1–30 VMs, 1–360 minutes, a size from `SIZE_TABLE`), which step 3 also uses to read them. Each row keeps its last 20 decisions in a `history` array, which expires with the row; a subcollection wouldn't, because TTL doesn't delete documents under a row. After merge, the owner approves their own installation with `approve <id> --unlimited`; it also stays in `ALLOWED_INSTALLATION_IDS`.
 </Callout>
