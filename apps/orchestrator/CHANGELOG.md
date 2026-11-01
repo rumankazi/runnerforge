@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.24.2...orchestrator-v0.25.0) (2026-11-01)
+
+
+### Features
+
+* **orchestrator:** reconciler starts deferred jobs as capacity frees ([#351](https://github.com/rumankazi/runnerforge/issues/351)) ([5558db9](https://github.com/rumankazi/runnerforge/commit/5558db958dcf7935b0ae609c55be9fa9a5c526a5))
+
 ## [0.24.2](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.24.1...orchestrator-v0.24.2) (2026-11-01)
 
 
