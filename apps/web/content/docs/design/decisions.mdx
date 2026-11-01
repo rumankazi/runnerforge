@@ -787,6 +787,8 @@ Readers must tolerate missing fields and check `schema_version`, because a docum
 
 <Callout type="info" title="Revisions">
   **2026-10-30**: accepted with rollout step 1: the registry (`registry.py`), `installation` events and the hourly backfill (`admission.py`, run by the reconciler in the first 5 minutes of each hour), and shadow mode. Shadow mode checks approval only (limits come with step 3) and runs before the allow-list gate, so it also covers jobs the allow-list turns away. A row with no decision reads as `pending`; an installation with no row is `not_registered`. Every status event creates a missing row as `pending`, not only `created`. The backfill reads the rows before GitHub's listing and marks an installation `deleted` only after `GET /app/installations/{id}` returns 404, because a page-numbered listing can skip a live installation and later steps treat `deleted` as final. The registry shares the job store's Firestore client. The TTL on `installations.expire_at` ships in a separate Terraform change.
+
+  **2026-11-01**: rollout step 2, `runnerforge-admin` ([Approving tenants](/docs/guides/runbooks/tenants)). It uses the sync Firestore client and fails loudly instead of open. Each write shows the change and asks first (`--yes` skips), and is conditional on the row's update time, so a concurrent webhook write fails it instead of being overwritten. `approve` writes the beta defaults only when a row has no limits, so re-approving after a suspend keeps custom ones. It refuses rows that don't exist, and approving or limiting a `deleted` one. `set-limits` merges named limits; `--unlimited` and `--defaults` replace them all. Limits are validated by a shared `Limits` type in `registry.py` (1–30 VMs, 1–360 minutes, a size from `SIZE_TABLE`), which step 3 also uses to read them. Each row keeps its last 20 decisions in a `history` array, which expires with the row; a subcollection wouldn't, because TTL doesn't delete documents under a row. After merge, the owner approves their own installation with `approve <id> --unlimited`; it also stays in `ALLOWED_INSTALLATION_IDS`.
 </Callout>
 
 ### Context
@@ -816,7 +818,8 @@ Readers must tolerate missing fields and check `schema_version`, because a docum
 | `state` | Set by the owner: `pending`, `approved` or `suspended` |
 | `approved_at` | Set on first approval and never cleared. "Has ever been approved" gates job records (below) |
 | `github_status` | Set by GitHub's events or `suspended_at` in the backfill: `active`, `suspended` or `deleted`. It's a separate field, so a GitHub suspend or unsuspend never overwrites the owner's decision |
-| `limits` | `unlimited`, or `max_concurrent_vms`, `max_size`, `spot_only`, `max_runtime_minutes`, `literal_machine_types` |
+| `limits` | `{unlimited: true}`, or all of `max_concurrent_vms`, `max_size`, `spot_only`, `max_runtime_minutes`, `literal_machine_types` |
+| `history` | The owner's last 20 decisions (time, action, state, limits), written by the admin command |
 | `request` | Onboarding details (repositories, expected jobs, use case), added in 4.5 |
 | `created_at`, `updated_at`, `expire_at` | `expire_at` is set only once `github_status` is `deleted`; it drives a 30-day TTL |
 

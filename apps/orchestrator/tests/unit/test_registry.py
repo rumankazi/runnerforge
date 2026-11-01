@@ -350,3 +350,71 @@ async def test_timeouts_are_bounded(monkeypatch):
 
     with pytest.raises(RegistryUnavailable):
         await FirestoreRegistry(_client_with_doc(doc)).get(7)
+
+
+# --- limits ---
+
+
+def test_limits_defaults_are_the_beta_defaults():
+    assert registry.BETA_DEFAULTS.to_dict() == {
+        "max_concurrent_vms": 2,
+        "max_size": "medium",
+        "spot_only": True,
+        "max_runtime_minutes": 60,
+        "literal_machine_types": False,
+    }
+    assert registry.UNLIMITED.to_dict() == {"unlimited": True}
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        registry.BETA_DEFAULTS,
+        registry.UNLIMITED,
+        registry.Limits(30, "xlarge", False, 360, True),
+    ],
+)
+def test_limits_round_trip(limits):
+    assert registry.Limits.from_dict(limits.to_dict()) == limits
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        None,
+        "unlimited",
+        {"unlimited": False},
+        {"unlimited": True, "max_size": "small"},
+        {"max_size": "small"},
+        {**registry.BETA_DEFAULTS.to_dict(), "extra": 1},
+        {**registry.BETA_DEFAULTS.to_dict(), "max_concurrent_vms": True},
+        {**registry.BETA_DEFAULTS.to_dict(), "max_concurrent_vms": 2.0},
+        {**registry.BETA_DEFAULTS.to_dict(), "max_concurrent_vms": 0},
+        {**registry.BETA_DEFAULTS.to_dict(), "max_concurrent_vms": 31},
+        {**registry.BETA_DEFAULTS.to_dict(), "max_runtime_minutes": 0},
+        {**registry.BETA_DEFAULTS.to_dict(), "max_runtime_minutes": 361},
+        {**registry.BETA_DEFAULTS.to_dict(), "max_size": "n2-standard-4"},
+        {**registry.BETA_DEFAULTS.to_dict(), "max_size": ["medium"]},
+        {**registry.BETA_DEFAULTS.to_dict(), "max_size": {"medium": 1}},
+        {"unlimited": 1},
+        {"unlimited": 1.0},
+        {**registry.BETA_DEFAULTS.to_dict(), "spot_only": 1},
+        {**registry.BETA_DEFAULTS.to_dict(), "literal_machine_types": "false"},
+    ],
+)
+def test_limits_reject_invalid_data(data):
+    with pytest.raises(ValueError):
+        registry.Limits.from_dict(data)
+
+
+def test_limits_reject_non_bool_unlimited():
+    with pytest.raises(ValueError, match="unlimited must be true or false"):
+        registry.Limits(unlimited=1)
+
+
+def test_entry_carries_the_account():
+    entry = registry.entry_from_doc(
+        7, {"account_login": "octo", "account_type": "User"}
+    )
+    assert (entry.account_login, entry.account_type) == ("octo", "User")
+    assert (entry.state, entry.github_status) == ("pending", "active")

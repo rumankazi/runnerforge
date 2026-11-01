@@ -1,6 +1,6 @@
 ---
 title: Runbooks
-description: What to do when an alert fires or a Terraform pipeline gets stuck.
+description: What to do when an alert fires or a Terraform pipeline gets stuck, and how to approve tenants.
 ---
 
 import { Card, Cards } from 'fumadocs-ui/components/card';
@@ -57,6 +57,16 @@ display name; each runbook's Symptom section quotes it. For how the alerts are d
     title="Instance saturation"
     description="WARNING. More than 40 of the 50 allowed Cloud Run instances in use."
     href="/docs/guides/runbooks/instance-saturation"
+  />
+</Cards>
+
+## Tenants
+
+<Cards>
+  <Card
+    title="Approving tenants"
+    description="Approve, suspend and limit GitHub App installations with runnerforge-admin."
+    href="/docs/guides/runbooks/tenants"
   />
 </Cards>
 

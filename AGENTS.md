@@ -44,9 +44,10 @@ apps/orchestrator/src/runnerforge/  FastAPI app
   github_client.py   GitHub App JWT + API              compute_client.py GCE VM create/delete
   security.py        webhook HMAC + scheduler OIDC      sweep.py         stale-VM cleanup
   reconcile.py       job-record reconciler (/reconcile, every 5 min; ADR-018)
-  registry.py        tenant registry (ADR-019)             admission.py     installation events, shadow admission, registry backfill
+  registry.py        tenant registry rows + Limits (ADR-019) admission.py   installation events, shadow admission, registry backfill
   config.py          env-driven settings                machine_policy.py label → machine type
   job_store.py       per-job record store (ADR-018; Firestore or no-op, fail-open)
+  admin.py           `runnerforge-admin` owner CLI for the registry (never imports config)
   validation.py / models.py / logger.py / tracing.py (OpenTelemetry)
 apps/orchestrator/tests/  unit/ (mocked), integration/ (TestClient + respx), fixtures/
 apps/web/            Next.js App Router; docs in content/docs/ (design, ADRs, runbooks)
@@ -98,6 +99,8 @@ conftest 0.68.2. Install with `mise install` / `aqua i -a` where available.
 - DO run the full per-app command block above before declaring done.
 - DON'T run `terraform plan/apply`, `packer build`, `gcloud` deploys, or trigger deploy workflows — they need
   GCP WIF creds and touch prod. Produce a plan description for the owner instead.
+- DON'T run `runnerforge-admin approve|suspend|set-limits`: they write the production tenant registry with the
+  owner's credentials. `list` is read-only.
 - DON'T run `wrangler deploy` / `wrangler versions deploy` / `wrangler triggers deploy` for `apps/web`: production deploys come from
   Workers Builds on merge to `main`. `bun run cf:preview` (local `wrangler dev`) is fine.
 - DON'T touch `infra/terraform/.tfaction/`, `.terraform.lock.hcl` (unless upgrading providers), or state.
