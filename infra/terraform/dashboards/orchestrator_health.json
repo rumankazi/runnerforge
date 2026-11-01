@@ -359,7 +359,7 @@
                     "aggregation": {
                       "alignmentPeriod": "300s",
                       "crossSeriesReducer": "REDUCE_MEAN",
-                      "perSeriesAligner": "ALIGN_PERCENTILE_50"
+                      "perSeriesAligner": "ALIGN_DELTA"
                     },
                     "filter": "metric.type=\"logging.googleapis.com/user/runner_vm_count\" resource.type=\"cloud_run_revision\""
                   }
@@ -473,7 +473,7 @@
                     "aggregation": {
                       "alignmentPeriod": "3600s",
                       "crossSeriesReducer": "REDUCE_MEAN",
-                      "perSeriesAligner": "ALIGN_PERCENTILE_50"
+                      "perSeriesAligner": "ALIGN_DELTA"
                     },
                     "filter": "metric.type=\"logging.googleapis.com/user/sweep_checked_count\" resource.type=\"cloud_run_revision\""
                   }
@@ -507,7 +507,7 @@
                     "aggregation": {
                       "alignmentPeriod": "3600s",
                       "crossSeriesReducer": "REDUCE_MEAN",
-                      "perSeriesAligner": "ALIGN_PERCENTILE_50"
+                      "perSeriesAligner": "ALIGN_DELTA"
                     },
                     "filter": "metric.type=\"logging.googleapis.com/user/sweep_deleted_count\" resource.type=\"cloud_run_revision\""
                   }
@@ -542,7 +542,7 @@
                     "aggregation": {
                       "alignmentPeriod": "3600s",
                       "crossSeriesReducer": "REDUCE_MEAN",
-                      "perSeriesAligner": "ALIGN_PERCENTILE_50"
+                      "perSeriesAligner": "ALIGN_DELTA"
                     },
                     "filter": "metric.type=\"logging.googleapis.com/user/sweep_error_count\" resource.type=\"cloud_run_revision\""
                   }
