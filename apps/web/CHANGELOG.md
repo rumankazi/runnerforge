@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.12.0](https://github.com/rumankazi/runnerforge/compare/web-v1.11.0...web-v1.12.0) (2026-11-01)
+
+
+### Features
+
+* **infra:** Reconciler section on the Orchestrator Health dashboard ([#354](https://github.com/rumankazi/runnerforge/issues/354)) ([98d1fdf](https://github.com/rumankazi/runnerforge/commit/98d1fdf0fe25ae9c1dd07ac59171d269b3d0a5b6))
+* **orchestrator:** reconciler starts deferred jobs as capacity frees ([#351](https://github.com/rumankazi/runnerforge/issues/351)) ([5558db9](https://github.com/rumankazi/runnerforge/commit/5558db958dcf7935b0ae609c55be9fa9a5c526a5))
+
 ## [1.11.0](https://github.com/rumankazi/runnerforge/compare/web-v1.10.0...web-v1.11.0) (2026-11-01)
 
 
