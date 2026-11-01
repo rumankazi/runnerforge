@@ -119,8 +119,10 @@ RunnerForge made it for the same installation (without a `runner_name`, the VM b
 `job_id`, `run_id` and `run_attempt` labels), then:
 
 - parents this request's trace under the trace of the queued request that booted that VM;
-- logs `Runner registration outcome` with `runner_readiness_seconds`: from the later of that VM's admission
-  (its `queued_received_at` label) and the job's `created_at`, to the job starting. A swapped VM then isn't slow
+- logs `Runner registration outcome` with `runner_readiness_seconds`, to the job starting: from the VM's admission
+  (its `queued_received_at` label) when the VM was booted for this job, otherwise from the later of that admission
+  and the job's `created_at`. When GitHub's timestamps
+  contradict our clock, the sample is skipped and `Runner readiness unknown` is logged instead. A swapped VM then isn't slow
   registration, and an idle VM left by a cancelled job counts as ready at once. This is the source of the
   time-to-register SLO.
 

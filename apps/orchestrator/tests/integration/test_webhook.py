@@ -608,9 +608,10 @@ def test_webhook_in_progress_floors_negative_delivery_lag_at_zero(
     payload["workflow_job"]["started_at"] = str(
         datetime(2026, 5, 30, 10, 0, 0, tzinfo=UTC)
     )
-    # created_at FUTURE of queued_received_at — drives queued delivery lag negative
+    # created_at FUTURE of queued_received_at — drives queued delivery lag
+    # negative. Within the skew tolerance: beyond it, created_at isn't used.
     payload["workflow_job"]["created_at"] = str(
-        datetime(2026, 5, 30, 10, 0, 10, tzinfo=UTC)
+        datetime(2026, 5, 30, 10, 0, 3, tzinfo=UTC)
     )
     body = json.dumps(payload).encode()
 
@@ -632,6 +633,13 @@ def test_webhook_in_progress_floors_negative_delivery_lag_at_zero(
     assert outcome_log.runner_readiness_seconds >= 0
     assert outcome_log.github_queued_delivery_lag_seconds == 0.0
     assert outcome_log.github_in_progress_delivery_lag_seconds >= 0
+    # started_at - created_at = -3 s, within the skew tolerance: still logged.
+    end_to_end = next(
+        r
+        for r in caplog.records
+        if r.message == "Time for runner to be picked up by github"
+    )
+    assert end_to_end.time_to_runner_seconds == -3.0
 
 
 @respx.mock

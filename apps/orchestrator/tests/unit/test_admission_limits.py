@@ -294,3 +294,75 @@ async def test_runner_vm_is_trusted_only_by_its_labels(monkeypatch, labels, expe
     result = await handlers._runner_vm_labels(_in_progress("runnerforge-1-9-1"))
     assert result == expected
     by_name.assert_awaited_once_with("runnerforge-1-9-1")
+
+
+# --- readiness and GitHub's clock ---
+
+
+def _readiness_event(started_at: float, created_at: float | None, runner_name="r"):
+    def at(ts):
+        return None if ts is None else datetime.fromtimestamp(ts, UTC)
+
+    return SimpleNamespace(
+        workflow_job=SimpleNamespace(
+            id=9,
+            started_at=at(started_at),
+            created_at=at(created_at),
+            runner_name=runner_name,
+        ),
+        repository=SimpleNamespace(full_name="o/r"),
+    )
+
+
+def _readiness_logs(caplog):
+    by_message = {r.message: r for r in caplog.records}
+    return by_message.get("Runner registration outcome"), by_message.get(
+        "Runner readiness unknown"
+    )
+
+
+OWN = {"job_id": "9", "queued_received_at": "1000000"}
+OTHER = {"job_id": "8", "queued_received_at": "1000000"}
+
+
+@pytest.mark.parametrize(
+    ("labels", "started_at", "created_at", "received_at", "expected"),
+    [
+        # started_at up to 5 s after our receipt is clock noise.
+        (OWN, 1_000_104, None, 1_000_100, 104.0),
+        (OWN, 1_000_106, None, 1_000_100, "started_at_ahead"),
+        # Up to 5 s before the VM's admission is noise; more is GitHub behind.
+        (OWN, 999_996, None, 1_000_100, 0.0),
+        (OWN, 999_994, None, 1_000_100, "started_at_before_admission"),
+        # Another VM: created_at bounded by our receipt, not only the start.
+        (OTHER, 1_000_103, 1_000_104, 1_000_100, 0.0),
+        (OTHER, 1_000_103, 1_000_106, 1_000_100, "created_at_unusable"),
+        (OTHER, 1_000_050, None, 1_000_100, "created_at_unusable"),
+    ],
+)
+def test_readiness_tolerances(
+    caplog, labels, started_at, created_at, received_at, expected
+):
+    with caplog.at_level(logging.INFO):
+        handlers._log_readiness(
+            _readiness_event(started_at, created_at), labels, received_at
+        )
+    outcome, unknown = _readiness_logs(caplog)
+    if isinstance(expected, str):
+        assert outcome is None
+        assert unknown.reason == expected
+    else:
+        assert unknown is None
+        assert outcome.runner_readiness_seconds == expected
+
+
+def test_an_early_start_without_a_runner_name_is_measured(caplog):
+    """Without a runner_name the VM is the job's own by its labels, not the
+    runner GitHub chose, so an earlier start can be real: floor, don't skip."""
+    with caplog.at_level(logging.INFO):
+        handlers._log_readiness(
+            _readiness_event(999_000, None, runner_name=None), OWN, 1_000_100
+        )
+    outcome, unknown = _readiness_logs(caplog)
+    assert unknown is None
+    assert outcome.runner_readiness_seconds == 0.0

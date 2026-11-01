@@ -75,6 +75,7 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `VM already exists` | WARNING | `compute_client.py` | `instance_name` | |
 | `VM creation outcome` | INFO / WARNING | `compute_client.py` | `outcome` (`success`, `failure`, `timeout`), `duration_ms`, `error_code`, `error_message` | `vm_creation_outcome_count` |
 | `Runner registration outcome` | INFO | `handlers.py` | `runner_readiness_seconds`, `github_queued_delivery_lag_seconds`, `github_in_progress_delivery_lag_seconds` | three distribution metrics |
+| `Runner readiness unknown` | WARNING | `handlers.py` | `reason` (`started_at_ahead`, `started_at_before_admission`, `created_at_unusable`), `started_at_offset_seconds`, `created_at_offset_seconds` | |
 | `Time for runner to be picked up by github` | INFO | `handlers.py` | `time_to_runner_seconds` | `time_to_runner_seconds` |
 | `Refusing to delete VM not owned by this installation` | WARNING | `handlers.py` | `vm_installation_id` | |
 | `Submitted VM deletion` | INFO | `compute_client.py` | `vm_name`, `reason` (`webhook`, `sweep`) | `vm_deletion_count` |
@@ -168,12 +169,19 @@ What the latency metrics measure (from `handlers.handle_in_progress`):
 
 - `runner_readiness_seconds`: GitHub's `started_at` for the job minus the later of the job's `created_at` and the
   time the orchestrator received the `queued` webhook that booted the runner's VM (its `queued_received_at` label).
-  The runner's VM is the one in `runner_name`, which after a swap was booted for another job. This is the latency
-  on our side.
+  The runner's VM is the one in `runner_name`, which after a swap was booted for another job. For the job's own VM
+  `created_at` isn't needed. This is the latency on our side.
+- A sample whose GitHub timestamps contradict our clock is skipped and logged as `Runner readiness unknown`
+  (`reason` and the offsets): `started_at_ahead`, a `started_at` more than 5 s after we received `in_progress`;
+  `started_at_before_admission`, a `started_at` more than 5 s before the runner's VM was admitted; or
+  `created_at_unusable`, for another job's VM, a `created_at` that is missing or more than 5 s after `started_at` or
+  our receipt. On 2026-11-01 GitHub's `created_at` ran an hour ahead of its `started_at`; readiness read 0 s for every
+  job until 0.24.1.
 - `github_queued_delivery_lag_seconds`: our `queued` receipt time minus the job's `created_at`, only when the
-  runner's VM was booted for this job.
+  runner's VM was booted for this job and `created_at` is usable.
 - `github_in_progress_delivery_lag_seconds`: our `in_progress` receipt time minus `started_at`.
-- `time_to_runner_seconds`: `started_at` minus `created_at`, so it includes GitHub's delivery delay.
+- `time_to_runner_seconds`: `started_at` minus `created_at`, so it includes GitHub's delivery delay. Not logged when
+  it's more than 5 s negative (GitHub's two timestamps disagree).
 
 The first three are floored at zero to absorb clock skew, and are only emitted when the runner's VM still exists at
 `in_progress` time and its labels say RunnerForge made it for the same installation.

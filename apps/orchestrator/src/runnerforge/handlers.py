@@ -62,6 +62,9 @@ def _webhook_span_context(
     )
 
 
+# GitHub's timestamps and ours may disagree by this much (NTP, one-second
+# resolution) before a readiness sample is treated as skewed.
+CLOCK_SKEW_TOLERANCE_SECONDS = 5.0
 # Added to a limited tenant's runtime cap for the VM's boot (ADR-019).
 _BOOT_ALLOWANCE = timedelta(minutes=15)
 
@@ -401,6 +404,11 @@ async def handle_in_progress(event: WorkflowJobEvent, received_at: float):
             delta_seconds = (
                 event.workflow_job.started_at - event.workflow_job.created_at
             ).total_seconds()
+        else:
+            delta_seconds = None
+        # A negative value means GitHub's two timestamps disagree (see
+        # _log_readiness); it would chart as instant.
+        if delta_seconds is not None and delta_seconds >= -CLOCK_SKEW_TOLERANCE_SECONDS:
             logger.info(
                 "Time for runner to be picked up by github",
                 extra={
@@ -419,34 +427,81 @@ async def handle_in_progress(event: WorkflowJobEvent, received_at: float):
         # lag moved." All deltas floored at zero — negative deltas would
         # be clock skew, not real signal.
         if event.workflow_job.started_at and queued_received_at_str:
-            queued_received_at_float = float(queued_received_at_str)
-            started_at_epoch = event.workflow_job.started_at.timestamp()
-            # A runner already waiting when the job was created (an idle VM
-            # left by a cancelled job) is ready at once: start from the later
-            # of the VM's admission and the job's creation.
-            ready_from = queued_received_at_float
-            if event.workflow_job.created_at:
-                ready_from = max(ready_from, event.workflow_job.created_at.timestamp())
-            runner_readiness_seconds = max(0.0, started_at_epoch - ready_from)
-            in_progress_delivery_lag = max(0.0, received_at - started_at_epoch)
+            _log_readiness(event, vm_labels or {}, received_at)
 
-            extras: dict[str, float | str | int] = {
-                "job_id": event.workflow_job.id,
-                "repo": event.repository.full_name,
-                "runner_readiness_seconds": runner_readiness_seconds,
-                "github_in_progress_delivery_lag_seconds": in_progress_delivery_lag,
-            }
-            # The queued delivery lag is this job's only if the VM was made
-            # for it.
-            own_vm = vm_labels is not None and vm_labels.get("job_id") == str(
-                event.workflow_job.id
-            )
-            if event.workflow_job.created_at and own_vm:
-                created_at_epoch = event.workflow_job.created_at.timestamp()
-                extras["github_queued_delivery_lag_seconds"] = max(
-                    0.0, queued_received_at_float - created_at_epoch
-                )
-            logger.info("Runner registration outcome", extra=extras)
+
+def _log_readiness(
+    event: WorkflowJobEvent, vm_labels: dict[str, str], received_at: float
+) -> None:
+    """runner_readiness_seconds, the Time-to-Register SLO's source.
+
+    It mixes clocks: GitHub's (`started_at`, `created_at`) and ours (the VM's
+    `queued_received_at`, this request's receipt). On 2026-11-01 GitHub's
+    `created_at` ran an hour ahead of its `started_at`. A sample whose
+    timestamps contradict our clock is skipped and logged instead: any
+    number from them, 0 s or hours, would be wrong for the SLO."""
+    job = event.workflow_job
+    assert job.started_at is not None
+    queued_received_at = float(vm_labels["queued_received_at"])
+    started_at = job.started_at.timestamp()
+    created_at = job.created_at.timestamp() if job.created_at else None
+    own_vm = vm_labels.get("job_id") == str(job.id)
+    # A job is created before it starts, and starts before we hear of it.
+    created_ok = created_at is not None and created_at <= (
+        min(started_at, received_at) + CLOCK_SKEW_TOLERANCE_SECONDS
+    )
+    if started_at > received_at + CLOCK_SKEW_TOLERANCE_SECONDS:
+        skew = "started_at_ahead"
+    elif (
+        job.runner_name
+        and started_at < queued_received_at - CLOCK_SKEW_TOLERANCE_SECONDS
+    ):
+        # The runner registered after its VM booted, which was after the VM's
+        # admission, so this can't be a real start: GitHub's clock is behind.
+        # (Without a runner_name the VM is a guess and an earlier start can
+        # be real.)
+        skew = "started_at_before_admission"
+    elif not own_vm and not created_ok:
+        # Another job's VM: only the job's creation says how long the VM
+        # had been waiting for it.
+        skew = "created_at_unusable"
+    else:
+        skew = None
+    if skew is not None:
+        logger.warning(
+            "Runner readiness unknown",
+            extra={
+                "reason": skew,
+                "started_at_offset_seconds": started_at - received_at,
+                "created_at_offset_seconds": (
+                    None if created_at is None else created_at - started_at
+                ),
+            },
+        )
+        return
+
+    # Its own VM was admitted for this job, so from that admission. Another
+    # job's VM (a swap, or an idle VM left by a cancelled job) from the later
+    # of its admission and this job's creation: one already waiting is ready
+    # at once.
+    ready_from = queued_received_at
+    if not own_vm:
+        assert created_at is not None
+        ready_from = max(ready_from, created_at)
+    extras: dict[str, float | str | int] = {
+        "job_id": job.id,
+        "repo": event.repository.full_name,
+        # Floored at zero: small negatives are clock skew, not signal.
+        "runner_readiness_seconds": max(0.0, started_at - ready_from),
+        "github_in_progress_delivery_lag_seconds": max(0.0, received_at - started_at),
+    }
+    # The queued delivery lag is this job's only if the VM was made for it.
+    if own_vm and created_ok:
+        assert created_at is not None
+        extras["github_queued_delivery_lag_seconds"] = max(
+            0.0, queued_received_at - created_at
+        )
+    logger.info("Runner registration outcome", extra=extras)
 
 
 async def handle_completed(event: WorkflowJobEvent) -> PreemptionCheckRequest | None:
