@@ -1,14 +1,14 @@
 ---
 title: Webhook flow
-description: What the orchestrator does for each workflow_job action, and how the sweep and runtime cap catch the rest.
+description: What the orchestrator does for each workflow_job action, and how the reconciler, sweep and runtime cap catch the rest.
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 
 GitHub `workflow_job` webhooks drive the whole runner lifecycle. `POST /webhook` handles every action
-(`main.py`). Two backstops cover anything the webhooks miss: a daily sweep (`sweep.py`) and a runtime cap that
-GCE enforces on every VM.
+(`main.py`). Three backstops cover VMs the webhooks miss: the reconciler's [orphan cleanup](#orphan-cleanup)
+every 5 minutes, a daily sweep (`sweep.py`), and a runtime cap that GCE enforces on every VM.
 
 ## Every request
 
@@ -136,7 +136,8 @@ deleting, it checks:
 <Steps>
   <Step>
     **There is a runner.** A job cancelled before any runner picked it up has no `runner_name`. There is
-    nothing to delete. The sweep or the runtime cap removes the VM that was booted for it.
+    nothing to delete. The reconciler's [orphan cleanup](#orphan-cleanup) deletes the VM that was booted for it
+    once it is 15 minutes old; the sweep and the runtime cap back that up.
   </Step>
   <Step>
     **The name has the `runnerforge-` prefix.** Otherwise it's one of your own runners, so it's skipped
@@ -190,12 +191,14 @@ response reports `checked`, `deleted`, `skipped` and `errors`.
 
 Cloud Scheduler calls `POST /reconcile` every 5 minutes with the same OIDC identity as the sweep. It brings
 open job records ([ADR-018](/docs/design/decisions#per-job-state-in-firestore-behind-a-jobstore-protocol)) in
-line with GitHub and GCE, for what the webhooks and background tasks missed. It deletes nothing. Each run:
+line with GitHub and GCE, for what the webhooks and background tasks missed. The only VMs it deletes are
+orphans. Each run:
 
 1. Takes up to 25 open records whose next check is due, earliest first.
 2. Lists RunnerForge VMs once. A VM whose job has no open record gets one, built from its labels and metadata.
-3. With `ADMISSION=registry`, runs the **capacity pass** (below) first, in its own 40 s.
-4. For each record: one already holding `completed` is closed. Otherwise it asks GitHub
+3. Runs the **orphan cleanup** (below); no new check starts after 30 s.
+4. With `ADMISSION=registry`, runs the **capacity pass** (below), in its own 40 s.
+5. For each record: one already holding `completed` is closed. Otherwise it asks GitHub
    (`GET /repos/{owner}/{repo}/actions/jobs/{job_id}`):
 
 | GitHub says | Reconciler |
@@ -215,6 +218,40 @@ for the next run. The run logs `Reconcile completed` with its counts.
 "Its own VM" is the one last made for the job: the decision's `vm_name` after a reconciler start, otherwise
 `runnerforge-{run}-{job}-{attempt}`.
 
+### Orphan cleanup
+
+A VM is deleted only on its job's `completed` webhook, so a VM whose runner never gets a job keeps running: its job
+was cancelled before pickup or ran on another runner, or its `completed` webhook was lost. Under a tenant's limit it
+also holds a slot. Every run, in both admission modes, the reconciler asks GitHub about the runner on each such VM
+(`GET /repos/{owner}/{repo}/actions/runners?name={vm_name}`; VM name = runner name):
+
+- **Which VMs:** PROVISIONING, STAGING or RUNNING, over 15 minutes old (past the spare window below), with a known
+  repository, of an installation that gets job records (allow-listed, or approved at least once; every installation
+  when the allow-list is unset in allowlist mode). Not one GitHub has suspended, since GitHub refuses its calls. An
+  installation the owner suspended is checked: its idle runners could still take new jobs.
+
+| GitHub says | Cleanup |
+| --- | --- |
+| No runner of that name | Deletes the VM. An ephemeral runner leaves the list after its one job, or never registered. This holds even if a record still says the VM is busy, which a lost `completed` webhook leaves behind. |
+| Busy, or a record's `in_progress` names the VM | Keeps it. GitHub's busy flag can read false mid-job, so the records back it up. |
+| Idle and online, and a job of the installation is waiting in the same repository with labels it covers | Keeps it: GitHub would hand it that job. |
+| Idle otherwise | Deregisters the runner (`DELETE /repos/{owner}/{repo}/actions/runners/{id}`), so GitHub can't hand it a job while the VM shuts down, then deletes the VM. |
+| The repository is gone (404), or any error | Keeps it. The runtime cap still removes it. |
+
+- **Fails closed:** if the open-records read failed, or returned the full 500 (it may have left out a busy runner's
+  record), the cleanup is skipped for the run.
+- **Bounds:** 10 checks a run, 15 s each, and no new check after 30 s, in a different order each run so VMs kept
+  every run (long jobs) can't always take the checks. A failed check is logged and the VM kept; it doesn't stop the
+  run.
+- **After a delete:** the VM is left out of the rest of the run, so the capacity pass can use its slot at once (a
+  live listing that still shows it doesn't count it). The cleanup writes nothing on job records. A job whose own VM
+  it was is left to the batch, which asks GitHub first: a runner gone from GitHub usually ran its job, even when the
+  webhooks that would say so were lost. `Reconcile completed` reports `orphans_deleted`; each delete logs
+  `Orphan VM deleted`. A VM GCE no longer has (its `completed` webhook got there first) isn't counted.
+
+GitHub documents the runner `DELETE` as a forced removal. A job GitHub hands the runner in the moment between the
+check and the deregistration is lost with the VM.
+
 ### Capacity pass
 
 With `ADMISSION=registry` ([ADR-019](/docs/design/decisions#tenant-registry-install-to-register-admin-approval-per-installation-limits)),
@@ -224,7 +261,8 @@ runner with matching labels, so it works from free slots, not from decision kind
 - **Installations:** every one approved at least once, plus the allow-list. One that's no longer admitted gets its
   deferred jobs marked `rejected` with the reason. If the registry can't be read, the installation is skipped for
   the run, not rejected, and its stuck verdicts wait too.
-- **Free slots:** `max_concurrent_vms` minus the installation's PROVISIONING, STAGING or RUNNING VMs, counted live.
+- **Free slots:** `max_concurrent_vms` minus the installation's PROVISIONING, STAGING or RUNNING VMs, counted live,
+  leaving out the VMs the orphan cleanup just deleted.
   Unlimited installations (limits lifted, or allow-listed) are bounded only by the run's cap.
 - **Waiting jobs**, oldest first from that installation's open records (up to 100): deferred jobs; and, for a
   limited installation, jobs whose VM is gone, dead or running another job (not within 3 minutes of their
@@ -262,8 +300,9 @@ GitHub doesn't retry failed webhook deliveries.
   queue timeout. The `lost_webhook_ratio` alert only catches queued webhooks that were accepted but never
   reached a decision (no `Queued webhook outcome` line, e.g. a token error), not ones that never arrived.
   Label-policy rejections and duplicates are decisions and don't lower the ratio.
-- **A lost `completed` webhook** leaves the VM running. The first sweep after the VM is 1 h old deletes it once its
-  runner is idle or de-registered. Otherwise the runtime cap deletes it.
+- **A lost `completed` webhook** leaves the VM running. Once the VM is 15 minutes old, the reconciler's
+  [orphan cleanup](#orphan-cleanup) sees its runner gone from GitHub and deletes it. The daily sweep and the runtime
+  cap back that up.
 
 ## Concurrency
 

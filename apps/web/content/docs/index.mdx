@@ -60,8 +60,8 @@ that asks for `runnerforge`, and deletes it when the job completes. Terraform ow
 - A queued job whose `runs-on` includes `runnerforge` gets its own fresh VM, used for one job only.
 - The job's labels pick the machine: a size (`small` to `xlarge`) or a literal GCE machine type, plus
   optional `spot`. See [label parsing](/docs/design/webhook-flow#label-parsing).
-- The VM is deleted when the job completes. If that delete is missed, the daily sweep or GCE's own
-  runtime cap removes it.
+- The VM is deleted when the job completes. If that delete is missed, the reconciler's orphan cleanup
+  (every 5 minutes), the daily sweep or GCE's own runtime cap removes it.
 - Only allow-listed GitHub App installations can create VMs. An installation is one GitHub user or
   organization, and it is the unit of tenancy.
 - The orchestrator sees job events and mints runner registration tokens. It never reads repository

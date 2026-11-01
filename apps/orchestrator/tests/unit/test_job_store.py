@@ -532,7 +532,7 @@ async def test_list_open_queries_open_records():
     client.collection.return_value.where.return_value.limit.assert_called_once_with(500)
 
 
-async def test_query_failure_fails_open(caplog):
+async def test_query_failure_reports_none(caplog):
     client = MagicMock()
     limited = client.collection.return_value.where.return_value.limit.return_value
     limited.stream = MagicMock(side_effect=ServiceUnavailable("down"))
@@ -540,12 +540,23 @@ async def test_query_failure_fails_open(caplog):
     with caplog.at_level(logging.WARNING):
         records = await FirestoreJobStore(client).list_open(500)
 
-    assert records == []
+    # Not [], so a caller that deletes on "nothing is busy" can fail closed.
+    assert records is None
     # A read: kept out of the write-failure alert.
     assert _failure_records(caplog) == []
     [record] = [r for r in caplog.records if r.message == "Job store read failed"]
     assert getattr(record, "operation", None) == "list_open"
     assert getattr(record, "error_class", None) == "ServiceUnavailable"
+
+
+async def test_list_due_failure_reads_as_nothing_due():
+    client = MagicMock()
+    query = client.collection.return_value.where.return_value.where.return_value
+    final = query.order_by.return_value.limit.return_value
+    final.stream = MagicMock(side_effect=ServiceUnavailable("down"))
+
+    # Nothing is deleted on "nothing due", so failing open is safe here.
+    assert await FirestoreJobStore(client).list_due(datetime.now(UTC), 5) == []
 
 
 async def test_patch_updates_existing_record():

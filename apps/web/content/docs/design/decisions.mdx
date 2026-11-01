@@ -649,6 +649,8 @@ RunnerForge started as a single-owner tool. Opening it up raises a set of questi
   - The protocol gained `list_due`, `list_open` and `patch`; `get`, `list_by_installation` and `count_open` come with the dashboard.
 
   **2026-11-01** ([ADR-019](#tenant-registry-install-to-register-admin-approval-per-installation-limits) step 3a): two decision kinds, `rejected` (with `reason`: `limit_size` plus `machine_type`, or `suspended` and `github_inactive` for a tenant approved before) and `deferred` (`reason: limit_concurrency`, `active_vms`), with their status rows. A decision admitted only because its deferral couldn't be stored carries `deferral_unrecorded: true`. `record_fact` reports whether its write landed, which is how a deferral knows it was stored. Records are gated on "allow-listed, or approved at least once" in registry mode.
+
+  **2026-11-01** ([ADR-019](#tenant-registry-install-to-register-admin-approval-per-installation-limits) orphan cleanup): `list_open` and `list_open_by_installation` now return `None` when the read fails, not an empty list, so a caller that deletes on "nothing is busy" can fail closed.
 </Callout>
 
 ### Context
@@ -816,6 +818,16 @@ Readers must tolerate missing fields and check `schema_version`, because a docum
   - The reconciler treats a `rejected` decision like `policy_rejected` (no VM, slow backoff, no verdict) and a `deferred` one as waiting: normal backoff, never stuck. Starting deferred jobs comes with 3b.
 
   **2026-11-01**: rollout step 2, `runnerforge-admin` ([Approving tenants](/docs/guides/runbooks/tenants)). It uses the sync Firestore client and fails loudly instead of open. Each write shows the change and asks first (`--yes` skips), and is conditional on the row's update time, so a concurrent webhook write fails it instead of being overwritten. `approve` writes the beta defaults only when a row has no limits, so re-approving after a suspend keeps custom ones. It refuses rows that don't exist, and approving or limiting a `deleted` one. `set-limits` merges named limits; `--unlimited` and `--defaults` replace them all. Limits are validated by a shared `Limits` type in `registry.py` (1–30 VMs, 1–360 minutes, a size from `SIZE_TABLE`), which step 3 also uses to read them. Each row keeps its last 20 decisions in a `history` array, which expires with the row; a subcollection wouldn't, because TTL doesn't delete documents under a row. After merge, the owner approves their own installation with `approve <id> --unlimited`; it also stays in `ALLOWED_INSTALLATION_IDS`.
+
+  **2026-11-01**: **orphan cleanup**, moved ahead of 3c from step 4 ([Reconciler](/docs/design/webhook-flow#orphan-cleanup)). A design review by three critics changed the 3b plan ("idle orphan VMs of limited tenants"):
+  - **Every installation that gets job records**, in both admission modes, as its own reconciler step before the capacity pass. Limited-only would have done nothing in production (the owner's installation is allow-listed and unlimited), and an unlimited orphan bills for up to 6 h 15 min.
+  - A VM over 15 minutes old is deleted when GitHub **no longer lists its runner** (finished with a lost `completed` webhook, or never registered), even if a stale record names it busy; or lists it **idle**, unless a record's `in_progress` names it, or it is online and a job of the installation is waiting in its repository with labels it covers. GitHub's busy flag can read false mid-job, so the records back it up.
+  - An idle runner is **deregistered first** (`DELETE /repos/{owner}/{repo}/actions/runners/{id}`, a new call in `trust.mdx`), so GitHub can't hand it a job during the VM's shutdown. GitHub documents this as a forced removal; the moment between the check and the deregistration remains.
+  - It **fails closed**: no cleanup in a run whose open-records read failed or hit its 500 limit. Each check has 15 s, no new check starts after 30 s, and there are at most 10, in a different order each run; any error keeps the VM.
+  - Deleted VMs are left out of the rest of the run, and free slots are counted by name, so the capacity pass reuses the slot at once without counting it twice.
+  - It writes **nothing on job records**. A code review found that a verdict there would call finished jobs stuck: a runner gone from GitHub usually ran its job even when the webhooks that would say so were lost. The batch asks GitHub first, as for any record.
+  - An installation the owner suspended is checked like any other (its idle runners could still take new jobs); one GitHub suspended isn't, since GitHub refuses its calls. With the allow-list unset in allowlist mode, every installation is checked.
+  - Owner decisions: all installations; keep an online idle runner while a waiting job could use it (no state across runs); deregister first; VMs of installations GitHub suspended or deleted stay in step 4.
 </Callout>
 
 ### Context
@@ -896,9 +908,9 @@ Records are rescheduled as in ADR-018. A job is never marked stuck while its ins
 - **Its records:** they close as `gone` only when the row says `suspended` or `deleted`, or when `GET /app/installations/{id}` returns 404 or a `suspended_at`. Any other 403, such as a rate limit, is retried.
 - **Uninstall:** once `github_status` is `deleted`, the reconciler deletes that installation's job records, completing ADR-018's deletion story. The registry row expires 30 days later.
 
-An owner `suspend` stops new VMs only; VMs already running end with their job, or at their runtime cap.
+An owner `suspend` stops new VMs only; VMs already running end with their job, or at their runtime cap. Since the orphan cleanup (2026-11-01), its idle and finished VMs are deleted like anyone's.
 
-**Idle orphan VMs.** A job cancelled before pickup sends a `completed` webhook with no runner, so the VM made for it boots and waits idle. Under a limit of 2 that would hold a slot for up to 75 minutes. When the reconciler closes a record whose own VM still exists, and GitHub says that VM's runner is idle (as the sweep checks), it deletes the VM.
+**Idle orphan VMs.** A job cancelled before pickup sends a `completed` webhook with no runner, so the VM made for it boots and waits idle. Under a limit of 2 that would hold a slot for up to 75 minutes. The reconciler deletes a VM over 15 minutes old whose runner GitHub no longer lists, or lists idle with no waiting job it could take (see the 2026-11-01 orphan cleanup revision).
 
 **Beta defaults** (the owner's installation is unlimited):
 
@@ -927,7 +939,7 @@ An owner `suspend` stops new VMs only; VMs already running end with their job, o
    - `handle_in_progress` reads readiness from the `runner_name` VM, and ADR-018 gets a revision note adding `rejected` and `deferred` decision kinds and their status rows ("Limit reached", "Waiting for a free runner"), above "Starting";
    - docs: `limits.mdx`, `trust.mdx`, `security.mdx`, `webhook-flow.mdx`, `getting-started.mdx`, and an ADR-016 revision note;
    - rolling back below this release means admission by the allow-list only.
-4. **Cleanup** in the reconciler: VMs of suspended or deleted installations, idle orphan VMs of closed records, and records after uninstall.
+4. **Cleanup** in the reconciler: VMs of suspended or deleted installations, and records after uninstall. Idle orphan VMs moved ahead of 3c (2026-11-01).
 5. **Dashboard onboarding** (4.5).
 
 ### Consequences

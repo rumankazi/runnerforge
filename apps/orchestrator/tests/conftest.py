@@ -101,7 +101,7 @@ class FakeJobStore:
         self.facts: list[dict] = []
         # Reconciler reads: what list_due / list_open return, and patches made.
         self.due: list[tuple[str, dict]] = []
-        self.open: list[tuple[str, dict]] = []
+        self.open: list[tuple[str, dict]] | None = []
         self.patches: list[tuple[str, dict]] = []
         # Capacity pass (ADR-019): open records per installation, the
         # installations queried, and the starts claimed.
@@ -131,7 +131,8 @@ class FakeJobStore:
         return self.due[:limit]
 
     async def list_open(self, limit):
-        return self.open[:limit]
+        # None: the read failed.
+        return None if self.open is None else self.open[:limit]
 
     async def list_open_by_installation(self, installation_id, limit):
         self.queried.append(installation_id)

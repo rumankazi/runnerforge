@@ -86,6 +86,20 @@ async def _get_with_retry(
     return r
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_random_exponential(multiplier=1, min=1, max=8),
+    retry=retry_if_exception(_is_retriable_github_error),
+    reraise=True,
+)
+async def _delete_with_retry(
+    client: httpx.AsyncClient, url: str, headers: dict
+) -> httpx.Response:
+    r = await client.delete(url, headers=headers)
+    r.raise_for_status()
+    return r
+
+
 def generate_app_jwt(
     app_id: str | None = None, private_key: str | None = None, now: int | None = None
 ) -> str:
@@ -200,6 +214,33 @@ async def get_runner(
         if runner is not None:
             span.set_attribute("busy", runner.busy)
         return runner
+
+
+async def delete_runner(
+    installation_token: str, repo_full_name: str, runner_id: int
+) -> None:
+    """Removes a self-hosted runner's registration from the repo, so GitHub
+    can't hand it a job while its VM shuts down. GitHub documents this as a
+    forced removal, so callers must check the runner is idle first. A 404
+    (already removed) is success; other errors propagate."""
+    assert _http_client is not None
+    with tracer.start_as_current_span("github.delete_runner") as span:
+        span.set_attribute("repo", repo_full_name)
+        span.set_attribute("runner_id", runner_id)
+        url = (
+            f"https://api.github.com/repos/{repo_full_name}/actions/runners/{runner_id}"
+        )
+        headers = {
+            "Authorization": f"Bearer {installation_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        try:
+            await _delete_with_retry(client=_http_client, url=url, headers=headers)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code != 404:
+                raise
+            span.set_attribute("already_removed", True)
 
 
 class JobNotFound(Exception):

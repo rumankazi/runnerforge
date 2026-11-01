@@ -162,4 +162,5 @@ class ReconcileResult(BaseModel):
     more_due: bool  # more records were due than one batch holds
     registry_changes: int = 0  # registry rows created or updated by the backfill
     started: int = 0  # VMs the capacity pass started for waiting jobs (ADR-019)
+    orphans_deleted: int = 0  # VMs deleted because their runner had no job left
     errors: list[str]  # per-record failures (one record never aborts a run)

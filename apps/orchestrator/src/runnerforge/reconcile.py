@@ -9,13 +9,16 @@ isn't throttled the way background tasks are.
 Every fact it writes has `source: reconcile`. VM labels stay the authority for
 which VMs exist.
 
-With ADMISSION=registry, each run first starts VMs for jobs waiting under an
-installation's limit (ADR-019, the capacity pass), then checks due records.
+Each run first deletes orphan VMs: runners GitHub no longer lists, or lists
+as idle with no job they could take. With ADMISSION=registry, it then starts
+VMs for jobs waiting under an installation's limit (ADR-019, the capacity
+pass). Last, it checks due records.
 """
 
 import asyncio
 import logging
 import time
+import zlib
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -37,11 +40,19 @@ from runnerforge.compute_client import (
     ACTIVE_VMS_TIMEOUT_SECONDS,
     OperationHandle,
     active_vm_names,
+    delete_vm,
     list_runnerforge_vms,
     preemption_status,
 )
 from runnerforge.config import ADMISSION, ALLOWED_INSTALLATION_IDS
-from runnerforge.github_client import JobNotFound, get_installation_token, get_job
+from runnerforge.github_client import (
+    JobNotFound,
+    RepoNotFound,
+    delete_runner,
+    get_installation_token,
+    get_job,
+    get_runner,
+)
 from runnerforge.handlers import RunnerVmSpec, submit_runner_vm
 from runnerforge.job_store import (
     FIRST_CHECK_DELAY,
@@ -54,7 +65,7 @@ from runnerforge.job_store import (
 )
 from runnerforge.machine_policy import MachinePolicyError, resolve_labels
 from runnerforge.models import GitHubJob, ReconcileResult, VmInfo
-from runnerforge.registry import get_registry
+from runnerforge.registry import RegistryEntry, get_registry
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +121,13 @@ CAPACITY_PAUSE = timedelta(minutes=10)
 # cancels it.
 MAX_CAPACITY_RETRIES = 3
 
+# Orphan cleanup. Past the spare window, GitHub has had its chance to hand an
+# idle runner a job. Its own slice of the run budget, before the pass.
+ORPHAN_MIN_AGE = SPARE_VM_MAX_AGE
+ORPHAN_BUDGET_SECONDS = 30.0
+ORPHAN_CHECK_TIMEOUT_SECONDS = 15.0
+MAX_ORPHAN_CHECKS = 10
+
 
 class _InstallationGone(Exception):
     """The App installation is gone (token request returned 404)."""
@@ -145,7 +163,8 @@ async def run_reconcile(
     more_due = len(due) > BATCH_SIZE
     due = due[:BATCH_SIZE]
     vms = await list_runnerforge_vms()
-    open_records = await store.list_open(OPEN_LIMIT)
+    listed = await store.list_open(OPEN_LIMIT)
+    open_records = listed or []
     # Runners that are on a job right now. GitHub gives a queued job to any
     # idle runner with matching labels, so a VM's name says which job caused
     # it, not which job it is running.
@@ -158,12 +177,27 @@ async def run_reconcile(
     counts["backfilled"] = await _backfill(store, vms, {k for k, _ in open_records})
 
     tokens: dict[int, str | Exception] = {}
+    rows = (await get_registry().list_all() or {}) if ADMISSION == "registry" else {}
+    # Before the pass and the batch, so both see the freed slots.
+    deleted = await _delete_orphans(
+        now, vms, listed, busy_runners, tokens, counts, errors, rows
+    )
+    vms = [vm for vm in vms if vm.name not in deleted]
     # Before the batch, so a slow batch can't starve it.
     managed: set[int] = set()
     started_keys: set[str] = set()
     if ADMISSION == "registry":
         managed, started_keys = await _capacity_pass(
-            store, now, vms, busy_runners, tokens, counts, errors, on_started
+            store,
+            now,
+            vms,
+            busy_runners,
+            tokens,
+            counts,
+            errors,
+            on_started,
+            rows,
+            deleted,
         )
     # A started job's record changed; the batch's copy is stale.
     due = [(key, rec) for key, rec in due if key not in started_keys]
@@ -198,6 +232,7 @@ async def run_reconcile(
         errors=errors,
         registry_changes=registry_changes,
         started=counts["started"],
+        orphans_deleted=counts["orphans_deleted"],
     )
 
 
@@ -492,6 +527,8 @@ class _Pass:
     deadline: float
     busy_runners: set[str | None]
     on_started: Callable[[OperationHandle], None] | None
+    # VMs the orphan cleanup deleted this run; a live listing may still show them.
+    deleted: set[str] = field(default_factory=set)
     started_keys: set[str] = field(default_factory=set)
     attempts: int = 0
     stocked_out: set[str | None] = field(default_factory=set)
@@ -508,6 +545,8 @@ async def _capacity_pass(
     counts: Counter[str],
     errors: list[str],
     on_started: Callable[[OperationHandle], None] | None,
+    rows: dict[int, RegistryEntry],
+    deleted: set[str],
 ) -> tuple[set[int], set[str]]:
     """Start VMs for jobs waiting under an installation's limit: deferred
     jobs, and a limited installation's jobs whose VM another job took or
@@ -526,18 +565,11 @@ async def _capacity_pass(
         time.monotonic() + PASS_BUDGET_SECONDS,
         busy_runners,
         on_started,
+        deleted,
     )
-    rows = await get_registry().list_all() or {}
-    # Records exist only for allow-listed installations and ones approved
-    # at least once (the record gate).
-    ids = {
-        iid
-        for iid, row in rows.items()
-        if row.approved_at is not None and row.github_status != "deleted"
-    } | set(ALLOWED_INSTALLATION_IDS or ())
     managed: set[int] = set()
     queues: list[_Queue] = []
-    for iid in sorted(ids):
+    for iid in sorted(_record_installations(rows)):
         admission = await decide_admission(iid)
         if admission.reason == "registry_unavailable":
             # Unknown this run, not rejected: try again next run, and hold
@@ -649,7 +681,8 @@ async def _queue(run: _Pass, iid: int, admission: Admission) -> _Queue | None:
                 extra={"installation_id": iid, "error_class": type(e).__name__},
             )
             return None
-        free = admission.limits.max_concurrent_vms - len(active)
+        # By name: a deleted VM may or may not still be listed.
+        free = admission.limits.max_concurrent_vms - len(active - run.deleted)
     return _Queue(iid, admission, waiting, free, max(free, 0) * LOOKUPS_PER_SLOT, busy)
 
 
@@ -831,3 +864,168 @@ def _take_spare(run: _Pass, queue: _Queue, rec: dict[str, Any], repo: str) -> bo
 def _out_of_capacity(exc: Exception) -> bool:
     text = str(exc).upper()
     return "QUOTA" in text or "RESOURCE_POOL_EXHAUSTED" in text
+
+
+def _record_installations(rows: dict[int, RegistryEntry]) -> set[int]:
+    """Installations that get job records (the record gate): allow-listed,
+    and, from the registry, ones approved at least once."""
+    return {
+        iid
+        for iid, row in rows.items()
+        if row.approved_at is not None and row.github_status != "deleted"
+    } | set(ALLOWED_INSTALLATION_IDS or ())
+
+
+# --- orphan cleanup ---
+
+
+async def _delete_orphans(
+    now: datetime,
+    vms: list[VmInfo],
+    open_records: list[tuple[str, dict[str, Any]]] | None,
+    busy_runners: set[str | None],
+    tokens: dict[int, str | Exception],
+    counts: Counter[str],
+    errors: list[str],
+    rows: dict[int, RegistryEntry],
+) -> set[str]:
+    """Delete VMs whose runner won't take a job: GitHub no longer lists it
+    (it finished and its `completed` webhook was lost, or it never
+    registered), or lists it idle with no job it could take. Only for
+    installations that get records: the records say which runners are busy.
+
+    Returns the VMs deleted. Their jobs' records are left to the batch, which
+    asks GitHub before any verdict: a VM whose runner is gone usually ran its
+    job, even when the webhooks that would say so were lost."""
+    deleted: set[str] = set()
+    if open_records is None or len(open_records) >= OPEN_LIMIT:
+        # Fail closed: without every open record, a busy runner may look idle.
+        logger.warning(
+            "Orphan cleanup skipped",
+            extra={
+                "reason": "store_unavailable"
+                if open_records is None
+                else "too_many_open"
+            },
+        )
+        return deleted
+    # An unset allow-list admits, and records, everyone in allowlist mode.
+    everyone = ADMISSION == "allowlist" and ALLOWED_INSTALLATION_IDS is None
+    # GitHub refuses the calls of an installation it suspended; ADR-019's
+    # cleanup of cut-off installations handles their VMs. An owner-suspended
+    # one is checked: its idle runners could still take new jobs.
+    ids = _record_installations(rows) - {
+        iid for iid, row in rows.items() if row.github_status == "suspended"
+    }
+    candidates = [
+        vm
+        for vm in vms
+        if vm.status in ACTIVE_STATUSES
+        and vm.labels.installation_id.isdigit()
+        and (everyone or int(vm.labels.installation_id) in ids)
+        and vm.repo_full_name is not None
+        and now - vm.creation_timestamp > ORPHAN_MIN_AGE
+    ]
+    # A different order each run, so VMs that are kept every run (long jobs)
+    # can't always take the checks.
+    candidates.sort(key=lambda vm: zlib.crc32(f"{vm.name}/{now:%Y%m%d%H%M}".encode()))
+    deadline = time.monotonic() + ORPHAN_BUDGET_SECONDS
+    for checked, vm in enumerate(candidates):
+        if checked >= MAX_ORPHAN_CHECKS or time.monotonic() > deadline:
+            logger.warning(
+                "Orphan cleanup incomplete",
+                extra={"unchecked": len(candidates) - checked},
+            )
+            break
+        iid = int(vm.labels.installation_id)
+        try:
+            async with asyncio.timeout(ORPHAN_CHECK_TIMEOUT_SECONDS):
+                reason = await _delete_if_orphan(
+                    vm, iid, open_records, busy_runners, tokens
+                )
+        # Deliberately broad: a VM whose check fails is kept, and the run goes on.
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{vm.name}: {type(e).__name__}")
+            logger.error(
+                "Orphan check failed",
+                extra={"vm_name": vm.name, "error_class": type(e).__name__},
+            )
+            continue
+        if reason is None:
+            continue
+        # Gone from the rest of the run either way.
+        deleted.add(vm.name)
+        if reason == "already_deleted":
+            continue  # its `completed` webhook got there first
+        counts["orphans_deleted"] += 1
+        logger.info(
+            "Orphan VM deleted",
+            extra={
+                "vm_name": vm.name,
+                "installation_id": iid,
+                "reason": reason,
+                "age_minutes": int((now - vm.creation_timestamp).total_seconds() / 60),
+            },
+        )
+    return deleted
+
+
+async def _delete_if_orphan(
+    vm: VmInfo,
+    iid: int,
+    open_records: list[tuple[str, dict[str, Any]]],
+    busy_runners: set[str | None],
+    tokens: dict[int, str | Exception],
+) -> str | None:
+    """Delete the VM if it is an orphan; returns why (`already_deleted` if
+    GCE had no such VM), or None if it's kept."""
+    repo = str(vm.repo_full_name)
+    token = await _token(iid, tokens)
+    try:
+        # VM name == runner name.
+        runner = await get_runner(token, repo, vm.name)
+    except RepoNotFound:
+        return None  # no evidence either way; its runtime cap still removes it
+    if runner is None:
+        # Ephemeral runners leave GitHub's list after their one job, so this
+        # holds even if a record still says the VM is busy.
+        reason = "runner_gone"
+    elif runner.busy or vm.name in busy_runners:
+        # GitHub's busy flag can read false mid-job; the records back it up.
+        return None
+    elif runner.status == "online" and _may_take_waiting_job(vm, iid, open_records):
+        return None  # GitHub would hand it that job
+    else:
+        reason = "runner_idle"
+        # First, so GitHub can't hand it a job while the VM shuts down.
+        await delete_runner(token, repo, runner.id)
+    if await delete_vm(instance_name=vm.name, reason="reconcile") is None:
+        return "already_deleted"
+    return reason
+
+
+def _may_take_waiting_job(
+    vm: VmInfo, iid: int, open_records: list[tuple[str, dict[str, Any]]]
+) -> bool:
+    """Is a job of the installation waiting for a runner in the VM's repo,
+    with labels its runner covers? A VM whose labels are unknown covers
+    every job, so the cleanup errs towards keeping it."""
+    offered = {label.lower() for label in vm.runner_labels}
+    for _, rec in open_records:
+        if (
+            rec.get("installation_id") != iid
+            or rec.get("repo") != vm.repo_full_name
+            or _on_github_runner(rec)
+        ):
+            continue
+        wanted = {str(label).lower() for label in rec.get("labels") or []}
+        if not offered or wanted <= offered | _DEFAULT_RUNNER_LABELS:
+            return True
+    return False
+
+
+def _on_github_runner(rec: dict[str, Any]) -> bool:
+    """A runner took the job (or it ended): it's no longer waiting."""
+    return isinstance(rec.get("in_progress"), dict) or isinstance(
+        rec.get("completed"), dict
+    )

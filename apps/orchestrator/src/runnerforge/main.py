@@ -395,6 +395,7 @@ async def reconcile(
             "backfilled": result.backfilled,
             "registry_changes": result.registry_changes,
             "started": result.started,
+            "orphans_deleted": result.orphans_deleted,
             "more_due": result.more_due,
             "error_count": len(result.errors),
         },

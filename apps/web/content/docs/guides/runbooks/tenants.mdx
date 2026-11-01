@@ -38,7 +38,7 @@ needs read and write access to that Firestore database; the project owner role h
 |---|---|
 | `list [--state pending]` | Every row: account, `state`, GitHub's status, first approval, limits |
 | `approve <id> [--unlimited]` | `state: approved`. A row with no limits gets the beta defaults; one with limits keeps them |
-| `suspend <id>` | `state: suspended`: no new VMs. Running VMs end with their job or runtime cap |
+| `suspend <id>` | `state: suspended`: no new VMs. Running VMs end with their job or runtime cap; idle ones are deleted by the reconciler's orphan cleanup |
 | `set-limits <id> …` | Change limits. Ones not named stay as they are; `--unlimited` or `--defaults` replace all of them |
 
 `set-limits` options: `--max-concurrent-vms N` (1–30), `--max-size small|medium|large|xlarge`,
