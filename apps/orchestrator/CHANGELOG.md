@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.25.0...orchestrator-v0.26.0) (2026-11-01)
+
+
+### Features
+
+* **orchestrator:** reconciler deletes orphan VMs ([#355](https://github.com/rumankazi/runnerforge/issues/355)) ([26f0fbe](https://github.com/rumankazi/runnerforge/commit/26f0fbe5943861d416faa9e9d602f4e31548bf3a))
+
 ## [0.25.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.24.2...orchestrator-v0.25.0) (2026-11-01)
 
 
