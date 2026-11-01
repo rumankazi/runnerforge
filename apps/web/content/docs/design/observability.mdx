@@ -84,7 +84,7 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Sweep decision` | INFO / WARNING | `sweep.py` | `decision`, `reason`, `vm_name`, `age_minutes` | |
 | `Sweep failed for VM` | ERROR | `sweep.py` | `vm_name`, `error` | |
 | `Sweep completed` | INFO | `main.py` | `checked`, `deleted`, `skipped`, `error_count` | `sweep_*` |
-| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `registry_changes`, `started`, `orphans_deleted`, `more_due`, `error_count` | `reconcile_run_count`, `reconcile_stuck_count`, `reconcile_error_count`, `reconcile_started_count` |
+| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `registry_changes`, `started`, `orphans_deleted`, `more_due`, `error_count` | `reconcile_run_count`, `reconcile_stuck_count`, `reconcile_error_count`, `reconcile_started_count`, `reconcile_orphans_deleted_count` |
 | `Reconcile failed for record` | ERROR | `reconcile.py` | `job_key`, `error` | |
 | `Orphan VM deleted` | INFO | `reconcile.py` | `vm_name`, `installation_id`, `reason` (`runner_gone`, `runner_idle`), `age_minutes` | |
 | `Orphan check failed` | ERROR | `reconcile.py` | `vm_name`, `error_class` (the VM is kept) | |
@@ -169,7 +169,7 @@ All 23 are in `observability_metrics.tf`. All but one scope to `resource.type="c
 | `runner_vm_count` | distribution | `VM list scan` | |
 | `sweep_checked_count`, `sweep_deleted_count`, `sweep_error_count` | distribution | `Sweep completed` | |
 | `reconcile_run_count` | counter | `Reconcile completed`: one per run, about 12 an hour | |
-| `reconcile_stuck_count`, `reconcile_error_count`, `reconcile_started_count` | distribution | `Reconcile completed` (`stuck`, `error_count`, `started`); one point per run, so the point count is the run count | |
+| `reconcile_stuck_count`, `reconcile_error_count`, `reconcile_started_count`, `reconcile_orphans_deleted_count` | distribution | `Reconcile completed` (`stuck`, `error_count`, `started`, `orphans_deleted`); one point per run, so the point count is the run count | |
 | `machine_policy_reject_count` | counter | `Machine policy rejected` | `reason` |
 | `job_preempted_count` | counter | `Job ended due to spot preemption` | `conclusion` |
 | `vm_preemption_count` | counter | GCE audit log `compute.instances.preempted` on `instances/runnerforge-*` | `zone` |
@@ -267,6 +267,6 @@ back to the JSON, then commit. Sections:
 | Webhook reliability | Webhook events by `event_type`, lost-webhook ratio |
 | Spot & Policy | VM creation rate by spot, preemptions (audit log vs job-confirmed), machine policy rejects by reason |
 | Webhook delivery latency | End-to-end time-to-runner p50/p95, GitHub delivery lag p50/p95 |
-| Reconciler | Runs per hour (expect 12), stuck / errors / started per run, job store write failures by operation, queued webhook outcomes by outcome |
+| Reconciler | Runs per hour (expect 12), stuck / errors / started / orphans deleted per run, job store write failures by operation, queued webhook outcomes by outcome |
 
 For how the charts' aligners and reducers work, see [Cloud Monitoring charts](/docs/guides/cloud-monitoring-charts).
