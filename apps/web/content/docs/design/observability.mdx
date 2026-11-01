@@ -84,8 +84,13 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Sweep decision` | INFO / WARNING | `sweep.py` | `decision`, `reason`, `vm_name`, `age_minutes` | |
 | `Sweep failed for VM` | ERROR | `sweep.py` | `vm_name`, `error` | |
 | `Sweep completed` | INFO | `main.py` | `checked`, `deleted`, `skipped`, `error_count` | `sweep_*` |
-| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `registry_changes`, `more_due`, `error_count` | `reconcile_stuck_count`, `reconcile_error_count` |
+| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `registry_changes`, `started`, `more_due`, `error_count` | `reconcile_stuck_count`, `reconcile_error_count` |
 | `Reconcile failed for record` | ERROR | `reconcile.py` | `job_key`, `error` | |
+| `Reconcile started job` | INFO | `reconcile.py` | `job_key`, `vm_name`, `start`, `installation_id` (capacity pass, `ADMISSION=registry`) | |
+| `Reconcile start failed` | ERROR | `reconcile.py` | `job_key`, `error_class` | |
+| `Capacity check failed` | WARNING | `reconcile.py` | `installation_id`, `error_class` | |
+| `Capacity pass paused: quota full` | WARNING | `reconcile.py` | (a start failed with `QUOTA_EXCEEDED` in the last 10 min) | |
+| `Capacity pass paused for stocked-out machine types` | WARNING | `reconcile.py` | `machine_types` | |
 | `Reconcile skipped record without identity` | WARNING | `reconcile.py` | `job_key` | |
 
 Startup lines worth knowing: `Resolved runner image` (`image_name`, `image_version`), `Loaded machine types cache`

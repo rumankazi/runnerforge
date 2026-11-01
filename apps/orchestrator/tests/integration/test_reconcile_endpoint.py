@@ -18,6 +18,7 @@ def test_reconcile_endpoint_returns_result_and_logs_counts(monkeypatch, caplog):
         backfilled=1,
         more_due=False,
         errors=["100-200-1: RuntimeError"],
+        started=2,
     )
     run_mock = AsyncMock(return_value=result)
     monkeypatch.setattr("runnerforge.main.run_reconcile", run_mock)
@@ -50,6 +51,45 @@ def test_reconcile_endpoint_returns_result_and_logs_counts(monkeypatch, caplog):
     )
     assert log.more_due is False
     assert log.error_count == 1
+    assert log.started == 2
+
+
+def test_reconcile_endpoint_watches_started_vms(monkeypatch):
+    """Like the webhook path, each VM the capacity pass starts gets a
+    watcher that records its `vm` fact (ADR-019)."""
+    handle = object()
+
+    async def run(on_started):
+        on_started(handle)
+        return ReconcileResult(
+            checked=0,
+            closed=0,
+            facts=0,
+            stuck=0,
+            backfilled=0,
+            more_due=False,
+            errors=[],
+        )
+
+    monkeypatch.setattr("runnerforge.main.run_reconcile", run)
+    watcher = AsyncMock()
+    monkeypatch.setattr("runnerforge.main.wait_for_vm_creation", watcher)
+    monkeypatch.setattr(
+        "runnerforge.security.id_token.verify_oauth2_token",
+        MagicMock(
+            return_value={
+                "email": "test-scheduler@example.iam.gserviceaccount.com",
+                "email_verified": True,
+            }
+        ),
+    )
+
+    response = client.post(
+        "/reconcile", headers={"Authorization": "Bearer fake.jwt.token"}
+    )
+
+    assert response.status_code == 200
+    watcher.assert_awaited_once_with(handle)
 
 
 def test_reconcile_endpoint_rejects_invalid_token(monkeypatch):

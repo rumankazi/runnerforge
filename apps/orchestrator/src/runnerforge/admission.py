@@ -8,10 +8,10 @@ ADMISSION=registry, `decide_admission` admits, and its limits apply.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
-from runnerforge.compute_client import machine_type_vcpus
+from runnerforge.compute_client import MAX_VM_RUN_DURATION, machine_type_vcpus
 from runnerforge.config import ALLOWED_INSTALLATION_IDS
 from runnerforge.github_client import get_app_installation, list_app_installations
 from runnerforge.machine_policy import SIZE_TABLE, SIZE_VCPUS, MachinePolicy
@@ -49,6 +49,9 @@ class Admission:
     # at least once (`approved_at`), so strangers can't grow the store.
     record: bool = False
 
+
+# Added to a limited tenant's runtime cap for the VM's boot.
+BOOT_ALLOWANCE = timedelta(minutes=15)
 
 # What ADMISSION=allowlist gives every installation it lets through.
 ALLOWLISTED = Admission(admitted=True, reason="allowlisted", record=True)
@@ -94,6 +97,17 @@ async def decide_admission(installation_id: int) -> Admission:
         reason="approved",
         limits=_row_limits(installation_id, entry.limits),
         record=True,
+    )
+
+
+def vm_settings(policy: MachinePolicy, limits: Limits | None) -> tuple[bool, timedelta]:
+    """Spot and the VM's runtime cap under an installation's limits:
+    `spot_only` forces Spot, and the cap is its runtime plus boot."""
+    if limits is None:
+        return policy.spot, MAX_VM_RUN_DURATION
+    return (
+        policy.spot or limits.spot_only,
+        timedelta(minutes=limits.max_runtime_minutes) + BOOT_ALLOWANCE,
     )
 
 

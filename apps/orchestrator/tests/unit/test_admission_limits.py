@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -366,3 +366,65 @@ def test_an_early_start_without_a_runner_name_is_measured(caplog):
     outcome, unknown = _readiness_logs(caplog)
     assert unknown is None
     assert outcome.runner_readiness_seconds == 0.0
+
+
+# --- the shared VM start (ADR-019 step 3b) ---
+
+
+async def test_submit_runner_vm_labels_a_record_without_a_repository_id(monkeypatch):
+    monkeypatch.setattr(handlers, "get_installation_token", AsyncMock(return_value="i"))
+    monkeypatch.setattr(handlers, "get_registration_token", AsyncMock(return_value="r"))
+    create = AsyncMock(return_value=None)
+    monkeypatch.setattr(handlers, "create_vm", create)
+    spec = handlers.RunnerVmSpec(
+        vm_name="runnerforge-1-2-1-r1",
+        installation_id=7,
+        repo_full_name="o/r",
+        repository_id=None,
+        run_id=1,
+        job_id=2,
+        run_attempt=1,
+        job_labels=["runnerforge"],
+        machine_type="n2-standard-2",
+        spot=True,
+        max_run_duration=timedelta(minutes=75),
+        queued_received_at=1_000_000.9,
+    )
+
+    assert await handlers.submit_runner_vm(spec, on_error=AsyncMock()) is None
+
+    kwargs = create.await_args.kwargs
+    assert kwargs["instance_name"] == "runnerforge-1-2-1-r1"
+    assert kwargs["labels"]["repository_id"] == ""
+    assert kwargs["labels"]["queued_received_at"] == "1000000"
+    assert kwargs["labels"]["webhook_trace_id"] == ""
+    assert kwargs["metadata"]["repo-url"] == "https://github.com/o/r"
+    assert kwargs["max_run_duration"] == timedelta(minutes=75)
+
+
+async def test_submit_runner_vm_uses_a_token_it_is_given(monkeypatch):
+    minted = AsyncMock()
+    monkeypatch.setattr(handlers, "get_installation_token", minted)
+    registration = AsyncMock(return_value="r")
+    monkeypatch.setattr(handlers, "get_registration_token", registration)
+    monkeypatch.setattr(handlers, "create_vm", AsyncMock(return_value=None))
+    spec = handlers.RunnerVmSpec(
+        vm_name="v",
+        installation_id=7,
+        repo_full_name="o/r",
+        repository_id=1,
+        run_id=1,
+        job_id=2,
+        run_attempt=1,
+        job_labels=[],
+        machine_type="n2-standard-2",
+        spot=True,
+        max_run_duration=timedelta(minutes=75),
+        queued_received_at=1.0,
+        installation_token="cached",
+    )
+
+    await handlers.submit_runner_vm(spec, on_error=AsyncMock())
+
+    minted.assert_not_awaited()
+    assert registration.await_args.kwargs["installation_token"] == "cached"

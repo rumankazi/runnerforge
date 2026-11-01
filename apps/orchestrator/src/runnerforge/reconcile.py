@@ -7,21 +7,42 @@ Spot VMs preempted before they picked up a job. Cloud Scheduler calls it every
 isn't throttled the way background tasks are.
 
 Every fact it writes has `source: reconcile`. VM labels stay the authority for
-which VMs exist; the reconciler only reads them.
+which VMs exist.
+
+With ADMISSION=registry, each run first starts VMs for jobs waiting under an
+installation's limit (ADR-019, the capacity pass), then checks due records.
 """
 
 import asyncio
 import logging
 import time
 from collections import Counter
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 
-from runnerforge.admission import registry_backfill_due, sync_registry
-from runnerforge.compute_client import list_runnerforge_vms, preemption_status
+from runnerforge.admission import (
+    Admission,
+    decide_admission,
+    exceeds_size,
+    registry_backfill_due,
+    sync_registry,
+    vm_settings,
+)
+from runnerforge.compute_client import (
+    ACTIVE_STATUSES,
+    ACTIVE_VMS_TIMEOUT_SECONDS,
+    OperationHandle,
+    active_vm_names,
+    list_runnerforge_vms,
+    preemption_status,
+)
+from runnerforge.config import ADMISSION, ALLOWED_INSTALLATION_IDS
 from runnerforge.github_client import JobNotFound, get_installation_token, get_job
+from runnerforge.handlers import RunnerVmSpec, submit_runner_vm
 from runnerforge.job_store import (
     FIRST_CHECK_DELAY,
     RETENTION,
@@ -31,7 +52,9 @@ from runnerforge.job_store import (
     get_job_store,
     job_key,
 )
-from runnerforge.models import ReconcileResult, VmInfo
+from runnerforge.machine_policy import MachinePolicyError, resolve_labels
+from runnerforge.models import GitHubJob, ReconcileResult, VmInfo
+from runnerforge.registry import get_registry
 
 logger = logging.getLogger(__name__)
 
@@ -56,12 +79,48 @@ RECORD_TIMEOUT_SECONDS = 30.0
 # GitHub adds these to every runner we boot (see machine_policy).
 _DEFAULT_RUNNER_LABELS = frozenset({"self-hosted", "linux", "x64"})
 
+# Capacity pass (ADR-019). It runs first, in its own slice of the run budget.
+PASS_BUDGET_SECONDS = 40.0
+START_TIMEOUT_SECONDS = 15.0
+MAX_STARTS_PER_RUN = 10
+# Reconciler starts per job; past this, the batch may mark it stuck.
+MAX_STARTS_PER_JOB = 2
+# Open records read per installation, oldest first. Records that can't start
+# (rejected, out of starts) stay open until GitHub cancels them, so the
+# window is wide enough that they don't hide the ones that can.
+PASS_RECORD_LIMIT = 100
+# GitHub job lookups per free slot, so skippable jobs can't use up a run.
+LOOKUPS_PER_SLOT = 3
+# A VM this young may still register and take a waiting job; an older idle
+# one probably never will (its runner died or never registered).
+SPARE_VM_MAX_AGE = timedelta(minutes=15)
+# A decision this recent may have a VM the run's listing doesn't show yet.
+START_GRACE = timedelta(minutes=3)
+# GitHub cancels a job queued for 24 h; a VM started this late would idle.
+STALE_QUEUED = timedelta(hours=23, minutes=30)
+# GCE errors on the create operation that say the zone or quota is full. A
+# start that failed this way isn't counted against the job, and the pass
+# pauses for a while: more starts would fail the same way.
+CAPACITY_ERRORS = frozenset(
+    {"QUOTA_EXCEEDED", "ZONE_RESOURCE_POOL_EXHAUSTED", "RESOURCE_POOL_EXHAUSTED"}
+)
+CAPACITY_PAUSE = timedelta(minutes=10)
+# Uncounted retries per job after capacity failures, so a machine type that
+# stays stocked out can't keep a job (and its pause) going until GitHub
+# cancels it.
+MAX_CAPACITY_RETRIES = 3
+
 
 class _InstallationGone(Exception):
     """The App installation is gone (token request returned 404)."""
 
 
-async def run_reconcile(now: datetime | None = None) -> ReconcileResult:
+async def run_reconcile(
+    now: datetime | None = None,
+    on_started: Callable[[OperationHandle], None] | None = None,
+) -> ReconcileResult:
+    """`on_started` gets the operation of each VM the capacity pass starts,
+    so the caller can watch it like the webhook path does."""
     store = get_job_store()
     if not store.enabled:
         logger.info("Reconcile skipped: job store disabled")
@@ -76,6 +135,7 @@ async def run_reconcile(now: datetime | None = None) -> ReconcileResult:
         )
     now = now or datetime.now(UTC)
     counts: Counter[str] = Counter()
+    started = time.monotonic()
     # ADR-019: keep the tenant registry in step with GitHub, once an hour.
     registry_changes = await sync_registry() if registry_backfill_due(now) else 0
     errors: list[str] = []
@@ -98,7 +158,15 @@ async def run_reconcile(now: datetime | None = None) -> ReconcileResult:
     counts["backfilled"] = await _backfill(store, vms, {k for k, _ in open_records})
 
     tokens: dict[int, str | Exception] = {}
-    started = time.monotonic()
+    # Before the batch, so a slow batch can't starve it.
+    managed: set[int] = set()
+    started_keys: set[str] = set()
+    if ADMISSION == "registry":
+        managed, started_keys = await _capacity_pass(
+            store, now, vms, busy_runners, tokens, counts, errors, on_started
+        )
+    # A started job's record changed; the batch's copy is stale.
+    due = [(key, rec) for key, rec in due if key not in started_keys]
     checked = 0
     for key, rec in due:
         if time.monotonic() - started > RUN_BUDGET_SECONDS:
@@ -108,7 +176,7 @@ async def run_reconcile(now: datetime | None = None) -> ReconcileResult:
         try:
             async with asyncio.timeout(RECORD_TIMEOUT_SECONDS):
                 await _reconcile_one(
-                    store, key, rec, now, vms, busy_runners, tokens, counts
+                    store, key, rec, now, vms, busy_runners, tokens, counts, managed
                 )
         # Deliberately broad, like the sweep: one record that fails must not
         # stop the run. It is still pushed back, or a record that always fails
@@ -129,6 +197,7 @@ async def run_reconcile(now: datetime | None = None) -> ReconcileResult:
         more_due=more_due,
         errors=errors,
         registry_changes=registry_changes,
+        started=counts["started"],
     )
 
 
@@ -192,6 +261,7 @@ async def _reconcile_one(
     busy_runners: set[str | None],
     tokens: dict[int, str | Exception],
     counts: Counter[str],
+    managed: set[int],
 ) -> None:
     async def write(name: str, fact: dict[str, Any]) -> None:
         # The record exists, so no base fields are needed.
@@ -243,7 +313,7 @@ async def _reconcile_one(
         # not stuck: no VM was made for it on purpose.
         await _reschedule(store, key, rec, now)
         return
-    own_vm = f"runnerforge-{key}"
+    own_vm = _current_vm_name(key, rec)
     if any(vm.name == own_vm for vm in vms) and own_vm not in busy_runners:
         if not isinstance(rec.get("vm"), dict):
             # The watcher never recorded it (often: CPU throttled after the
@@ -253,6 +323,11 @@ async def _reconcile_one(
         return
     # Its own VM is gone, or GitHub gave it another job (ephemeral runners
     # take one job each), so only another VM can still take this one.
+    if int(installation_id) in managed and _pass_may_restart(rec, now):
+        # The capacity pass can still start it under its installation's
+        # limit (ADR-019): waiting, not stuck.
+        await _reschedule(store, key, rec, now)
+        return
     if not _already_stuck(rec) and not _spare_runner(rec, repo, vms, busy_runners):
         # Nothing can take the job. The preemption check looks at its own VM
         # only, so `missing` also covers "the VM that would have taken it was
@@ -270,8 +345,61 @@ async def _reconcile_one(
 
 
 def _decision_kind(rec: dict[str, Any]) -> str | None:
+    return _decision(rec).get("kind")
+
+
+def _decision(rec: dict[str, Any]) -> dict[str, Any]:
     decision = rec.get("decision")
-    return decision.get("kind") if isinstance(decision, dict) else None
+    return decision if isinstance(decision, dict) else {}
+
+
+def _starts(rec: dict[str, Any]) -> int:
+    """Reconciler starts this job has had (ADR-019)."""
+    return int(_decision(rec).get("start") or 0)
+
+
+def _pass_may_restart(rec: dict[str, Any], now: datetime) -> bool:
+    """Whether the capacity pass may still start this submitted job: the
+    batch leaves its stuck verdict to the pass. Other kinds (a duplicate's
+    `already_exists`, no decision) the pass never starts."""
+    queued_at = rec.get("queued_at")
+    return (
+        _decision_kind(rec) == "vm_submitted"
+        and _starts_left(rec)
+        and not (isinstance(queued_at, datetime) and now - queued_at > STALE_QUEUED)
+    )
+
+
+def _starts_left(rec: dict[str, Any]) -> bool:
+    # A refund reuses the start's number and makes no extra VM, so a
+    # capacity failure on the last start may still be retried.
+    return _starts(rec) < MAX_STARTS_PER_JOB or _refundable(rec)
+
+
+def _capacity_failure(rec: dict[str, Any]) -> str | None:
+    """The error code if the job's latest start failed because the zone or
+    quota was full. Only the fact about the latest start's VM counts: a late
+    watcher of an earlier start doesn't."""
+    vm = rec.get("vm") if isinstance(rec.get("vm"), dict) else {}
+    if vm.get("outcome") != "failure" or vm.get("error_code") not in CAPACITY_ERRORS:
+        return None
+    current = _decision(rec).get("vm_name")
+    if current is None or vm.get("vm_name") != current:
+        return None
+    return vm["error_code"]
+
+
+def _refundable(rec: dict[str, Any]) -> bool:
+    return (
+        _capacity_failure(rec) is not None
+        and int(_decision(rec).get("capacity_retries") or 0) < MAX_CAPACITY_RETRIES
+    )
+
+
+def _current_vm_name(key: str, rec: dict[str, Any]) -> str:
+    """The VM last made for the job: a reconciler start names it in the
+    decision (`-rN` after the first)."""
+    return _decision(rec).get("vm_name") or f"runnerforge-{key}"
 
 
 def _failed_to_start(rec: dict[str, Any]) -> bool:
@@ -336,3 +464,370 @@ async def _reschedule(
     step = max(checks - 1, SLOW_START if slow else 0)
     delay = BACKOFF[min(step, len(BACKOFF) - 1)]
     await store.patch(key, {"next_check_at": now + delay, "checks": checks})
+
+
+# --- capacity pass (ADR-019) ---
+
+
+@dataclass
+class _Queue:
+    """One installation's waiting jobs in this run."""
+
+    installation_id: int
+    admission: Admission
+    waiting: list[tuple[str, dict[str, Any]]]
+    free: int
+    lookups: int
+    busy: set[str]
+
+
+@dataclass
+class _Pass:
+    store: JobStore
+    now: datetime
+    vms: list[VmInfo]
+    tokens: dict[int, str | Exception]
+    counts: Counter[str]
+    errors: list[str]
+    deadline: float
+    busy_runners: set[str | None]
+    on_started: Callable[[OperationHandle], None] | None
+    started_keys: set[str] = field(default_factory=set)
+    attempts: int = 0
+    stocked_out: set[str | None] = field(default_factory=set)
+    spares_used: set[str] = field(default_factory=set)
+    stopped: bool = False
+
+
+async def _capacity_pass(
+    store: JobStore,
+    now: datetime,
+    vms: list[VmInfo],
+    busy_runners: set[str | None],
+    tokens: dict[int, str | Exception],
+    counts: Counter[str],
+    errors: list[str],
+    on_started: Callable[[OperationHandle], None] | None,
+) -> tuple[set[int], set[str]]:
+    """Start VMs for jobs waiting under an installation's limit: deferred
+    jobs, and a limited installation's jobs whose VM another job took or
+    GCE never made. GitHub gives a queued job to any idle runner with
+    matching labels, so this works from free slots, not decision kinds.
+
+    Returns the admitted, limited installations (the batch leaves their
+    stuck verdicts to this pass) and the records it started."""
+    run = _Pass(
+        store,
+        now,
+        vms,
+        tokens,
+        counts,
+        errors,
+        time.monotonic() + PASS_BUDGET_SECONDS,
+        busy_runners,
+        on_started,
+    )
+    rows = await get_registry().list_all() or {}
+    # Records exist only for allow-listed installations and ones approved
+    # at least once (the record gate).
+    ids = {
+        iid
+        for iid, row in rows.items()
+        if row.approved_at is not None and row.github_status != "deleted"
+    } | set(ALLOWED_INSTALLATION_IDS or ())
+    managed: set[int] = set()
+    queues: list[_Queue] = []
+    for iid in sorted(ids):
+        admission = await decide_admission(iid)
+        if admission.reason == "registry_unavailable":
+            # Unknown this run, not rejected: try again next run, and hold
+            # back stuck verdicts meanwhile.
+            managed.add(iid)
+            continue
+        if admission.admitted and admission.limits is not None:
+            managed.add(iid)
+        queue = await _queue(run, iid, admission)
+        if queue is not None:
+            queues.append(queue)
+    # Recent capacity failures: a quota is project-wide, so it pauses every
+    # start; a stockout is per machine type, so it pauses only that type.
+    recent = [
+        (_capacity_failure(rec), _decision(rec).get("machine_type"))
+        for queue in queues
+        for _, rec in queue.waiting
+        if _capacity_failure(rec)
+        and isinstance(rec["vm"].get("at"), datetime)
+        and now - rec["vm"]["at"] < CAPACITY_PAUSE
+    ]
+    if any(code == "QUOTA_EXCEEDED" for code, _ in recent):
+        logger.warning("Capacity pass paused: quota full")
+        return managed, run.started_keys
+    run.stocked_out = {machine_type for _, machine_type in recent}
+    if run.stocked_out:
+        logger.warning(
+            "Capacity pass paused for stocked-out machine types",
+            extra={"machine_types": sorted(str(t) for t in run.stocked_out)},
+        )
+    # Round-robin, one start or skip per installation per round, so one
+    # tenant's backlog can't use up another's turn.
+    while queues and not run.stopped:
+        for queue in list(queues):
+            if (
+                run.stopped
+                or run.attempts >= MAX_STARTS_PER_RUN
+                or time.monotonic() > run.deadline
+            ):
+                return managed, run.started_keys
+            if queue.free <= 0 or queue.lookups <= 0 or not queue.waiting:
+                queues.remove(queue)
+                continue
+            queue.lookups -= 1
+            key, rec = queue.waiting.pop(0)
+            try:
+                async with asyncio.timeout(START_TIMEOUT_SECONDS):
+                    await _consider(run, queue, key, rec)
+            except Exception as e:  # noqa: BLE001
+                run.errors.append(f"{key}: {type(e).__name__}")
+                logger.error(
+                    "Reconcile start failed",
+                    extra={"job_key": key, "error_class": type(e).__name__},
+                )
+                # This installation is done for the run: a token or GCE
+                # outage would fail its next start the same way.
+                queue.free = 0
+                if _out_of_capacity(e):
+                    # Quota or a zone stockout: every start would fail.
+                    run.stopped = True
+    return managed, run.started_keys
+
+
+async def _queue(run: _Pass, iid: int, admission: Admission) -> _Queue | None:
+    recs = await run.store.list_open_by_installation(iid, PASS_RECORD_LIMIT)
+    if not recs:
+        return None
+    busy = {
+        str(rec["in_progress"].get("runner_name"))
+        for _, rec in recs
+        if isinstance(rec.get("in_progress"), dict)
+    } | {str(name) for name in run.busy_runners if name}
+    by_name = {vm.name: vm for vm in run.vms}
+    waiting = [
+        (key, rec)
+        for key, rec in recs
+        if _waiting(key, rec, admission, run.now, by_name, busy)
+    ]
+    if not waiting:
+        return None
+    if not admission.admitted:
+        # Suspended, uninstalled or no longer approved: its deferred jobs
+        # won't start, and the record says why.
+        for key, _ in waiting:
+            await run.store.patch(
+                key,
+                {
+                    "decision": {
+                        "kind": "rejected",
+                        "reason": admission.reason,
+                        "source": "reconcile",
+                        "at": run.now,
+                    }
+                },
+            )
+            run.counts["facts"] += 1
+        return None
+    if admission.limits is None:
+        free = MAX_STARTS_PER_RUN
+    else:
+        try:
+            # Live, not the run's listing: the webhook path keeps creating.
+            async with asyncio.timeout(ACTIVE_VMS_TIMEOUT_SECONDS + 1):
+                active = await active_vm_names(iid)
+        except Exception as e:  # noqa: BLE001
+            # Fail closed: unlike a webhook, the next run asks again.
+            logger.warning(
+                "Capacity check failed",
+                extra={"installation_id": iid, "error_class": type(e).__name__},
+            )
+            return None
+        free = admission.limits.max_concurrent_vms - len(active)
+    return _Queue(iid, admission, waiting, free, max(free, 0) * LOOKUPS_PER_SLOT, busy)
+
+
+def _waiting(
+    key: str,
+    rec: dict[str, Any],
+    admission: Admission,
+    now: datetime,
+    vms: dict[str, VmInfo],
+    busy: set[str],
+) -> bool:
+    """A job the pass may start: deferred; or, for a limited installation,
+    one whose VM another job took or GCE never made."""
+    if isinstance(rec.get("in_progress"), dict) or isinstance(
+        rec.get("completed"), dict
+    ):
+        return False
+    if not _starts_left(rec):
+        return False
+    queued_at = rec.get("queued_at")
+    if isinstance(queued_at, datetime) and now - queued_at > STALE_QUEUED:
+        return False
+    decision = _decision(rec)
+    if decision.get("kind") == "deferred":
+        return True
+    if decision.get("kind") != "vm_submitted" or admission.limits is None:
+        return False
+    at = decision.get("at")
+    if isinstance(at, datetime) and now - at < START_GRACE:
+        return False
+    vm = vms.get(_current_vm_name(key, rec))
+    # Its own VM, up and not on another job, will take it.
+    return vm is None or vm.status not in ACTIVE_STATUSES or vm.name in busy
+
+
+async def _consider(run: _Pass, queue: _Queue, key: str, rec: dict[str, Any]) -> None:
+    """Ask GitHub about one waiting job, then start a VM for it if nothing
+    else can take it."""
+    iid = queue.installation_id
+    repo, job_id = rec.get("repo"), rec.get("job_id")
+    if not repo or job_id is None:
+        return
+    try:
+        token = await _token(iid, run.tokens)
+        job = await get_job(token, repo, int(job_id))
+    except JobNotFound, _InstallationGone:
+        job = GitHubJob(id=int(job_id), status="completed", conclusion="gone")
+    if job.status != "queued":
+        # Record it, so the job leaves the waiting set.
+        name = "completed" if job.status == "completed" else "in_progress"
+        fact: dict[str, Any] = {"runner_name": job.runner_name}
+        if name == "completed":
+            fact["conclusion"] = job.conclusion
+        await run.store.record_fact(key, {}, name, fact, source="reconcile")
+        run.counts["facts"] += 1
+        return
+    if _take_spare(run, queue, rec, repo):
+        return
+    try:
+        policy = resolve_labels([str(label) for label in rec.get("labels") or []])
+    except MachinePolicyError:
+        return  # admitted once with these labels; nothing to start
+    limits = queue.admission.limits
+    if limits is not None and exceeds_size(policy, limits):
+        # Its limits changed since it was deferred.
+        await run.store.patch(
+            key,
+            {
+                "decision": {
+                    "kind": "rejected",
+                    "reason": "limit_size",
+                    "machine_type": policy.machine_type,
+                    "source": "reconcile",
+                    "at": run.now,
+                }
+            },
+        )
+        run.counts["facts"] += 1
+        return
+    if policy.machine_type in run.stocked_out:
+        return  # the zone is out of this type; try again after the pause
+    spot, max_run_duration = vm_settings(policy, limits)
+    start = _starts(rec)
+    base = f"runnerforge-{key}"
+    retries = 0
+    if _refundable(rec):
+        # GCE never made that VM, so its name is free and the attempt
+        # doesn't count against the job.
+        n, vm_name = start, _current_vm_name(key, rec)
+        retries = int(_decision(rec).get("capacity_retries") or 0) + 1
+    else:
+        n = start + 1
+        # Never reuse a name: GitHub may still hold an offline runner of it.
+        vm_name = (
+            base if _decision_kind(rec) == "deferred" and start == 0 else f"{base}-r{n}"
+        )
+    if not await run.store.claim_start(
+        key,
+        start,
+        {
+            "kind": "vm_submitted",
+            "source": "reconcile",
+            "start": n,
+            "vm_name": vm_name,
+            "machine_type": policy.machine_type,
+            "spot": spot,
+            "capacity_retries": retries,
+            "at": run.now,
+        },
+        run.now + BACKOFF[0],
+    ):
+        return  # moved on, or another run took it
+    # Counted from the claim: a start cancelled mid-insert may still have
+    # made its VM.
+    queue.free -= 1
+    run.attempts += 1
+
+    async def record_errored(stage, exc: Exception) -> None:
+        await run.store.record_fact(
+            key,
+            {},
+            "errored",
+            {"stage": stage, "error_class": type(exc).__name__},
+            source="reconcile",
+        )
+
+    run.started_keys.add(key)
+    handle = await submit_runner_vm(
+        RunnerVmSpec(
+            vm_name=vm_name,
+            installation_id=iid,
+            repo_full_name=repo,
+            repository_id=rec.get("repository_id"),
+            run_id=int(rec["run_id"]),
+            job_id=int(job_id),
+            run_attempt=int(rec["run_attempt"]),
+            job_labels=[str(label) for label in rec.get("labels") or []],
+            machine_type=policy.machine_type,
+            spot=spot,
+            max_run_duration=max_run_duration,
+            # Readiness runs from this start (ADR-019).
+            queued_received_at=time.time(),
+            installation_token=token,
+        ),
+        on_error=record_errored,
+    )
+    run.counts["started"] += 1
+    if handle is not None and run.on_started is not None:
+        # The record exists, so the watcher's write needs no base fields.
+        run.on_started(replace(handle, job_key=key, job_base={}))
+    logger.info(
+        "Reconcile started job",
+        extra={"job_key": key, "vm_name": vm_name, "start": n, "installation_id": iid},
+    )
+
+
+def _take_spare(run: _Pass, queue: _Queue, rec: dict[str, Any], repo: str) -> bool:
+    """Is there a young, idle VM of the installation that can still take
+    this job? Each excuses one waiting job only."""
+    wanted = {str(label).lower() for label in rec.get("labels") or []}
+    for vm in run.vms:
+        if (
+            vm.name in run.spares_used
+            or vm.name in queue.busy
+            or vm.status not in ACTIVE_STATUSES
+            or vm.labels.installation_id != str(queue.installation_id)
+            or vm.repo_full_name != repo
+            or run.now - vm.creation_timestamp > SPARE_VM_MAX_AGE
+        ):
+            continue
+        offered = {label.lower() for label in vm.runner_labels}
+        if offered and not wanted <= offered | _DEFAULT_RUNNER_LABELS:
+            continue
+        run.spares_used.add(vm.name)
+        return True
+    return False
+
+
+def _out_of_capacity(exc: Exception) -> bool:
+    text = str(exc).upper()
+    return "QUOTA" in text or "RESOURCE_POOL_EXHAUSTED" in text

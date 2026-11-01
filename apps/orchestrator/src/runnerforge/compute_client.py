@@ -65,6 +65,9 @@ class OperationHandle:
     # that creates the record still gets its TTL.
     job_key: str | None = None
     job_base: dict[str, Any] | None = None
+    # The instance it creates; the `vm` fact names it, so a late watcher of
+    # an earlier start can't be read as the latest start's (ADR-019).
+    vm_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -435,6 +438,7 @@ async def create_vm(
             machine_type=machine_type,
             spot=spot,
             image_version=_RUNNER_IMAGE_VERSION,
+            vm_name=instance_name,
         )
 
 
@@ -452,7 +456,11 @@ async def wait_for_vm_creation(
             handle.job_key,
             handle.job_base,
             "vm",
-            {"outcome": outcome.outcome, "error_code": outcome.error_code},
+            {
+                "outcome": outcome.outcome,
+                "error_code": outcome.error_code,
+                "vm_name": handle.vm_name,
+            },
             source="watcher",
             reopen=False,
         )
@@ -784,6 +792,7 @@ async def list_runnerforge_vms(
                         "labels": labels,
                         "repo_full_name": repo_full_name,
                         "runner_labels": runner_labels,
+                        "status": i.status,
                     }
                 )
             )
@@ -802,7 +811,7 @@ async def list_runnerforge_vms(
 
 # Statuses that hold a slot under a concurrency limit (ADR-019): not VMs being
 # stopped or deleted.
-_ACTIVE_STATUSES = frozenset({"PROVISIONING", "STAGING", "RUNNING"})
+ACTIVE_STATUSES = frozenset({"PROVISIONING", "STAGING", "RUNNING"})
 
 
 # On the `queued` path: a slow list fails the check (and admits) instead of
@@ -830,6 +839,6 @@ async def active_vm_names(
                 client.list(request=request, timeout=ACTIVE_VMS_TIMEOUT_SECONDS)
             )
         )
-        names = {i.name for i in instances if i.status in _ACTIVE_STATUSES}
+        names = {i.name for i in instances if i.status in ACTIVE_STATUSES}
         span.set_attribute("result_count", len(names))
         return names

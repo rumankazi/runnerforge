@@ -16,7 +16,12 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
-from google.api_core.exceptions import AlreadyExists, NotFound, ServiceUnavailable
+from google.api_core.exceptions import (
+    AlreadyExists,
+    FailedPrecondition,
+    NotFound,
+    ServiceUnavailable,
+)
 from google.api_core.retry import AsyncRetry, if_exception_type
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud import firestore
@@ -100,9 +105,40 @@ class JobStore(Protocol):
         """Open records, any order."""
         ...
 
+    async def list_open_by_installation(
+        self, installation_id: int, limit: int
+    ) -> list[Record]:
+        """One installation's open records, oldest `queued_at` first."""
+        ...
+
+    async def claim_start(
+        self,
+        key: str,
+        expected_start: int,
+        decision: dict[str, Any],
+        next_check_at: datetime,
+    ) -> bool:
+        """Take an open, not yet running job for a reconciler start (ADR-019):
+        only if it has no `in_progress` or `completed` fact and its
+        `decision.start` is still `expected_start`. Replaces the decision,
+        clears the last attempt's verdicts and resets the backoff. False if
+        the job moved on, another run claimed it, or the write failed."""
+        ...
+
     async def patch(self, key: str, fields: dict[str, Any]) -> None:
         """Update fields of an existing record; never creates one."""
         ...
+
+
+def claimable(rec: dict[str, Any], expected_start: int) -> bool:
+    """A record a reconciler start may take: not running or done, and not
+    started again since it was read."""
+    decision = rec.get("decision") if isinstance(rec.get("decision"), dict) else {}
+    return (
+        not isinstance(rec.get("in_progress"), dict)
+        and not isinstance(rec.get("completed"), dict)
+        and int(decision.get("start") or 0) == expected_start
+    )
 
 
 def job_key(run_id: int, job_id: int, run_attempt: int) -> str:
@@ -167,6 +203,20 @@ class NoopJobStore:
 
     async def list_open(self, limit: int) -> list[Record]:
         return []
+
+    async def list_open_by_installation(
+        self, installation_id: int, limit: int
+    ) -> list[Record]:
+        return []
+
+    async def claim_start(
+        self,
+        key: str,
+        expected_start: int,
+        decision: dict[str, Any],
+        next_check_at: datetime,
+    ) -> bool:
+        return False
 
     async def patch(self, key: str, fields: dict[str, Any]) -> None:
         return None
@@ -275,6 +325,59 @@ class FirestoreJobStore:
             .limit(limit)
         )
         return await self._run_query("list_open", query)
+
+    async def list_open_by_installation(
+        self, installation_id: int, limit: int
+    ) -> list[Record]:
+        query = (
+            self._client.collection(JOBS_COLLECTION)
+            .where(filter=FieldFilter("installation_id", "==", installation_id))
+            .where(filter=FieldFilter("open", "==", True))
+            .order_by("queued_at")
+            .limit(limit)
+        )
+        return await self._run_query("list_open_by_installation", query)
+
+    async def claim_start(
+        self,
+        key: str,
+        expected_start: int,
+        decision: dict[str, Any],
+        next_check_at: datetime,
+    ) -> bool:
+        doc = self._doc(key)
+        try:
+            async with asyncio.timeout(CALL_TIMEOUT_SECONDS):
+                snapshot = await doc.get(retry=_RETRY)
+                if not snapshot.exists or not claimable(
+                    snapshot.to_dict() or {}, expected_start
+                ):
+                    return False
+                # Conditional on the record being unchanged since it was read.
+                # No retry: a retried commit that landed would fail its own
+                # precondition, and a start must fail closed.
+                await doc.update(
+                    {
+                        # update() replaces the whole map: no stale fields
+                        # from a deferral or an earlier attempt.
+                        "decision": decision,
+                        "vm": firestore.DELETE_FIELD,
+                        "preempted": firestore.DELETE_FIELD,
+                        "errored": firestore.DELETE_FIELD,
+                        "next_check_at": next_check_at,
+                        "checks": 0,
+                    },
+                    option=self._client.write_option(
+                        last_update_time=snapshot.update_time
+                    ),
+                    retry=None,
+                )
+        except FailedPrecondition:
+            return False
+        except Exception as exc:  # noqa: BLE001
+            _log_failure("claim_start", key, exc)
+            return False
+        return True
 
     async def _run_query(self, operation: str, query) -> list[Record]:
         try:

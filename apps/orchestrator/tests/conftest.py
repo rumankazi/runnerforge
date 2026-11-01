@@ -103,6 +103,12 @@ class FakeJobStore:
         self.due: list[tuple[str, dict]] = []
         self.open: list[tuple[str, dict]] = []
         self.patches: list[tuple[str, dict]] = []
+        # Capacity pass (ADR-019): open records per installation, the
+        # installations queried, and the starts claimed.
+        self.by_installation: dict[int, list[tuple[str, dict]]] = {}
+        self.queried: list[int] = []
+        self.claims: list[tuple] = []
+        self.claim_result = True
 
     async def create_if_absent(self, key, base):
         self.created.append((key, base))
@@ -126,6 +132,19 @@ class FakeJobStore:
 
     async def list_open(self, limit):
         return self.open[:limit]
+
+    async def list_open_by_installation(self, installation_id, limit):
+        self.queried.append(installation_id)
+        return self.by_installation.get(installation_id, [])[:limit]
+
+    async def claim_start(self, key, expected_start, decision, next_check_at):
+        from runnerforge.job_store import claimable
+
+        records = {k: r for recs in self.by_installation.values() for k, r in recs}
+        if not self.claim_result or not claimable(records.get(key, {}), expected_start):
+            return False
+        self.claims.append((key, expected_start, decision, next_check_at))
+        return True
 
     async def patch(self, key, fields):
         self.patches.append((key, fields))

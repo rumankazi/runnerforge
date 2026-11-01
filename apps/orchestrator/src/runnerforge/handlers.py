@@ -1,6 +1,7 @@
 import asyncio
 import logging
-from dataclasses import replace
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Any, Literal
 
@@ -12,11 +13,10 @@ from opentelemetry.trace import (
     set_span_in_context,
 )
 
-from runnerforge.admission import ALLOWLISTED, Admission, exceeds_size
+from runnerforge.admission import ALLOWLISTED, Admission, exceeds_size, vm_settings
 from runnerforge.compute_client import (
     ACTIVE_VMS_TIMEOUT_SECONDS,
     GITHUB_REPO_URL_PREFIX,
-    MAX_VM_RUN_DURATION,
     OperationHandle,
     PreemptionCheckRequest,
     active_vm_names,
@@ -65,8 +65,6 @@ def _webhook_span_context(
 # GitHub's timestamps and ours may disagree by this much (NTP, one-second
 # resolution) before a readiness sample is treated as skewed.
 CLOCK_SKEW_TOLERANCE_SECONDS = 5.0
-# Added to a limited tenant's runtime cap for the VM's boot (ADR-019).
-_BOOT_ALLOWANCE = timedelta(minutes=15)
 
 
 def _log_queued_outcome(
@@ -101,6 +99,86 @@ async def _record_errored(
     await store.record_fact(
         key, base, "errored", {"stage": stage, "error_class": type(exc).__name__}
     )
+
+
+@dataclass(frozen=True, slots=True)
+class RunnerVmSpec:
+    """Everything a runner VM for one job needs, from a `queued` webhook or
+    from a job record (the reconciler's capacity starts, ADR-019)."""
+
+    vm_name: str
+    installation_id: int
+    repo_full_name: str
+    repository_id: int | None
+    run_id: int
+    job_id: int
+    run_attempt: int
+    job_labels: list[str]
+    machine_type: str
+    spot: bool
+    max_run_duration: timedelta
+    # When this VM was admitted: Time-to-Register runs from here.
+    queued_received_at: float
+    webhook_trace_id: str = ""
+    webhook_span_id: str = ""
+    # A caller that already holds one (the reconciler caches one per run).
+    installation_token: str | None = None
+
+
+async def submit_runner_vm(
+    spec: RunnerVmSpec,
+    on_error: Callable[[Literal["token", "gce_insert"], Exception], Awaitable[None]],
+) -> OperationHandle | None:
+    """Fetch a registration token and submit the VM. Returns None when the
+    VM already exists. A failure is passed to `on_error` with its stage,
+    then raised."""
+    try:
+        installation_token = spec.installation_token or (
+            await get_installation_token(spec.installation_id)
+        )
+        registration_token = await get_registration_token(
+            installation_token=installation_token,
+            repo_full_name=spec.repo_full_name,
+        )
+    except Exception as exc:
+        await on_error("token", exc)
+        raise
+    logger.info("Registration token received")
+
+    # Create the VM with the registration token metadata
+    metadata = {
+        "registration-token": registration_token,
+        "repo-url": f"{GITHUB_REPO_URL_PREFIX}{spec.repo_full_name}",
+        "runner-labels": ",".join(spec.job_labels),
+        "startup-script": STARTUP_SCRIPT,
+    }
+    logger.info("Creating VM", extra={"labels": spec.job_labels})
+    labels = RunnerForgeVmLabels(
+        runner="runnerforge",
+        job_id=str(spec.job_id),
+        run_id=str(spec.run_id),
+        run_attempt=str(spec.run_attempt),
+        repository_id="" if spec.repository_id is None else str(spec.repository_id),
+        installation_id=str(spec.installation_id),
+        webhook_trace_id=spec.webhook_trace_id,
+        webhook_span_id=spec.webhook_span_id,
+        # GCE label values can't contain '.' — store as integer epoch
+        # seconds. Sub-second precision isn't needed for the SLO
+        # (300s threshold, NTP skew is sub-second).
+        queued_received_at=str(int(spec.queued_received_at)),
+    )
+    try:
+        return await create_vm(
+            instance_name=spec.vm_name,
+            machine_type=spec.machine_type,
+            spot=spec.spot,
+            labels=labels.model_dump(),
+            metadata=metadata,
+            max_run_duration=spec.max_run_duration,
+        )
+    except Exception as exc:
+        await on_error("gce_insert", exc)
+        raise
 
 
 async def handle_queued(
@@ -181,8 +259,7 @@ async def handle_queued(
         span.set_attribute("policy.machine_type", policy.machine_type)
         installation_id = event.installation.id
         vm_name = f"runnerforge-{event.workflow_job.run_id}-{event.workflow_job.id}-{event.workflow_job.run_attempt}"
-        spot = policy.spot
-        max_run_duration = MAX_VM_RUN_DURATION
+        spot, max_run_duration = vm_settings(policy, admission.limits)
         deferral_unrecorded = False
         limits = admission.limits
         if limits is not None:
@@ -207,10 +284,6 @@ async def handle_queued(
                 )
                 _log_queued_outcome("rejected", "limit_size")
                 return None
-            spot = spot or limits.spot_only
-            max_run_duration = (
-                timedelta(minutes=limits.max_runtime_minutes) + _BOOT_ALLOWANCE
-            )
             try:
                 # to_thread can't be cancelled, so the list has its own
                 # timeout too; this bounds the wait either way.
@@ -250,59 +323,30 @@ async def handle_queued(
                 )
                 deferral_unrecorded = True
         span.set_attribute("policy.spot", spot)
-        try:
-            installation_token = await get_installation_token(installation_id)
-            registration_token = await get_registration_token(
-                installation_token=installation_token,
-                repo_full_name=event.repository.full_name,
-            )
-        except Exception as exc:
+
+        async def record_errored(stage: Literal["token", "gce_insert"], exc) -> None:
             # Still a 500 with no outcome line; the record says why.
-            await _record_errored(store, key, base, "token", exc)
-            raise
-        logger.info("Registration token received")
+            await _record_errored(store, key, base, stage, exc)
 
-        # Create the VM with the registration token metadata
-        metadata = {
-            "registration-token": registration_token,
-            "repo-url": f"{GITHUB_REPO_URL_PREFIX}{event.repository.full_name}",
-            "runner-labels": ",".join(event.workflow_job.labels),
-            "startup-script": STARTUP_SCRIPT,
-        }
-
-        logger.info(
-            "Creating VM",
-            extra={
-                "labels": event.workflow_job.labels,
-            },
-        )
-        labels = RunnerForgeVmLabels(
-            runner="runnerforge",
-            job_id=str(event.workflow_job.id),
-            run_id=str(event.workflow_job.run_id),
-            run_attempt=str(event.workflow_job.run_attempt),
-            repository_id=str(event.repository.id),
-            installation_id=str(event.installation.id),
-            webhook_trace_id=webhook_trace_id,
-            webhook_span_id=webhook_span_id,
-            # GCE label values can't contain '.' — store as integer epoch
-            # seconds. Sub-second precision isn't needed for the SLO
-            # (300s threshold, NTP skew is sub-second).
-            queued_received_at=str(int(received_at)),
-        )
-
-        try:
-            operation = await create_vm(
-                instance_name=vm_name,
+        operation = await submit_runner_vm(
+            RunnerVmSpec(
+                vm_name=vm_name,
+                installation_id=installation_id,
+                repo_full_name=event.repository.full_name,
+                repository_id=event.repository.id,
+                run_id=event.workflow_job.run_id,
+                job_id=event.workflow_job.id,
+                run_attempt=event.workflow_job.run_attempt,
+                job_labels=event.workflow_job.labels,
                 machine_type=policy.machine_type,
                 spot=spot,
-                labels=labels.model_dump(),
-                metadata=metadata,
                 max_run_duration=max_run_duration,
-            )
-        except Exception as exc:
-            await _record_errored(store, key, base, "gce_insert", exc)
-            raise
+                queued_received_at=received_at,
+                webhook_trace_id=webhook_trace_id,
+                webhook_span_id=webhook_span_id,
+            ),
+            on_error=record_errored,
+        )
         # create_vm returns None when the VM already exists (duplicate delivery).
         kind = "vm_submitted" if operation else "already_exists"
         decision: dict[str, Any] = {
