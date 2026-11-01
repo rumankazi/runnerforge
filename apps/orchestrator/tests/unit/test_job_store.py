@@ -4,8 +4,14 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from google.api_core.exceptions import AlreadyExists, NotFound, ServiceUnavailable
+from google.api_core.exceptions import (
+    AlreadyExists,
+    FailedPrecondition,
+    NotFound,
+    ServiceUnavailable,
+)
 from google.auth.exceptions import DefaultCredentialsError
+from google.cloud import firestore
 
 from runnerforge import job_store
 from runnerforge.config import parse_job_store
@@ -570,3 +576,129 @@ async def test_patch_fails_open(caplog):
 
     [record] = _failure_records(caplog)
     assert getattr(record, "operation", None) == "patch"
+
+
+# --- capacity pass (ADR-019) ---
+
+
+async def test_list_open_by_installation_queries_one_installation_oldest_first():
+    client = MagicMock()
+    by_installation = client.collection.return_value.where.return_value
+    final = by_installation.where.return_value.order_by.return_value.limit.return_value
+    final.stream = MagicMock(return_value=_AsyncSnapshots([_snap("a", {"x": 1})]))
+
+    records = await FirestoreJobStore(client).list_open_by_installation(7, 20)
+
+    assert records == [("a", {"x": 1})]
+    first = client.collection.return_value.where.call_args.kwargs["filter"]
+    second = by_installation.where.call_args.kwargs["filter"]
+    assert (first.field_path, first.op_string, first.value) == (
+        "installation_id",
+        "==",
+        7,
+    )
+    assert (second.field_path, second.op_string, second.value) == ("open", "==", True)
+    by_installation.where.return_value.order_by.assert_called_once_with("queued_at")
+    by_installation.where.return_value.order_by.return_value.limit.assert_called_once_with(
+        20
+    )
+
+
+@pytest.mark.parametrize(
+    ("rec", "expected_start", "claimable"),
+    [
+        ({"decision": {"kind": "deferred"}}, 0, True),
+        ({"decision": {"kind": "vm_submitted", "start": 1}}, 1, True),
+        ({"decision": {"kind": "vm_submitted", "start": 1}}, 0, False),
+        ({"decision": {"kind": "deferred"}, "in_progress": {}}, 0, False),
+        ({"decision": {"kind": "deferred"}, "completed": {}}, 0, False),
+        ({}, 0, True),
+    ],
+)
+def test_claimable(rec, expected_start, claimable):
+    assert job_store.claimable(rec, expected_start) is claimable
+
+
+def _claim_doc(data: dict | None, exists: bool = True) -> MagicMock:
+    doc = MagicMock()
+    snapshot = MagicMock()
+    snapshot.exists = exists
+    snapshot.to_dict.return_value = data
+    snapshot.update_time = "read-time"
+    doc.get = AsyncMock(return_value=snapshot)
+    doc.update = AsyncMock()
+    return doc
+
+
+DECISION = {"kind": "vm_submitted", "source": "reconcile", "start": 1}
+NEXT = datetime(2026, 11, 1, 12, 5, tzinfo=UTC)
+
+
+async def test_claim_start_replaces_the_decision_conditionally():
+    doc = _claim_doc({"decision": {"kind": "deferred", "reason": "limit_concurrency"}})
+    client = _client_with_doc(doc)
+    client.write_option.return_value = "unchanged-since-read"
+
+    claimed = await FirestoreJobStore(client).claim_start(KEY, 0, DECISION, NEXT)
+
+    assert claimed is True
+    (fields,), kwargs = doc.update.await_args
+    assert fields == {
+        "decision": DECISION,
+        "vm": firestore.DELETE_FIELD,
+        "preempted": firestore.DELETE_FIELD,
+        "errored": firestore.DELETE_FIELD,
+        "next_check_at": NEXT,
+        "checks": 0,
+    }
+    client.write_option.assert_called_once_with(last_update_time="read-time")
+    assert kwargs == {"option": "unchanged-since-read", "retry": None}
+
+
+@pytest.mark.parametrize(
+    ("data", "exists"),
+    [(None, False), ({"in_progress": {"runner_name": "r"}}, True)],
+    ids=["missing", "running"],
+)
+async def test_claim_start_refuses_records_it_cant_take(data, exists):
+    doc = _claim_doc(data, exists=exists)
+
+    claimed = await FirestoreJobStore(_client_with_doc(doc)).claim_start(
+        KEY, 0, DECISION, NEXT
+    )
+
+    assert claimed is False
+    doc.update.assert_not_awaited()
+
+
+async def test_claim_start_loses_to_a_concurrent_write(caplog):
+    doc = _claim_doc({})
+    doc.update.side_effect = FailedPrecondition("changed")
+
+    with caplog.at_level(logging.WARNING):
+        claimed = await FirestoreJobStore(_client_with_doc(doc)).claim_start(
+            KEY, 0, DECISION, NEXT
+        )
+
+    assert claimed is False
+    assert _failure_records(caplog) == []  # expected, not a failure
+
+
+async def test_claim_start_fails_closed(caplog):
+    doc = _claim_doc({})
+    doc.get.side_effect = ServiceUnavailable("down")
+
+    with caplog.at_level(logging.WARNING):
+        claimed = await FirestoreJobStore(_client_with_doc(doc)).claim_start(
+            KEY, 0, DECISION, NEXT
+        )
+
+    assert claimed is False
+    [record] = _failure_records(caplog)
+    assert record.operation == "claim_start"
+
+
+async def test_noop_store_claims_and_lists_nothing():
+    store = NoopJobStore()
+    assert await store.list_open_by_installation(7, 20) == []
+    assert await store.claim_start(KEY, 0, DECISION, NEXT) is False

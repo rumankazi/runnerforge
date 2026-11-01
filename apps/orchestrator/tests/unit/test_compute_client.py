@@ -281,6 +281,7 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
     mock_vm_1 = MagicMock()
     mock_vm_1.name = "runnerforge-1"
     mock_vm_1.creation_timestamp = "2026-05-31T10:00:00Z"
+    mock_vm_1.status = "RUNNING"
     mock_vm_1.labels = {
         "runner": "runnerforge",
         "repo": "rumankazi_runnerforge",
@@ -295,6 +296,7 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
     mock_vm_2 = MagicMock()
     mock_vm_2.name = "runnerforge-2"
     mock_vm_2.creation_timestamp = "2026-05-31T12:00:00Z"
+    mock_vm_2.status = "RUNNING"
     mock_vm_2.labels = {
         "runner": "runnerforge",
         "repository_id": "42",
@@ -327,6 +329,7 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
                 installation_id="123",
             ),
             repo_full_name="rumankazi/runnerforge",
+            status="RUNNING",
         ),
         VmInfo(
             name="runnerforge-2",
@@ -340,6 +343,7 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
                 installation_id="124",
             ),
             repo_full_name="RumanKazi/Foo.js",
+            status="RUNNING",
         ),
     ]
 
@@ -354,6 +358,7 @@ def test_list_runnerforge_vms_with_malformed_labels(monkeypatch, caplog):
     mock_vm_1 = MagicMock()
     mock_vm_1.name = "runnerforge-1"
     mock_vm_1.creation_timestamp = "2026-05-31T10:00:00Z"
+    mock_vm_1.status = "RUNNING"
     mock_vm_1.labels = {
         "runner": "runnerforge",
         "repo": "rumankazi/runnerforge",
@@ -365,6 +370,7 @@ def test_list_runnerforge_vms_with_malformed_labels(monkeypatch, caplog):
     mock_vm_2 = MagicMock()
     mock_vm_2.name = "runnerforge-2"
     mock_vm_2.creation_timestamp = "2026-05-31T12:00:00Z"
+    mock_vm_2.status = "RUNNING"
     mock_vm_2.labels = {
         "runner": "runnerforge",
         "repo": "rumankazi/runnerforge",
@@ -416,6 +422,7 @@ def test_list_runnerforge_vms_marks_repo_unknown_when_repo_url_unusable(
     mock_vm = MagicMock()
     mock_vm.name = "runnerforge-1"
     mock_vm.creation_timestamp = "2026-05-31T10:00:00Z"
+    mock_vm.status = "RUNNING"
     mock_vm.labels = {
         "runner": "runnerforge",
         "repository_id": "42",
@@ -1294,8 +1301,11 @@ def _serve_done_op(monkeypatch, error_code: str | None = None) -> None:
 @pytest.mark.parametrize(
     ("error_code", "expected"),
     [
-        (None, {"outcome": "success", "error_code": None}),
-        ("QUOTA_EXCEEDED", {"outcome": "failure", "error_code": "QUOTA_EXCEEDED"}),
+        (None, {"outcome": "success", "error_code": None, "vm_name": "vm-1"}),
+        (
+            "QUOTA_EXCEEDED",
+            {"outcome": "failure", "error_code": "QUOTA_EXCEEDED", "vm_name": "vm-1"},
+        ),
     ],
 )
 def test_wait_for_vm_creation_records_vm_fact_without_reopening(
@@ -1311,6 +1321,7 @@ def test_wait_for_vm_creation_records_vm_fact_without_reopening(
         image_version="0.2.0",
         job_key="1-2-1",
         job_base={"installation_id": 7},
+        vm_name="vm-1",
     )
 
     asyncio.run(compute_client.wait_for_vm_creation(handle, timeout=10.0))
@@ -1371,6 +1382,7 @@ def test_list_runnerforge_vms_reads_runner_labels(monkeypatch):
     vm = MagicMock()
     vm.name = "runnerforge-3-2-1"
     vm.creation_timestamp = "2026-10-30T12:00:00Z"
+    vm.status = "RUNNING"
     vm.labels = {
         "runner": "runnerforge",
         "job_id": "2",

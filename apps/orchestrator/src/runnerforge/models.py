@@ -140,6 +140,8 @@ class VmInfo(BaseModel):
     repo_full_name: str | None = None
     # The job's runs-on labels, from the VM's runner-labels metadata.
     runner_labels: list[str] = Field(default_factory=list)
+    # GCE status (PROVISIONING, STAGING, RUNNING, STOPPING, TERMINATED, ...).
+    status: str = ""
 
 
 class SweepResult(BaseModel):
@@ -159,4 +161,5 @@ class ReconcileResult(BaseModel):
     backfilled: int  # records created for VMs that had none
     more_due: bool  # more records were due than one batch holds
     registry_changes: int = 0  # registry rows created or updated by the backfill
+    started: int = 0  # VMs the capacity pass started for waiting jobs (ADR-019)
     errors: list[str]  # per-record failures (one record never aborts a run)

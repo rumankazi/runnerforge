@@ -194,7 +194,8 @@ line with GitHub and GCE, for what the webhooks and background tasks missed. It 
 
 1. Takes up to 25 open records whose next check is due, earliest first.
 2. Lists RunnerForge VMs once. A VM whose job has no open record gets one, built from its labels and metadata.
-3. For each record: one already holding `completed` is closed. Otherwise it asks GitHub
+3. With `ADMISSION=registry`, runs the **capacity pass** (below) first, in its own 40 s.
+4. For each record: one already holding `completed` is closed. Otherwise it asks GitHub
    (`GET /repos/{owner}/{repo}/actions/jobs/{job_id}`):
 
 | GitHub says | Reconciler |
@@ -203,13 +204,49 @@ line with GitHub and GCE, for what the webhooks and background tasks missed. It 
 | 404, or the App installation is gone | Records `conclusion: gone` and closes the record. |
 | `in_progress` | Records the runner if missing. |
 | Still queued, and its own VM exists and isn't running another job | Records `vm: success` if the watcher never did. |
-| Still queued, own VM gone (or running another job), no other VM can take it | Records `preempted: before_pickup` if the audit log names its VM, otherwise `vm: missing`. The dashboard shows it as stuck. If the audit log can't answer, it records nothing and asks again next time. |
+| Still queued, own VM gone (or running another job), no other VM can take it | Records `preempted: before_pickup` if the audit log names its VM, otherwise `vm: missing`. The dashboard shows it as stuck. If the audit log can't answer, it records nothing and asks again next time. A limited tenant's job with reconciler starts left waits for the capacity pass instead. |
 | Still queued, another VM could take it | Waits. A VM can take it if it's for the same repository, isn't running another job, and its labels cover the job's. |
 
 Every record it doesn't close is checked again after a backoff: 5 min, 15 min, 1 h, then every 6 h. Rejected,
 errored and running jobs start at 1 h. One failing record is logged and retried later; it doesn't stop the run.
 A run stops starting records after 120 s (each record is bounded at 30 s) and reports `more_due`; the rest wait
 for the next run. The run logs `Reconcile completed` with its counts.
+
+"Its own VM" is the one last made for the job: the decision's `vm_name` after a reconciler start, otherwise
+`runnerforge-{run}-{job}-{attempt}`.
+
+### Capacity pass
+
+With `ADMISSION=registry` ([ADR-019](/docs/design/decisions#tenant-registry-install-to-register-admin-approval-per-installation-limits)),
+the reconciler starts VMs for jobs waiting under an installation's limit. GitHub gives a queued job to any idle
+runner with matching labels, so it works from free slots, not from decision kinds.
+
+- **Installations:** every one approved at least once, plus the allow-list. One that's no longer admitted gets its
+  deferred jobs marked `rejected` with the reason. If the registry can't be read, the installation is skipped for
+  the run, not rejected, and its stuck verdicts wait too.
+- **Free slots:** `max_concurrent_vms` minus the installation's PROVISIONING, STAGING or RUNNING VMs, counted live.
+  Unlimited installations (limits lifted, or allow-listed) are bounded only by the run's cap.
+- **Waiting jobs**, oldest first from that installation's open records (up to 100): deferred jobs; and, for a
+  limited installation, jobs whose VM is gone, dead or running another job (not within 3 minutes of their
+  decision). Not jobs queued over 23.5 h, nor ones with 2 reconciler starts already.
+- **Each one:** it asks GitHub for the job. One that's no longer queued gets its fact and is left. A VM of the same
+  installation and repository that is up, not on a job, under 15 minutes old and has covering labels can still
+  take it, so it waits; each such VM excuses one job. A job its limits now reject is marked `rejected`
+  (`limit_size`).
+- **A start** first claims the record with a conditional write: only if it has no `in_progress` or `completed`
+  and nobody started it since it was read. The claim writes `decision {kind: vm_submitted, source: reconcile,
+  start, vm_name}`, clears the last attempt's `vm`, `preempted` and `errored`, and resets the backoff. The VM is
+  then created by the same code as the webhook path, with `queued_received_at` set to now and the run's installation
+  token, and a watcher records its `vm` fact as on the webhook path. Its name is the base name for a job that never
+  had a VM, otherwise `-r{start}`; names are never reused.
+- **Capacity errors:** a start whose operation failed with `QUOTA_EXCEEDED` or `ZONE_RESOURCE_POOL_EXHAUSTED`
+  isn't counted against the job: the next start reuses its number and name (GCE never made that VM), up to 3
+  times per job. The watcher's `vm` fact names its VM, so only a failure of the latest start counts. While such a
+  failure is under 10 minutes old, a quota error pauses every start and a stockout pauses only that machine type.
+- **Bounds:** 10 starts a run, 3 GitHub lookups per free slot, 15 s per start, one start per installation per
+  round. A failed start ends that installation's turn for the run; a quota or zone-capacity error ends the pass.
+  A slot is counted from the claim, so a start cancelled mid-insert still holds one. `Reconcile completed` reports
+  `started`.
 
 ## Runtime cap
 

@@ -366,7 +366,9 @@ async def sweep(authorization: Annotated[str, Header()]):
     description="Brings open job records in line with GitHub and GCE (ADR-018). Auth via bearer token.",
     tags=["reconcile"],
 )
-async def reconcile(authorization: Annotated[str, Header()]):
+async def reconcile(
+    authorization: Annotated[str, Header()], background_tasks: BackgroundTasks
+):
     # Same caller and audience as /sweep: the runnerforge-scheduler SA.
     if not verify_oidc_token(
         authorization,
@@ -375,7 +377,14 @@ async def reconcile(authorization: Annotated[str, Header()]):
     ):
         raise HTTPException(status_code=401, detail="Invalid auth")
 
-    result = await run_reconcile()
+    def watch(handle) -> None:
+        # Like the webhook path: the watcher records the started VM's `vm`
+        # fact, so a GCE failure on the operation shows up (ADR-019).
+        background_tasks.add_task(
+            with_log_context, get_context(), wait_for_vm_creation, handle
+        )
+
+    result = await run_reconcile(on_started=watch)
     logger.info(
         "Reconcile completed",
         extra={
@@ -385,6 +394,7 @@ async def reconcile(authorization: Annotated[str, Header()]):
             "stuck": result.stuck,
             "backfilled": result.backfilled,
             "registry_changes": result.registry_changes,
+            "started": result.started,
             "more_due": result.more_due,
             "error_count": len(result.errors),
         },
