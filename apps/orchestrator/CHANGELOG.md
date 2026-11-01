@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.2](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.24.1...orchestrator-v0.24.2) (2026-11-01)
+
+
+### Bug Fixes
+
+* **orchestrator:** keep the VM watcher polling through connection errors ([#347](https://github.com/rumankazi/runnerforge/issues/347)) ([4a2d7d8](https://github.com/rumankazi/runnerforge/commit/4a2d7d822d86f3a65d90e39baaad7469f71973a0))
+
 ## [0.24.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.24.0...orchestrator-v0.24.1) (2026-11-01)
 
 
