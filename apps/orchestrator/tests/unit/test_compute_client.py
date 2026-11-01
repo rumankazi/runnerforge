@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import requests
 from google.api_core.exceptions import AlreadyExists, GoogleAPIError
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud import compute_v1
@@ -703,17 +704,26 @@ def test_wait_for_vm_creation_times_out_when_op_stays_running(monkeypatch, caplo
     assert log.image_version == "0.1.0"
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        GoogleAPIError("transient network glitch"),
+        # Seen in production after CPU throttling: a stale pooled connection.
+        requests.exceptions.SSLError(
+            "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol"
+        ),
+        requests.exceptions.ConnectionError("Remote end closed connection"),
+    ],
+    ids=["google-api", "ssl-eof", "connection-reset"],
+)
 def test_wait_for_vm_creation_keeps_polling_after_transient_get_error(
-    monkeypatch, caplog
+    monkeypatch, caplog, error
 ):
     from runnerforge.compute_client import OperationHandle, wait_for_vm_creation
 
     # First call raises, second returns DONE-success
     zone_ops_mock = MagicMock()
-    zone_ops_mock.get.side_effect = [
-        GoogleAPIError("transient network glitch"),
-        _done_op(),
-    ]
+    zone_ops_mock.get.side_effect = [error, _done_op()]
     monkeypatch.setattr("runnerforge.compute_client._zone_ops_client", zone_ops_mock)
     monkeypatch.setattr("runnerforge.compute_client.asyncio.sleep", AsyncMock())
 
@@ -735,6 +745,7 @@ def test_wait_for_vm_creation_keeps_polling_after_transient_get_error(
     # Warning logged for the transient error
     warn = next((r for r in caplog.records if "Transient error" in r.message), None)
     assert warn is not None
+    assert warn.error_class == type(error).__name__
 
 
 # -----------------------------------------------------------------------------

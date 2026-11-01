@@ -1957,6 +1957,7 @@ dependencies = [
     { name = "opentelemetry-instrumentation-httpx" },
     { name = "opentelemetry-sdk" },
     { name = "pyjwt", extra = ["crypto"] },
+    { name = "requests" },
     { name = "tenacity" },
 ]
 
@@ -1985,6 +1986,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.63b1" },
     { name = "opentelemetry-sdk", specifier = ">=1.42.1" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15.0" },
+    { name = "requests", specifier = ">=2.34.2" },
     { name = "tenacity", specifier = ">=9.1.4" },
 ]
 
