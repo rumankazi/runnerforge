@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.24.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.23.0...orchestrator-v0.24.0) (2026-11-01)
+
+
+### Features
+
+* **orchestrator:** registry admission and tenant limits behind ADMISSION ([#344](https://github.com/rumankazi/runnerforge/issues/344)) ([f4ddecc](https://github.com/rumankazi/runnerforge/commit/f4ddecce726afd4b2cf75eec8505a4d9ce554b04))
+* **orchestrator:** runnerforge-admin command for the tenant registry ([#342](https://github.com/rumankazi/runnerforge/issues/342)) ([4a1dea9](https://github.com/rumankazi/runnerforge/commit/4a1dea939d677959e4a0b6f6d35558e084127f7a))
+
 ## [0.23.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.22.0...orchestrator-v0.23.0) (2026-10-30)
 
 
