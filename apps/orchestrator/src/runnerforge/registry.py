@@ -21,6 +21,8 @@ from typing import Any, Literal, Protocol
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import firestore
 
+from runnerforge.machine_policy import SIZE_TABLE
+
 logger = logging.getLogger(__name__)
 
 INSTALLATIONS_COLLECTION = "installations"
@@ -30,6 +32,10 @@ CALL_TIMEOUT_SECONDS = 2.0
 # The whole collection is listed once an hour by the reconciler.
 LIST_TIMEOUT_SECONDS = 10.0
 CACHE_TTL_SECONDS = 60.0
+# Upper bounds for limits, to catch typos: the shared pool holds about 30
+# runners (guides/limits.mdx), and GCE ends every VM after 6 h 15 min.
+MAX_CONCURRENT_VMS_CAP = 30
+MAX_RUNTIME_MINUTES_CAP = 360
 
 State = Literal["pending", "approved", "suspended"]
 GitHubStatus = Literal["active", "suspended", "deleted"]
@@ -43,12 +49,80 @@ class Account:
 
 
 @dataclass(frozen=True, slots=True)
+class Limits:
+    """An installation's limits, stored as `{"unlimited": true}` or as the
+    five limit fields. Invalid values raise ValueError, both when the owner
+    writes them and when a stored row is read."""
+
+    max_concurrent_vms: int = 2
+    max_size: str = "medium"
+    spot_only: bool = True
+    max_runtime_minutes: int = 60
+    literal_machine_types: bool = False
+    unlimited: bool = False
+
+    def __post_init__(self) -> None:
+        for name in ("max_concurrent_vms", "max_runtime_minutes"):
+            value = getattr(self, name)
+            # bool is an int subclass: True must not pass as 1.
+            if type(value) is not int:
+                raise ValueError(f"{name} must be a whole number")
+        for name in ("spot_only", "literal_machine_types", "unlimited"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be true or false")
+        if not 1 <= self.max_concurrent_vms <= MAX_CONCURRENT_VMS_CAP:
+            raise ValueError(
+                f"max_concurrent_vms must be 1 to {MAX_CONCURRENT_VMS_CAP}"
+            )
+        if not 1 <= self.max_runtime_minutes <= MAX_RUNTIME_MINUTES_CAP:
+            raise ValueError(
+                f"max_runtime_minutes must be 1 to {MAX_RUNTIME_MINUTES_CAP}"
+            )
+        # A type check first: an unhashable value can't be looked up.
+        if type(self.max_size) is not str or self.max_size not in SIZE_TABLE:
+            raise ValueError(f"max_size must be one of {', '.join(SIZE_TABLE)}")
+
+    def to_dict(self) -> dict[str, Any]:
+        if self.unlimited:
+            return {"unlimited": True}
+        return {
+            "max_concurrent_vms": self.max_concurrent_vms,
+            "max_size": self.max_size,
+            "spot_only": self.spot_only,
+            "max_runtime_minutes": self.max_runtime_minutes,
+            "literal_machine_types": self.literal_machine_types,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> Limits:
+        # `is True`: dict equality would also take 1 or 1.0 as unlimited.
+        if isinstance(data, dict) and set(data) == {"unlimited"}:
+            if data["unlimited"] is True:
+                return UNLIMITED
+            raise ValueError("unlimited must be true")
+        if not isinstance(data, dict) or set(data) != _LIMIT_FIELDS:
+            raise ValueError(
+                "limits must be {unlimited: true} or exactly "
+                + ", ".join(sorted(_LIMIT_FIELDS))
+            )
+        return cls(**data)
+
+
+_LIMIT_FIELDS = frozenset(Limits().to_dict())
+# ADR-019's beta defaults, written by `approve` when a row has no limits.
+BETA_DEFAULTS = Limits()
+UNLIMITED = Limits(unlimited=True)
+
+
+@dataclass(frozen=True, slots=True)
 class RegistryEntry:
     installation_id: int
     state: str
     github_status: str
     approved_at: datetime | None = None
     limits: dict[str, Any] | None = None
+    account_login: str | None = None
+    account_type: str | None = None
 
     @property
     def admitted(self) -> bool:
@@ -82,7 +156,7 @@ class Registry(Protocol):
         ...
 
 
-def _entry(installation_id: int, data: dict[str, Any]) -> RegistryEntry:
+def entry_from_doc(installation_id: int, data: dict[str, Any]) -> RegistryEntry:
     return RegistryEntry(
         installation_id=installation_id,
         # A row created by a status event before `created` arrived has no
@@ -91,6 +165,8 @@ def _entry(installation_id: int, data: dict[str, Any]) -> RegistryEntry:
         github_status=data.get("github_status") or "active",
         approved_at=data.get("approved_at"),
         limits=data.get("limits"),
+        account_login=data.get("account_login"),
+        account_type=data.get("account_type"),
     )
 
 
@@ -144,7 +220,7 @@ class FirestoreRegistry:
             raise RegistryUnavailable(str(exc)) from exc
         if not snapshot.exists:
             return None
-        return _entry(installation_id, snapshot.to_dict() or {})
+        return entry_from_doc(installation_id, snapshot.to_dict() or {})
 
     async def record_github_status(
         self,
@@ -203,7 +279,7 @@ class FirestoreRegistry:
         try:
             async with asyncio.timeout(LIST_TIMEOUT_SECONDS):
                 return {
-                    int(snap.id): _entry(int(snap.id), snap.to_dict() or {})
+                    int(snap.id): entry_from_doc(int(snap.id), snap.to_dict() or {})
                     async for snap in self._client.collection(
                         INSTALLATIONS_COLLECTION
                     ).stream()

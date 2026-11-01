@@ -75,7 +75,7 @@ The database `runnerforge` is in `europe-west4`. It holds a record only for jobs
 
 **In Firestore, one row per installation (the tenant registry):**
 
-When you install the App, GitHub tells RunnerForge, and the database `runnerforge` gets a row for the installation ([ADR-019](/docs/design/decisions#tenant-registry-install-to-register-admin-approval-per-installation-limits)). It holds the installation ID, your account's ID, login and type (user or organization), the approval state (`pending` until approved), GitHub's status for the installation (active, suspended or uninstalled), and timestamps. After you uninstall the App, a TTL policy deletes the row 30 days later.
+When you install the App, GitHub tells RunnerForge, and the database `runnerforge` gets a row for the installation ([ADR-019](/docs/design/decisions#tenant-registry-install-to-register-admin-approval-per-installation-limits)). It holds the installation ID, your account's ID, login and type (user or organization), the approval state (`pending` until approved), its limits, the last 20 approval, suspension and limit decisions with their times, GitHub's status for the installation (active, suspended or uninstalled), and timestamps. After you uninstall the App, a TTL policy deletes the row 30 days later.
 
 No tokens are stored there.
 

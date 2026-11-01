@@ -1,0 +1,77 @@
+---
+title: Approving tenants
+description: Owner procedure for the tenant registry, approving, suspending and limiting installations with runnerforge-admin.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Installing the GitHub App registers the installation as `pending` in the tenant registry
+([ADR-019](/docs/design/decisions#tenant-registry-install-to-register-admin-approval-per-installation-limits)).
+Only the owner decides what happens next, with `runnerforge-admin`. It runs on the owner's machine with their own
+gcloud credentials: no service account, workflow or release is involved.
+
+<Callout type="info" title="Admission still uses the allow-list">
+  Until rollout step 3 switches `ADMISSION` to `registry`, approvals only change the shadow decision
+  (`Admission shadow decision` in the orchestrator's logs). Jobs are still admitted by
+  `ALLOWED_INSTALLATION_IDS`.
+</Callout>
+
+## Setup
+
+Once per machine, from `apps/orchestrator/`:
+
+```bash
+gcloud auth application-default login
+```
+
+```bash
+uv run runnerforge-admin list
+```
+
+The command bills Firestore calls to the registry's project, and prints which registry it uses
+(`projects/runnerforge/databases/runnerforge` by default; `--project` and `--database` change it). Your account
+needs read and write access to that Firestore database; the project owner role has it.
+
+## Commands
+
+| Command | Does |
+|---|---|
+| `list [--state pending]` | Every row: account, `state`, GitHub's status, first approval, limits |
+| `approve <id> [--unlimited]` | `state: approved`. A row with no limits gets the beta defaults; one with limits keeps them |
+| `suspend <id>` | `state: suspended`: no new VMs. Running VMs end with their job or runtime cap |
+| `set-limits <id> …` | Change limits. Ones not named stay as they are; `--unlimited` or `--defaults` replace all of them |
+
+`set-limits` options: `--max-concurrent-vms N` (1–30), `--max-size small|medium|large|xlarge`,
+`--spot-only`/`--no-spot-only`, `--max-runtime-minutes N` (1–360),
+`--literal-machine-types`/`--no-literal-machine-types`.
+
+Every write shows the account and the change, then asks before writing; `--yes` skips the question. The
+orchestrator picks a change up within a minute (its registry cache).
+
+The command refuses:
+- an installation with no row. Rows are created by the `installation` webhook, or by the reconciler's backfill
+  in the first 5 minutes of each hour;
+- approving or limiting an uninstalled installation (`github_status: deleted`). A reinstall gets a new
+  installation ID and registers as `pending`;
+- approving a row whose stored limits are invalid, until `set-limits --defaults` or `--unlimited` replaces them;
+- a write when the row changed after it was read (for example, a webhook landed while you were answering). Run
+  the command again.
+
+Approving an installation that GitHub has suspended works, with a warning: it is admitted only once GitHub
+unsuspends it.
+
+## Approve a new tenant
+
+1. Find it: `uv run runnerforge-admin list --state pending`. Check the account against the access request.
+2. Approve it: `uv run runnerforge-admin approve <id>`. The beta defaults are 2 concurrent VMs, up to `medium`,
+   Spot only, 60 minutes per job and no literal machine types.
+3. Check the row: `uv run runnerforge-admin list --state approved`.
+
+## What gets recorded
+
+The command writes `state`, `approved_at`, `limits`, `history` and `updated_at`. The orchestrator creates rows as
+`pending` and never changes `state`, `approved_at`, `limits` or `history` after that; it also writes `updated_at`,
+on every change of GitHub's status, so the time of your last decision is the newest `history` entry. `approved_at`
+is set on the first approval and never cleared. `history` keeps the last 20 decisions (time, action, state,
+limits) and expires with the row, 30 days after an uninstall. It doesn't record who made a change, and Firestore
+Data Access audit logs are off, so nothing does.

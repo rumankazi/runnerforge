@@ -21,6 +21,10 @@ dependencies = [
     "tenacity>=9.1.4",
 ]
 
+[project.scripts]
+# Owner-only tenant registry command (ADR-019); see guides/runbooks/tenants.
+runnerforge-admin = "runnerforge.admin:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
