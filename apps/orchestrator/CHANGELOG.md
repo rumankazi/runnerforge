@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.24.0...orchestrator-v0.24.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **orchestrator:** skip readiness samples when GitHub's clock disagrees ([#345](https://github.com/rumankazi/runnerforge/issues/345)) ([1ff20d9](https://github.com/rumankazi/runnerforge/commit/1ff20d91282f6750eb9efe4cdfc5d0a0cc1a6a5b))
+
 ## [0.24.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.23.0...orchestrator-v0.24.0) (2026-11-01)
 
 
