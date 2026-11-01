@@ -12,6 +12,7 @@ from google.cloud import compute_v1
 from google.cloud import logging as gcp_logging
 from opentelemetry import trace
 from pydantic import ValidationError
+from requests.exceptions import RequestException
 
 from runnerforge.config import (
     GCP_PROJECT_ID,
@@ -486,11 +487,20 @@ async def _poll_vm_creation(
                     zone=handle.zone,
                     operation=handle.name,
                 )
-            except GoogleAPIError as e:
+            # RequestException: the REST transport's own connection errors
+            # (SSLError, ConnectionError), which aren't GoogleAPIError. This
+            # runs after the response, while Cloud Run throttles the CPU, so a
+            # pooled TLS connection can go stale between polls; uncaught, it
+            # ended the watcher with no outcome line.
+            except (GoogleAPIError, RequestException) as e:
                 # Transient — log and keep polling until the deadline catches us.
                 logger.warning(
                     "Transient error polling operation",
-                    extra={"op_name": handle.name, "error": str(e)},
+                    extra={
+                        "op_name": handle.name,
+                        "error": str(e),
+                        "error_class": type(e).__name__,
+                    },
                 )
                 await asyncio.sleep(1.0)
                 continue
