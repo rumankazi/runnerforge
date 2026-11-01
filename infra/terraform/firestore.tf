@@ -92,6 +92,31 @@ resource "google_firestore_field" "installations_expire_at" {
   depends_on = [google_firestore_index.jobs_due_for_check]
 }
 
+# Reconciler capacity pass (ADR-019 step 3b): one installation's open jobs,
+# oldest first. Per installation, so one tenant's many open records can't
+# crowd another's out of a global listing. Chained after the registry's field
+# for the same 409 reason.
+resource "google_firestore_index" "jobs_open_by_installation" {
+  project    = data.google_project.current.project_id
+  database   = google_firestore_database.runnerforge.name
+  collection = "jobs"
+
+  fields {
+    field_path = "installation_id"
+    order      = "ASCENDING"
+  }
+  fields {
+    field_path = "open"
+    order      = "ASCENDING"
+  }
+  fields {
+    field_path = "queued_at"
+    order      = "ASCENDING"
+  }
+
+  depends_on = [google_firestore_field.installations_expire_at]
+}
+
 # Read/write on documents in this database only. Firestore has no
 # database-level IAM resource, so this is a conditional project binding, in the
 # form Firestore's per-database access docs give. Project-level calls (listing
