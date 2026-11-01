@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -429,6 +430,114 @@ def test_readiness_runs_from_the_runner_vm(
     own = vm_job == "77678867086"
     assert hasattr(record, "github_queued_delivery_lag_seconds") is own
     by_job.assert_not_awaited()
+
+
+def _vm_labels(job_id: str, admitted_at: int) -> dict[str, str]:
+    return {
+        "runner": "runnerforge",
+        "installation_id": str(INSTALLATION_ID),
+        "job_id": job_id,
+        "queued_received_at": str(admitted_at),
+    }
+
+
+def _unknown(caplog):
+    return next(
+        (r for r in caplog.records if r.message == "Runner readiness unknown"), None
+    )
+
+
+def test_own_vm_readiness_ignores_a_created_at_ahead(
+    fixtures_dir, monkeypatch, fake_job_store, caplog
+):
+    """2026-11-01: GitHub's created_at ran an hour ahead of started_at. The
+    job's own VM was admitted for it, so readiness doesn't need created_at;
+    it must not floor to 0."""
+    _runner_vm(monkeypatch, _vm_labels("77678867086", 1_000_000))
+    with caplog.at_level(logging.INFO):
+        response = _in_progress(
+            fixtures_dir, created_at=1_000_000 + 3600, started_at=1_000_071
+        )
+
+    assert response.status_code == 200
+    record = _readiness(caplog)
+    assert record.runner_readiness_seconds == 71.0
+    # The queued delivery lag needs a usable created_at.
+    assert not hasattr(record, "github_queued_delivery_lag_seconds")
+    # Nor does the end-to-end line chart a negative time as instant.
+    assert "Time for runner to be picked up by github" not in [
+        r.message for r in caplog.records
+    ]
+
+
+def test_another_vms_readiness_is_unknown_without_a_usable_created_at(
+    fixtures_dir, monkeypatch, fake_job_store, caplog
+):
+    """An idle VM admitted long before: without the job's creation time,
+    readiness would read as the VM's whole idle time, a false breach."""
+    _runner_vm(monkeypatch, _vm_labels("1", 990_000))
+    with caplog.at_level(logging.INFO):
+        response = _in_progress(
+            fixtures_dir, created_at=1_000_000 + 3600, started_at=1_000_150
+        )
+
+    assert response.status_code == 200
+    assert _readiness(caplog) is None
+    unknown = _unknown(caplog)
+    assert unknown.reason == "created_at_unusable"
+    assert unknown.created_at_offset_seconds == 3600 - 150
+
+
+def test_readiness_is_unknown_when_started_at_is_ahead_of_us(
+    fixtures_dir, monkeypatch, fake_job_store, caplog
+):
+    """GitHub says the job started after we heard it had: its whole clock
+    is ahead of ours, and any readiness from it is a guess."""
+    now = int(time.time())
+    _runner_vm(monkeypatch, _vm_labels("77678867086", now - 100))
+    with caplog.at_level(logging.INFO):
+        response = _in_progress(
+            fixtures_dir, created_at=now + 3550, started_at=now + 3600
+        )
+
+    assert response.status_code == 200
+    assert _readiness(caplog) is None
+    unknown = _unknown(caplog)
+    assert unknown.reason == "started_at_ahead"
+    assert unknown.started_at_offset_seconds == pytest.approx(3600, abs=5)
+
+
+@pytest.mark.parametrize(
+    ("created_at", "readiness"),
+    [
+        # Same second as the start (one-second resolution): ready at once.
+        (1_000_150, 0.0),
+        # Within the skew tolerance after the start: still usable.
+        (1_000_153, 0.0),
+        # Just before the start: the VM was already waiting.
+        (1_000_140, 10.0),
+    ],
+    ids=["same-second", "within-tolerance", "before-start"],
+)
+def test_idle_vm_readiness_at_the_boundary(
+    fixtures_dir, monkeypatch, fake_job_store, caplog, created_at, readiness
+):
+    _runner_vm(monkeypatch, _vm_labels("1", 990_000))
+    with caplog.at_level(logging.INFO):
+        _in_progress(fixtures_dir, created_at=created_at, started_at=1_000_150)
+
+    assert _readiness(caplog).runner_readiness_seconds == readiness
+
+
+def test_idle_vm_readiness_just_past_the_tolerance_is_unknown(
+    fixtures_dir, monkeypatch, fake_job_store, caplog
+):
+    _runner_vm(monkeypatch, _vm_labels("1", 990_000))
+    with caplog.at_level(logging.INFO):
+        _in_progress(fixtures_dir, created_at=1_000_156, started_at=1_000_150)
+
+    assert _readiness(caplog) is None
+    assert _unknown(caplog).reason == "created_at_unusable"
 
 
 def test_no_readiness_from_another_installations_vm(

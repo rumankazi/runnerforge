@@ -11,7 +11,9 @@ Email from "RunnerForge Alerts": **Time-to-Register SLO fast burn (10x over 1h)*
 
 The SLO (`observability_slos.tf`) is built on `runner_readiness_seconds`: the time from the orchestrator receiving
 the `queued` webhook that booted the job's runner VM (the VM in `runner_name`), or from the job's `created_at` if
-that is later, to GitHub's `started_at` for that job. A 5-minute window is bad when more than 0.5% of its
+that is later and the VM was booted for another job, to GitHub's `started_at` for that job. Samples whose GitHub
+timestamps contradict our clock are skipped and logged as `Runner readiness unknown`; many of those mean GitHub's
+clock is off, and the SLO has fewer samples rather than wrong ones. A 5-minute window is bad when more than 0.5% of its
 samples are over 300 s. The alert fires when the burn rate over the last hour is above 10.
 
 <Callout type="info" title="One slow job is enough">
