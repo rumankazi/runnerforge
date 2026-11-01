@@ -101,14 +101,16 @@ class JobStore(Protocol):
         """Open records whose `next_check_at` has passed, earliest first."""
         ...
 
-    async def list_open(self, limit: int) -> list[Record]:
-        """Open records, any order."""
+    async def list_open(self, limit: int) -> list[Record] | None:
+        """Open records, any order; None if the read failed, so a caller
+        that deletes on "nothing is busy" can fail closed."""
         ...
 
     async def list_open_by_installation(
         self, installation_id: int, limit: int
-    ) -> list[Record]:
-        """One installation's open records, oldest `queued_at` first."""
+    ) -> list[Record] | None:
+        """One installation's open records, oldest `queued_at` first; None
+        if the read failed."""
         ...
 
     async def claim_start(
@@ -201,12 +203,12 @@ class NoopJobStore:
     async def list_due(self, now: datetime, limit: int) -> list[Record]:
         return []
 
-    async def list_open(self, limit: int) -> list[Record]:
+    async def list_open(self, limit: int) -> list[Record] | None:
         return []
 
     async def list_open_by_installation(
         self, installation_id: int, limit: int
-    ) -> list[Record]:
+    ) -> list[Record] | None:
         return []
 
     async def claim_start(
@@ -316,9 +318,9 @@ class FirestoreJobStore:
             .order_by("next_check_at")
             .limit(limit)
         )
-        return await self._run_query("list_due", query)
+        return await self._run_query("list_due", query) or []
 
-    async def list_open(self, limit: int) -> list[Record]:
+    async def list_open(self, limit: int) -> list[Record] | None:
         query = (
             self._client.collection(JOBS_COLLECTION)
             .where(filter=FieldFilter("open", "==", True))
@@ -328,7 +330,7 @@ class FirestoreJobStore:
 
     async def list_open_by_installation(
         self, installation_id: int, limit: int
-    ) -> list[Record]:
+    ) -> list[Record] | None:
         query = (
             self._client.collection(JOBS_COLLECTION)
             .where(filter=FieldFilter("installation_id", "==", installation_id))
@@ -379,7 +381,7 @@ class FirestoreJobStore:
             return False
         return True
 
-    async def _run_query(self, operation: str, query) -> list[Record]:
+    async def _run_query(self, operation: str, query) -> list[Record] | None:
         try:
             async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
                 return [
@@ -392,7 +394,7 @@ class FirestoreJobStore:
                 "Job store read failed",
                 extra={"operation": operation, "error_class": type(exc).__name__},
             )
-            return []
+            return None
 
     async def patch(self, key: str, fields: dict[str, Any]) -> None:
         try:

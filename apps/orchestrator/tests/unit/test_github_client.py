@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from runnerforge.github_client import (
     JobNotFound,
     RepoNotFound,
+    delete_runner,
     get_app_installation,
     get_installation_token,
     get_job,
@@ -357,6 +358,37 @@ async def test_get_registration_token_does_not_retry_on_unknown_error():
         )
 
     assert route.call_count == 1  # NOT retried — unknown exception
+
+
+# --- delete_runner ---
+_RUNNER_URL = "https://api.github.com/repos/RumanKazi/Foo.js/actions/runners/42"
+
+
+@respx.mock
+async def test_delete_runner_removes_the_registration():
+    route = respx.delete(_RUNNER_URL).mock(return_value=httpx.Response(204))
+
+    await delete_runner("ghs_test", "RumanKazi/Foo.js", 42)
+
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["Authorization"] == "Bearer ghs_test"
+
+
+@respx.mock
+async def test_delete_runner_treats_already_removed_as_done():
+    respx.delete(_RUNNER_URL).mock(return_value=httpx.Response(404))
+
+    await delete_runner("ghs_test", "RumanKazi/Foo.js", 42)
+
+
+@respx.mock
+async def test_delete_runner_raises_other_errors():
+    """The caller keeps the VM: it can't tell whether the runner is gone."""
+    route = respx.delete(_RUNNER_URL).mock(return_value=httpx.Response(422))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await delete_runner("ghs_test", "RumanKazi/Foo.js", 42)
+    assert route.call_count == 1  # 4xx isn't retried
 
 
 # --- get_runner ---

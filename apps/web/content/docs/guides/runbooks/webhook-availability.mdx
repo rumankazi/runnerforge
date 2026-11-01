@@ -18,8 +18,9 @@ is gone in about 3 days. It auto-closes 30 minutes after the condition clears.
 
 - A 5xx on `/webhook` is a failed GitHub delivery, and GitHub does not redeliver it on its own.
   - `queued`: no VM is created, so the job stays queued.
-  - `completed`: the VM isn't deleted. GCE deletes it once it hits its 6 h 15 min runtime cap
-    (`MAX_VM_RUN_DURATION`), or the daily sweep does.
+  - `completed`: the VM isn't deleted by the webhook. With the job store on, the reconciler's orphan cleanup
+    deletes it within about 5 minutes once it is 15 minutes old, because its runner is gone from GitHub. The daily
+    sweep and GCE's 6 h 15 min runtime cap (`MAX_VM_RUN_DURATION`) back that up.
 - The SLO covers every route, so a failing `/sweep` (once a day) also counts.
 
 ## Diagnose

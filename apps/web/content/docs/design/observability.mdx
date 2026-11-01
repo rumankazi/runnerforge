@@ -78,14 +78,18 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Runner readiness unknown` | WARNING | `handlers.py` | `reason` (`started_at_ahead`, `started_at_before_admission`, `created_at_unusable`), `started_at_offset_seconds`, `created_at_offset_seconds` | |
 | `Time for runner to be picked up by github` | INFO | `handlers.py` | `time_to_runner_seconds` | `time_to_runner_seconds` |
 | `Refusing to delete VM not owned by this installation` | WARNING | `handlers.py` | `vm_installation_id` | |
-| `Submitted VM deletion` | INFO | `compute_client.py` | `vm_name`, `reason` (`webhook`, `sweep`) | `vm_deletion_count` |
+| `Submitted VM deletion` | INFO | `compute_client.py` | `vm_name`, `reason` (`webhook`, `sweep`, `reconcile`) | `vm_deletion_count` |
 | `Job ended due to spot preemption` | WARNING | `compute_client.py` | `vm_name`, `job_id`, `conclusion` | `job_preempted_count` |
 | `VM list scan` | INFO | `compute_client.py` | `runnerforge_vm_count`, `skipped_malformed_count` | `runner_vm_count` |
 | `Sweep decision` | INFO / WARNING | `sweep.py` | `decision`, `reason`, `vm_name`, `age_minutes` | |
 | `Sweep failed for VM` | ERROR | `sweep.py` | `vm_name`, `error` | |
 | `Sweep completed` | INFO | `main.py` | `checked`, `deleted`, `skipped`, `error_count` | `sweep_*` |
-| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `registry_changes`, `started`, `more_due`, `error_count` | `reconcile_run_count`, `reconcile_stuck_count`, `reconcile_error_count`, `reconcile_started_count` |
+| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `registry_changes`, `started`, `orphans_deleted`, `more_due`, `error_count` | `reconcile_run_count`, `reconcile_stuck_count`, `reconcile_error_count`, `reconcile_started_count` |
 | `Reconcile failed for record` | ERROR | `reconcile.py` | `job_key`, `error` | |
+| `Orphan VM deleted` | INFO | `reconcile.py` | `vm_name`, `installation_id`, `reason` (`runner_gone`, `runner_idle`), `age_minutes` | |
+| `Orphan check failed` | ERROR | `reconcile.py` | `vm_name`, `error_class` (the VM is kept) | |
+| `Orphan cleanup skipped` | WARNING | `reconcile.py` | `reason` (`store_unavailable`, `too_many_open`) | |
+| `Orphan cleanup incomplete` | WARNING | `reconcile.py` | `unchecked` (10-check cap or 30 s budget reached) | |
 | `Reconcile started job` | INFO | `reconcile.py` | `job_key`, `vm_name`, `start`, `installation_id` (capacity pass, `ADMISSION=registry`) | |
 | `Reconcile start failed` | ERROR | `reconcile.py` | `job_key`, `error_class` | |
 | `Capacity check failed` | WARNING | `reconcile.py` | `installation_id`, `error_class` | |

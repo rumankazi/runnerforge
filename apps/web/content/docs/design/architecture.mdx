@@ -30,7 +30,7 @@ a token without them fails validation):
 | Permission | Used for |
 | --- | --- |
 | Actions: read | `workflow_job` webhooks; `GET /repos/{repo}/actions/jobs/{id}` in the reconciler |
-| Administration: read & write | `POST /repos/{repo}/actions/runners/registration-token`; `GET /repos/{repo}/actions/runners?name=` in the sweep |
+| Administration: read & write | `POST /repos/{repo}/actions/runners/registration-token`; `GET /repos/{repo}/actions/runners?name=` in the sweep and the reconciler; `DELETE /repos/{repo}/actions/runners/{id}` in the reconciler's orphan cleanup |
 | Metadata: read | Required by GitHub for repository access; not called directly |
 
 Why Administration is needed, and what bounds it, is on [Trust & threat model](/docs/design/trust).
