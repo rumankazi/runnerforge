@@ -502,6 +502,49 @@ resource "google_logging_metric" "reconcile_error_count" {
   }
 }
 
+# One per reconciler run (Cloud Scheduler, every 5 minutes): about 12 an hour.
+# A gap means the Scheduler job or /reconcile stopped. A plain counter, so a
+# chart can sum it exactly (increase() on a distribution's count extrapolates).
+resource "google_logging_metric" "reconcile_run_count" {
+  name   = "reconcile_run_count"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Reconcile completed"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
+}
+
+# Per-run count of VMs the capacity pass started for jobs waiting under an
+# installation's limit (ADR-019). Always 0 with ADMISSION=allowlist.
+resource "google_logging_metric" "reconcile_started_count" {
+  name   = "reconcile_started_count"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Reconcile completed"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "DISTRIBUTION"
+    unit        = "1"
+  }
+
+  value_extractor = "EXTRACT(jsonPayload.started)"
+
+  bucket_options {
+    exponential_buckets {
+      num_finite_buckets = 12
+      growth_factor      = 2.0
+      scale              = 1.0
+    }
+  }
+}
+
 # ---------------------------------------------------------------------------
 # Lost-webhook detection — "queued events accepted vs. queued events that
 # reached a decision". webhook_event_count counts every RunnerForge webhook

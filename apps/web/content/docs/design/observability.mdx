@@ -84,7 +84,7 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Sweep decision` | INFO / WARNING | `sweep.py` | `decision`, `reason`, `vm_name`, `age_minutes` | |
 | `Sweep failed for VM` | ERROR | `sweep.py` | `vm_name`, `error` | |
 | `Sweep completed` | INFO | `main.py` | `checked`, `deleted`, `skipped`, `error_count` | `sweep_*` |
-| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `registry_changes`, `started`, `more_due`, `error_count` | `reconcile_stuck_count`, `reconcile_error_count` |
+| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `registry_changes`, `started`, `more_due`, `error_count` | `reconcile_run_count`, `reconcile_stuck_count`, `reconcile_error_count`, `reconcile_started_count` |
 | `Reconcile failed for record` | ERROR | `reconcile.py` | `job_key`, `error` | |
 | `Reconcile started job` | INFO | `reconcile.py` | `job_key`, `vm_name`, `start`, `installation_id` (capacity pass, `ADMISSION=registry`) | |
 | `Reconcile start failed` | ERROR | `reconcile.py` | `job_key`, `error_class` | |
@@ -146,7 +146,7 @@ If the VM is missing or its labels are malformed, `webhook.handle_in_progress` s
 
 ## Log-based metrics
 
-All 21 are in `observability_metrics.tf`. All but one scope to `resource.type="cloud_run_revision"` and
+All 23 are in `observability_metrics.tf`. All but one scope to `resource.type="cloud_run_revision"` and
 `service_name="runnerforge-orchestrator"`.
 
 | Metric | Kind | Source | Labels |
@@ -164,7 +164,8 @@ All 21 are in `observability_metrics.tf`. All but one scope to `resource.type="c
 | `time_to_runner_seconds` | distribution (s) | `Time for runner to be picked up by github` | `machine_type`, `image_version` |
 | `runner_vm_count` | distribution | `VM list scan` | |
 | `sweep_checked_count`, `sweep_deleted_count`, `sweep_error_count` | distribution | `Sweep completed` | |
-| `reconcile_stuck_count`, `reconcile_error_count` | distribution | `Reconcile completed` (`stuck`, `error_count`); one point per run, so the point count is the run count | |
+| `reconcile_run_count` | counter | `Reconcile completed`: one per run, about 12 an hour | |
+| `reconcile_stuck_count`, `reconcile_error_count`, `reconcile_started_count` | distribution | `Reconcile completed` (`stuck`, `error_count`, `started`); one point per run, so the point count is the run count | |
 | `machine_policy_reject_count` | counter | `Machine policy rejected` | `reason` |
 | `job_preempted_count` | counter | `Job ended due to spot preemption` | `conclusion` |
 | `vm_preemption_count` | counter | GCE audit log `compute.instances.preempted` on `instances/runnerforge-*` | `zone` |
@@ -262,5 +263,6 @@ back to the JSON, then commit. Sections:
 | Webhook reliability | Webhook events by `event_type`, lost-webhook ratio |
 | Spot & Policy | VM creation rate by spot, preemptions (audit log vs job-confirmed), machine policy rejects by reason |
 | Webhook delivery latency | End-to-end time-to-runner p50/p95, GitHub delivery lag p50/p95 |
+| Reconciler | Runs per hour (expect 12), stuck / errors / started per run, job store write failures by operation, queued webhook outcomes by outcome |
 
 For how the charts' aligners and reducers work, see [Cloud Monitoring charts](/docs/guides/cloud-monitoring-charts).

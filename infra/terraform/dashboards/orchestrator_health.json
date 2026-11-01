@@ -937,6 +937,199 @@
         "width": 24,
         "xPos": 24,
         "yPos": 168
+      },
+      {
+        "height": 4,
+        "widget": {
+          "sectionHeader": {
+            "dividerBelow": true,
+            "subtitle": "Job-record reconciler (ADR-018) and its capacity pass (ADR-019)"
+          },
+          "title": "Reconciler"
+        },
+        "width": 48,
+        "yPos": 184
+      },
+      {
+        "height": 16,
+        "widget": {
+          "title": "Reconciler runs per hour (expect 12)",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "3600s",
+                "plotType": "STACKED_BAR",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "3600s",
+                      "crossSeriesReducer": "REDUCE_SUM",
+                      "perSeriesAligner": "ALIGN_DELTA"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/reconcile_run_count\" resource.type=\"cloud_run_revision\""
+                  }
+                }
+              }
+            ],
+            "yAxis": {
+              "label": "runs",
+              "scale": "LINEAR"
+            }
+          }
+        },
+        "width": 24,
+        "xPos": 0,
+        "yPos": 188
+      },
+      {
+        "height": 16,
+        "widget": {
+          "title": "Reconciler per run: stuck / errors / started",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "300s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_DELTA"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/reconcile_stuck_count\" resource.type=\"cloud_run_revision\""
+                  }
+                },
+                "legendTemplate": "stuck"
+              },
+              {
+                "minAlignmentPeriod": "300s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_DELTA"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/reconcile_error_count\" resource.type=\"cloud_run_revision\""
+                  }
+                },
+                "legendTemplate": "errors"
+              },
+              {
+                "minAlignmentPeriod": "300s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "crossSeriesReducer": "REDUCE_MEAN",
+                      "perSeriesAligner": "ALIGN_DELTA"
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/reconcile_started_count\" resource.type=\"cloud_run_revision\""
+                  }
+                },
+                "legendTemplate": "started"
+              }
+            ],
+            "yAxis": {
+              "label": "records",
+              "scale": "LINEAR"
+            }
+          }
+        },
+        "width": 24,
+        "xPos": 24,
+        "yPos": 188
+      },
+      {
+        "height": 16,
+        "widget": {
+          "title": "Job store write failures by operation",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "300s",
+                "plotType": "STACKED_BAR",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "crossSeriesReducer": "REDUCE_SUM",
+                      "perSeriesAligner": "ALIGN_DELTA",
+                      "groupByFields": [
+                        "metric.label.\"operation\""
+                      ]
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/job_store_write_failure_count\" resource.type=\"cloud_run_revision\""
+                  }
+                },
+                "legendTemplate": "${metric.labels.operation}"
+              }
+            ],
+            "yAxis": {
+              "label": "failures",
+              "scale": "LINEAR"
+            }
+          }
+        },
+        "width": 24,
+        "xPos": 0,
+        "yPos": 204
+      },
+      {
+        "height": 16,
+        "widget": {
+          "title": "Queued webhook outcomes by outcome",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "300s",
+                "plotType": "STACKED_BAR",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "crossSeriesReducer": "REDUCE_SUM",
+                      "perSeriesAligner": "ALIGN_DELTA",
+                      "groupByFields": [
+                        "metric.label.\"outcome\""
+                      ]
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/queued_outcome_count\" resource.type=\"cloud_run_revision\""
+                  }
+                },
+                "legendTemplate": "${metric.labels.outcome}"
+              }
+            ],
+            "yAxis": {
+              "label": "webhooks",
+              "scale": "LINEAR"
+            }
+          }
+        },
+        "width": 24,
+        "xPos": 24,
+        "yPos": 204
       }
     ]
   }
