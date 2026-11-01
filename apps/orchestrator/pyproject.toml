@@ -18,6 +18,7 @@ dependencies = [
     "opentelemetry-instrumentation-httpx>=0.63b1",
     "opentelemetry-sdk>=1.42.1",
     "pyjwt[crypto]>=2.15.0",
+    "requests>=2.34.2",
     "tenacity>=9.1.4",
 ]
 
