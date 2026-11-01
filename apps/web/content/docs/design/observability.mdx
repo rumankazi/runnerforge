@@ -190,7 +190,11 @@ Things to know when reading them:
 
 - `machine_type` and `image_version` on the two latency metrics are always empty today: the log lines that feed them
   don't carry those fields.
-- `runner_vm_count` only gets a sample when the sweep runs (once a day), so it isn't a live fleet gauge.
+- `runner_vm_count` gets a sample whenever the VMs are listed: every reconciler run (5 minutes) and the daily sweep.
+  It's a fleet gauge at 5-minute resolution, not a live one.
+- Charts of per-run counts (`runner_vm_count`, `sweep_checked_count`, `sweep_deleted_count`, `sweep_error_count`) use
+  `ALIGN_DELTA` with `REDUCE_MEAN`, the exact mean from each distribution's sum and count. A percentile aligner
+  estimates within a bucket: with exponential buckets starting at 1, a count of 0 charts as 0.5.
 - The `spot` label on the two VM creation metrics was added out of band with `gcloud logging metrics update`, to
   avoid the provider destroying and recreating the metric.
 - New log-based metrics take several minutes to become queryable. Dependent SLOs and alerts wait behind
