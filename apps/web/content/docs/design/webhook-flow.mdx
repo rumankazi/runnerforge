@@ -216,13 +216,18 @@ response reports `checked`, `deleted`, `skipped` and `errors`.
 Cloud Scheduler calls `POST /reconcile` every 5 minutes with the same OIDC identity as the sweep. It brings
 open job records ([ADR-018](/docs/design/decisions#per-job-state-in-firestore-behind-a-jobstore-protocol)) in
 line with GitHub and GCE, for what the webhooks and background tasks missed. The only VMs it deletes are
-orphans. Each run:
+those of installations GitHub cut off, and orphans. Each run:
 
 1. Takes up to 25 open records whose next check is due, earliest first.
-2. Lists RunnerForge VMs once. A VM whose job has no open record gets one, built from its labels and metadata.
-3. Runs the **orphan cleanup** (below); no new check starts after 30 s.
-4. With `ADMISSION=registry`, runs the **capacity pass** (below), in its own 40 s.
-5. For each record: one already holding `completed` is closed. Otherwise it asks GitHub
+2. Lists RunnerForge VMs once, reads the tenant registry (in both admission modes), and confirms with GitHub
+   which installations are cut off (**cut-off cleanup**, below).
+3. A VM whose job has no open record gets one, built from its labels and metadata, unless its installation
+   is cut off.
+4. Deletes cut-off installations' VMs and an uninstalled one's records. Confirming, deleting and purging share
+   30 s.
+5. Runs the **orphan cleanup** (below); no new check starts after 30 s.
+6. With `ADMISSION=registry`, runs the **capacity pass** (below), in its own 40 s.
+7. For each record: one already holding `completed` is closed. Otherwise it asks GitHub
    (`GET /repos/{owner}/{repo}/actions/jobs/{job_id}`):
 
 | GitHub says | Reconciler |
@@ -241,6 +246,34 @@ for the next run. The run logs `Reconcile completed` with its counts.
 
 "Its own VM" is the one last made for the job: the decision's `vm_name` after a reconciler start, otherwise
 `runnerforge-{run}-{job}-{attempt}`.
+
+### Cut-off installations
+
+When an installation is suspended on GitHub or the App is uninstalled, GitHub sends no more webhooks for it, no
+`completed` either, and refuses its installation tokens. Its runners keep their own registration, so a job already
+running can finish, but nothing deletes the VM. The registry row's `github_status` comes from whichever
+`installation` event arrived last, and events can be lost or arrive out of order. So the reconciler acts only on
+what GitHub says now:
+
+- **Confirm:** for each row that says `suspended` or `deleted`, it calls `GET /app/installations/{id}` with the
+  App's own JWT, which works while an installation is suspended. A `suspended_at` confirms a suspension, a 404 an
+  uninstall. If GitHub says the installation is active, the row is put right (`Registry status repaired`) and
+  nothing else happens; if the call fails, the installation is skipped for the run. At most 10 a run.
+- **VMs:** only those made before the cut-off (GitHub's `suspended_at`, or when the row became `deleted`); a newer
+  VM means GitHub was still sending webhooks. Suspended: a VM no open record names as on a job is deleted at once,
+  since it could take jobs nobody would report; one on a job gets 15 minutes from the suspension, which absorbs a
+  quick unsuspend. Uninstalled: every VM goes at once. A cut-off runner can't be deregistered (no token), so
+  GitHub keeps an offline entry for it. At most 10 deletes a run, reason `cutoff`.
+- **Suspended records** are paused, not closed: they get no GitHub calls and no verdict, and are looked at again
+  every 15 minutes, so they resume soon after an unsuspend. An uninstalled installation's records are pushed back
+  the same way until they're deleted, so they can't hold the head of every batch. Its deferred jobs keep waiting instead of being
+  rejected, and start once it's unsuspended.
+- **Uninstalled records** are deleted, up to 200 per installation a run, once the run's listing shows none of the installation's VMs in
+  any status (a VM left over would give its job a record back). The row then gets `records_purged_at`, and is
+  looked at again only hourly, for stragglers, until it expires 30 days after the uninstall.
+- If the registry can't be read, the step is skipped for the run (`Cut-off cleanup skipped`).
+
+`Reconcile completed` reports `cutoff_vms_deleted` and `cutoff_records_deleted`.
 
 ### Orphan cleanup
 
@@ -283,7 +316,8 @@ the reconciler starts VMs for jobs waiting under an installation's limit. GitHub
 runner with matching labels, so it works from free slots, not from decision kinds.
 
 - **Installations:** every one approved at least once, plus the allow-list. One that's no longer admitted gets its
-  deferred jobs marked `rejected` with the reason. If the registry can't be read, the installation is skipped for
+  deferred jobs marked `rejected` with the reason, except one GitHub has suspended: its deferred jobs keep waiting
+  and start after an unsuspend. If the registry can't be read, the installation is skipped for
   the run, not rejected, and its stuck verdicts wait too.
 - **Free slots:** `max_concurrent_vms` minus the installation's PROVISIONING, STAGING or RUNNING VMs, counted live,
   leaving out the VMs the orphan cleanup just deleted.

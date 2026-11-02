@@ -79,6 +79,7 @@ async def test_noop_registry_is_disabled_and_unavailable():
         await noop.get(1)
     assert await noop.record_github_status(1, "active", account=ACCOUNT) is None
     assert await noop.list_all() is None
+    assert await noop.mark_records_purged(1) is None
 
 
 # --- get ---
@@ -140,9 +141,20 @@ async def test_get_failure_raises_unavailable_and_logs(caplog):
 # --- record_github_status ---
 
 
-async def test_new_installation_is_created_pending():
+def _status_doc(current: dict | None) -> MagicMock:
+    """A doc whose get() shows `current` (None: no row yet)."""
     doc = MagicMock()
+    doc.get = AsyncMock(
+        return_value=_snap("7", current or {}, exists=current is not None)
+    )
     doc.create = AsyncMock()
+    doc.update = AsyncMock()
+    doc.set = AsyncMock()
+    return doc
+
+
+async def test_new_installation_is_created_pending():
+    doc = _status_doc(None)
 
     await FirestoreRegistry(_client_with_doc(doc)).record_github_status(
         7, "active", account=ACCOUNT
@@ -155,54 +167,68 @@ async def test_new_installation_is_created_pending():
     assert data["account_type"] == "Organization"
     assert data["state"] == "pending"
     assert data["github_status"] == "active"
+    assert data["github_status_at"] == data["updated_at"]
     assert "expire_at" not in data
 
 
-async def test_existing_row_keeps_its_state(monkeypatch):
-    doc = MagicMock()
-    doc.create = AsyncMock(side_effect=AlreadyExists("exists"))
-    doc.set = AsyncMock()
+async def test_a_change_of_status_records_when_it_changed():
+    doc = _status_doc({"state": "approved", "github_status": "active"})
 
     await FirestoreRegistry(_client_with_doc(doc)).record_github_status(
         7, "suspended", account=ACCOUNT
     )
 
-    (fields,), kwargs = doc.set.await_args
-    assert kwargs == {"merge": True}
+    (fields,), _ = doc.update.await_args
+    # Never touches `state`: only the owner decides that.
     assert "state" not in fields
     assert fields["github_status"] == "suspended"
+    assert fields["github_status_at"] == fields["updated_at"]
     assert fields["expire_at"] is firestore.DELETE_FIELD
+    assert fields["account_login"] == "octo"
+    doc.create.assert_not_awaited()
 
 
-async def test_deleted_installation_gets_an_expiry():
-    doc = MagicMock()
-    doc.create = AsyncMock(side_effect=AlreadyExists("exists"))
-    doc.set = AsyncMock()
-
-    await FirestoreRegistry(_client_with_doc(doc)).record_github_status(
-        7, "deleted", account=ACCOUNT
-    )
-
-    (fields,), _ = doc.set.await_args
-    expiry = fields["expire_at"] - fields["updated_at"]
-    assert expiry == timedelta(days=30)
-
-
-async def test_status_without_account_only_updates_an_existing_row():
-    doc = MagicMock()
-    doc.update = AsyncMock()
-    doc.create = AsyncMock()
+async def test_the_same_status_again_keeps_the_transition_time():
+    """A duplicate or late event can't move the cut-off time."""
+    doc = _status_doc({"github_status": "deleted"})
 
     await FirestoreRegistry(_client_with_doc(doc)).record_github_status(7, "deleted")
 
     (fields,), _ = doc.update.await_args
     assert fields["github_status"] == "deleted"
-    assert "account_login" not in fields
+    assert "github_status_at" not in fields
+    assert "expire_at" not in fields
+
+
+async def test_a_row_without_a_status_counts_as_active():
+    doc = _status_doc({"state": "pending"})
+
+    await FirestoreRegistry(_client_with_doc(doc)).record_github_status(7, "active")
+
+    (fields,), _ = doc.update.await_args
+    assert "github_status_at" not in fields
+
+
+async def test_deleted_installation_gets_an_expiry_once():
+    doc = _status_doc({"github_status": "active"})
+
+    await FirestoreRegistry(_client_with_doc(doc)).record_github_status(7, "deleted")
+
+    (fields,), _ = doc.update.await_args
+    assert fields["expire_at"] - fields["updated_at"] == timedelta(days=30)
+
+
+async def test_status_without_account_creates_no_row():
+    doc = _status_doc(None)
+
+    await FirestoreRegistry(_client_with_doc(doc)).record_github_status(7, "deleted")
+
     doc.create.assert_not_awaited()
+    doc.update.assert_not_awaited()
 
 
-async def test_status_without_account_ignores_a_missing_row(caplog):
-    doc = MagicMock()
+async def test_a_row_deleted_between_read_and_write_is_left_alone(caplog):
+    doc = _status_doc({"github_status": "active"})
     doc.update = AsyncMock(side_effect=NotFound("gone"))
 
     with caplog.at_level(logging.WARNING):
@@ -213,8 +239,37 @@ async def test_status_without_account_ignores_a_missing_row(caplog):
     assert not [r for r in caplog.records if r.message == "Registry write failed"]
 
 
+async def test_a_row_created_in_between_gets_the_status_only():
+    doc = _status_doc(None)
+    doc.create = AsyncMock(side_effect=AlreadyExists("exists"))
+
+    await FirestoreRegistry(_client_with_doc(doc)).record_github_status(
+        7, "suspended", account=ACCOUNT
+    )
+
+    (fields,), kwargs = doc.set.await_args
+    assert kwargs == {"merge": True}
+    assert "state" not in fields
+    assert "github_status_at" not in fields
+    assert fields["github_status"] == "suspended"
+    # The expiry follows the status even here.
+    assert fields["expire_at"] is firestore.DELETE_FIELD
+
+
+async def test_a_row_created_in_between_as_deleted_still_expires():
+    doc = _status_doc(None)
+    doc.create = AsyncMock(side_effect=AlreadyExists("exists"))
+
+    await FirestoreRegistry(_client_with_doc(doc)).record_github_status(
+        7, "deleted", account=ACCOUNT
+    )
+
+    (fields,), _ = doc.set.await_args
+    assert fields["expire_at"] - fields["updated_at"] == timedelta(days=30)
+
+
 async def test_status_write_fails_open(caplog):
-    doc = MagicMock()
+    doc = _status_doc(None)
     doc.create = AsyncMock(side_effect=ServiceUnavailable("down"))
 
     with caplog.at_level(logging.WARNING):
@@ -225,6 +280,52 @@ async def test_status_write_fails_open(caplog):
     [record] = [r for r in caplog.records if r.message == "Registry write failed"]
     assert getattr(record, "operation", None) == "github_status:active"
     assert getattr(record, "installation_id", None) == 7
+
+
+async def test_entry_carries_the_cutoff_fields():
+    at = datetime(2026, 11, 2, tzinfo=UTC)
+    doc = MagicMock()
+    doc.get = AsyncMock(
+        return_value=_snap(
+            "7",
+            {
+                "github_status": "deleted",
+                "github_status_at": at,
+                "expire_at": at + timedelta(days=30),
+                "records_purged_at": at,
+            },
+        )
+    )
+
+    entry = await FirestoreRegistry(_client_with_doc(doc)).get(7)
+
+    assert entry.github_status_at == at
+    assert entry.expire_at == at + timedelta(days=30)
+    assert entry.records_purged_at == at
+
+
+# --- mark_records_purged ---
+
+
+async def test_mark_records_purged_stamps_the_row():
+    doc = MagicMock()
+    doc.update = AsyncMock()
+
+    await FirestoreRegistry(_client_with_doc(doc)).mark_records_purged(7)
+
+    (fields,), _ = doc.update.await_args
+    assert isinstance(fields["records_purged_at"], datetime)
+
+
+async def test_mark_records_purged_fails_open(caplog):
+    doc = MagicMock()
+    doc.update = AsyncMock(side_effect=ServiceUnavailable("down"))
+
+    with caplog.at_level(logging.WARNING):
+        await FirestoreRegistry(_client_with_doc(doc)).mark_records_purged(7)
+
+    [record] = [r for r in caplog.records if r.message == "Registry write failed"]
+    assert getattr(record, "operation", None) == "records_purged"
 
 
 # --- list_all ---

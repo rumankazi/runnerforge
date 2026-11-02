@@ -109,6 +109,8 @@ class FakeJobStore:
         self.queried: list[int] = []
         self.claims: list[tuple] = []
         self.claim_result = True
+        self.purged: list[tuple[int, int]] = []
+        self.purge_result: int | None = 0
 
     async def create_if_absent(self, key, base):
         self.created.append((key, base))
@@ -149,6 +151,11 @@ class FakeJobStore:
 
     async def patch(self, key, fields):
         self.patches.append((key, fields))
+
+    async def delete_by_installation(self, installation_id, limit):
+        # Uninstall purge (ADR-019 step 4): what it deletes, or None to fail.
+        self.purged.append((installation_id, limit))
+        return self.purge_result
 
     def names(self) -> list[str]:
         return [f["name"] for f in self.facts]

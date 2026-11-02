@@ -119,6 +119,13 @@ def world(monkeypatch, fake_job_store):
         reconcile, "list_runnerforge_vms", AsyncMock(side_effect=lambda: world.vms)
     )
     monkeypatch.setattr(reconcile, "get_registry", lambda: world.registry)
+    # The cut-off cleanup is tested on its own; here its GitHub check fails,
+    # so it acts on nothing.
+    monkeypatch.setattr(
+        reconcile,
+        "get_app_installation",
+        AsyncMock(side_effect=RuntimeError("not under test")),
+    )
     monkeypatch.setattr(reconcile, "decide_admission", decide)
     monkeypatch.setattr(
         reconcile, "active_vm_names", AsyncMock(side_effect=lambda iid: world.active)
@@ -303,17 +310,18 @@ async def test_vm_that_isnt_a_candidate_is_not_checked(world, vm):
     assert world.calls == []
 
 
-async def test_allowlist_mode_does_not_read_the_registry(world, monkeypatch):
-    def no_registry():
-        raise AssertionError("registry read in allowlist mode")
-
-    monkeypatch.setattr(reconcile, "get_registry", no_registry)
-    world.vms = [_vm("runnerforge-100-1-1")]
+async def test_allowlist_mode_ignores_registry_approvals(world):
+    """The registry is read in both modes (for cut-off installations), but
+    in allowlist mode only the allow-list gets records, so an approved
+    row's VMs aren't orphan candidates."""
+    world.registry.rows = {8: RegistryEntry(8, "approved", "active", NOW)}
+    world.vms = [_vm("runnerforge-100-1-1", iid="8")]
     world.runners = {"runnerforge-100-1-1": None}
 
     result = await run_reconcile(now=NOW)
 
-    assert result.orphans_deleted == 1
+    assert result.orphans_deleted == 0
+    assert world.calls == []
 
 
 async def test_registry_mode_checks_approved_installations(world, monkeypatch):

@@ -396,6 +396,8 @@ async def reconcile(
             "registry_changes": result.registry_changes,
             "started": result.started,
             "orphans_deleted": result.orphans_deleted,
+            "cutoff_vms_deleted": result.cutoff_vms_deleted,
+            "cutoff_records_deleted": result.cutoff_records_deleted,
             "more_due": result.more_due,
             "error_count": len(result.errors),
         },

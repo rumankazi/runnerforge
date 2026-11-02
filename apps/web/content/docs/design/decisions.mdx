@@ -657,6 +657,8 @@ RunnerForge started as a single-owner tool. Opening it up raises a set of questi
   **2026-11-01** ([ADR-019](#tenant-registry-install-to-register-admin-approval-per-installation-limits) step 3a): two decision kinds, `rejected` (with `reason`: `limit_size` plus `machine_type`, or `suspended` and `github_inactive` for a tenant approved before) and `deferred` (`reason: limit_concurrency`, `active_vms`), with their status rows. A decision admitted only because its deferral couldn't be stored carries `deferral_unrecorded: true`. `record_fact` reports whether its write landed, which is how a deferral knows it was stored. Records are gated on "allow-listed, or approved at least once" in registry mode.
 
   **2026-11-01** ([ADR-019](#tenant-registry-install-to-register-admin-approval-per-installation-limits) orphan cleanup): `list_open` and `list_open_by_installation` now return `None` when the read fails, not an empty list, so a caller that deletes on "nothing is busy" can fail closed.
+
+  **2026-11-02** ([ADR-019](#tenant-registry-install-to-register-admin-approval-per-installation-limits) step 4): after an uninstall, the reconciler deletes the installation's records (`delete_by_installation`, an equality query on `installation_id`, one batch commit of at most 200). A fact written without base fields (the reconciler's and its watchers') now only updates an existing record and logs `Job record gone, fact dropped` if there is none, instead of creating a stub with no `installation_id` and no `expire_at`.
 </Callout>
 
 ### Context
@@ -840,6 +842,13 @@ Readers must tolerate missing fields and check `schema_version`, because a docum
   - **The alert fires on any** `registry_unavailable` rejection in 15 minutes, not at least 3: each is a job lost for good, with no record and no redelivery, so it must be re-run by hand ([runbook](/docs/guides/runbooks/registry-unavailable)). Allow-listed installations never read the registry, so they can't trigger it.
   - It reads a new metric, `queued_rejection_count`: `Queued webhook outcome` lines with outcome `rejected` or `deferred`, labelled by `outcome` and `reason`. It is separate because adding a label to `queued_outcome_count` would replace that metric. The Orchestrator Health dashboard gains an Admission section that charts it by reason.
   - **Rollback** never goes to a revision built with an empty allow-list: in allowlist mode that admits nobody.
+
+  **2026-11-02**: rollout **step 4**, the reconciler's cleanup of cut-off installations ([Reconciler](/docs/design/webhook-flow#cut-off-installations)). A design review found that acting on the row alone could kill an active installation's jobs, the allow-listed owner's included: `github_status` comes from whichever event arrived last. Changes from "When GitHub cuts the App off" below:
+  - **GitHub confirms first.** Each run, `GET /app/installations/{id}` with the App's JWT (it answers while an installation is suspended) for every row that says `suspended` or `deleted`, at most 10. A row GitHub contradicts is repaired; a failed call skips the installation for the run. Rows gain `github_status_at`, written only on a real transition, so duplicate or late events can't move the cut-off time; `expire_at` is set only on the move to `deleted`.
+  - **VMs:** only those made before the cut-off. Suspended: idle VMs (no open record names them on a job) at once, busy ones 15 minutes after GitHub's `suspended_at`. Uninstalled: all at once. Reason `cutoff`; the runner can't be deregistered.
+  - **Suspended records are paused, not closed as `gone`** (owner decision: a suspension can be lifted). They get no GitHub call, are looked at every 15 minutes, and resume after an unsuspend; the capacity pass leaves their deferred jobs waiting instead of rejecting them.
+  - **Uninstalled records** are deleted once no VM of the installation is listed in any status, 200 a run, in one batch commit; then `records_purged_at` on the row, with only an hourly re-check until it expires. ADR-018 gets a note: a reconciler or watcher write without base fields now only updates, so a deleted record isn't recreated as a stub with no expiry.
+  - The registry is read once a run in both admission modes, before the backfill, which skips cut-off installations' VMs. Owner decisions: 15 min grace for busy suspended VMs, pause on suspend, delete records as soon as the VMs are gone, and a production test by a short suspend of the owner's installation plus a fake uninstalled row the owner writes.
 </Callout>
 
 ### Context

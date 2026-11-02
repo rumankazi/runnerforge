@@ -85,18 +85,26 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Runner readiness unknown` | WARNING | `handlers.py` | `reason` (`started_at_ahead`, `started_at_before_admission`, `created_at_unusable`), `started_at_offset_seconds`, `created_at_offset_seconds` | |
 | `Time for runner to be picked up by github` | INFO | `handlers.py` | `time_to_runner_seconds` | `time_to_runner_seconds` |
 | `Refusing to delete VM not owned by this installation` | WARNING | `handlers.py` | `vm_installation_id` | |
-| `Submitted VM deletion` | INFO | `compute_client.py` | `vm_name`, `reason` (`webhook`, `sweep`, `reconcile`) | `vm_deletion_count` |
+| `Submitted VM deletion` | INFO | `compute_client.py` | `vm_name`, `reason` (`webhook`, `sweep`, `reconcile`, `cutoff`) | `vm_deletion_count` |
 | `Job ended due to spot preemption` | WARNING | `compute_client.py` | `vm_name`, `job_id`, `conclusion` | `job_preempted_count` |
 | `VM list scan` | INFO | `compute_client.py` | `runnerforge_vm_count`, `skipped_malformed_count` | `runner_vm_count` |
 | `Sweep decision` | INFO / WARNING | `sweep.py` | `decision`, `reason`, `vm_name`, `age_minutes` | |
 | `Sweep failed for VM` | ERROR | `sweep.py` | `vm_name`, `error` | |
 | `Sweep completed` | INFO | `main.py` | `checked`, `deleted`, `skipped`, `error_count` | `sweep_*` |
-| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `registry_changes`, `started`, `orphans_deleted`, `more_due`, `error_count` | `reconcile_run_count`, `reconcile_stuck_count`, `reconcile_error_count`, `reconcile_started_count`, `reconcile_orphans_deleted_count` |
+| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `registry_changes`, `started`, `orphans_deleted`, `cutoff_vms_deleted`, `cutoff_records_deleted`, `more_due`, `error_count` | `reconcile_run_count`, `reconcile_stuck_count`, `reconcile_error_count`, `reconcile_started_count`, `reconcile_orphans_deleted_count` |
 | `Reconcile failed for record` | ERROR | `reconcile.py` | `job_key`, `error` | |
 | `Orphan VM deleted` | INFO | `reconcile.py` | `vm_name`, `installation_id`, `reason` (`runner_gone`, `runner_idle`), `age_minutes` | |
 | `Orphan check failed` | ERROR | `reconcile.py` | `vm_name`, `error_class` (the VM is kept) | |
 | `Orphan cleanup skipped` | WARNING | `reconcile.py` | `reason` (`store_unavailable`, `too_many_open`) | |
 | `Orphan cleanup incomplete` | WARNING | `reconcile.py` | `unchecked` (10-check cap or 30 s budget reached) | |
+| `Cut-off VM deleted` | INFO | `reconcile.py` | `vm_name`, `installation_id`, `github_status` (`suspended`, `deleted`), `busy`, `age_minutes` | |
+| `Cut-off VM delete failed` | ERROR | `reconcile.py` | `vm_name`, `error_class` | |
+| `Cut-off records deleted` | INFO | `reconcile.py` | `installation_id`, `count`, `more` (a full page: more next run) | |
+| `Cut-off check failed` | WARNING | `reconcile.py` | `installation_id`, `error_class` (GitHub's answer unknown: skipped this run) | |
+| `Cut-off cleanup skipped` | WARNING | `reconcile.py` | `reason` (`registry_unavailable`) | |
+| `Cut-off cleanup incomplete` | WARNING | `reconcile.py` | `unchecked` (10-check cap), `vm_name` (10-delete cap or the 30 s budget), or `installation_id` (the 30 s budget, before its check or purge) | |
+| `Registry status repaired` | INFO | `reconcile.py` | `installation_id`, `was`, `now` (GitHub contradicted the row) | |
+| `Job record gone, fact dropped` | INFO | `job_store.py` | `job_key`, `fact` (a reconciler or watcher write for a deleted record) | |
 | `Reconcile started job` | INFO | `reconcile.py` | `job_key`, `vm_name`, `start`, `installation_id` (capacity pass, `ADMISSION=registry`) | |
 | `Reconcile start failed` | ERROR | `reconcile.py` | `job_key`, `error_class` | |
 | `Capacity check failed` | WARNING | `reconcile.py` | `installation_id`, `error_class` | |
@@ -253,7 +261,7 @@ others, use the runbook column.
 | VM creation failure ratio > 5% (5m) | `failure` + `timeout` outcomes over all outcomes > 0.05, 5-minute alignment, held 5 min | ERROR | [VM creation failures](/docs/guides/runbooks/vm-creation-failures) |
 | Lost-webhook ratio &lt; 0.9 (5m) | `queued_outcome_count` over queued `webhook_event_count` below 0.9, 5-minute alignment, held 5 min. Inactive when there's no data. Label-policy rejections, duplicates and admission rejections and deferrals are outcomes, so they don't lower it. | ERROR | [Lost webhooks](/docs/guides/runbooks/lost-webhooks) |
 | Every queued job rejected by label policy (1h) | PromQL: ≥ 3 `machine_policy_reject_count` in 1 h `unless` any `vm_creation_count` in that hour. Evaluated every 60 s. | WARNING | [Policy rejection storm](/docs/guides/runbooks/policy-rejections) |
-| Job store write failures >= 3 (15m) | More than 2 `job_store_write_failure_count` in a 15-minute window: webhook writes, plus the reconciler's `patch` and `completed`/`in_progress` facts. `record_fact:vm` and `record_fact:preempted` are excluded from every caller (the reconciler's stuck verdicts included; it retries those), and so are reconciler reads. | WARNING | [Job store write failures](/docs/guides/runbooks/job-store-writes) |
+| Job store write failures >= 3 (15m) | More than 2 `job_store_write_failure_count` in a 15-minute window: webhook writes, plus the reconciler's `patch`, `completed`/`in_progress` facts and `delete_by_installation` (the purge after an uninstall, retried each run until it succeeds). `record_fact:vm` and `record_fact:preempted` are excluded from every caller (the reconciler's stuck verdicts included; it retries those), and so are reconciler reads. | WARNING | [Job store write failures](/docs/guides/runbooks/job-store-writes) |
 | Queued job rejected: registry unavailable (15m) | Any `queued_rejection_count` with `outcome` `rejected` and `reason` `registry_unavailable` in a 15-minute window. Each is a job lost for good: no record, no redelivery, re-run by hand. Allow-listed installations never read the registry. Auto-closes after 30 min. | WARNING | [Registry unavailable](/docs/guides/runbooks/registry-unavailable) |
 | Webhook rejections > 5/min (10m) | More than 50 `webhook_rejection_count` in a 10-minute window, held 10 min | WARNING | [Webhook rejections](/docs/guides/runbooks/webhook-rejections) |
 | Cold-start latency p95 > 30s (5m) | Cloud Run `container/startup_latencies` p95 > 30 000 ms, 5-minute alignment, held 5 min. Inactive when there's no data. | WARNING | [Cold-start latency](/docs/guides/runbooks/cold-start-latency) |

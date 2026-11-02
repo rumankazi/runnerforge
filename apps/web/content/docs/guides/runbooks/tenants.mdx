@@ -61,6 +61,10 @@ The command refuses:
 Approving an installation that GitHub has suspended works, with a warning: it is admitted only once GitHub
 unsuspends it.
 
+A suspension or uninstall on GitHub's side (by the tenant) is handled by the reconciler, not by you: it confirms the
+status with GitHub, deletes the installation's VMs, pauses its records while suspended, and deletes them after an
+uninstall ([Cut-off installations](/docs/design/webhook-flow#cut-off-installations)).
+
 ## Approve a new tenant
 
 1. Find it: `uv run runnerforge-admin list --state pending`. Check the account against the access request.

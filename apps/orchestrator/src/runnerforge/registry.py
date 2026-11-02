@@ -123,6 +123,12 @@ class RegistryEntry:
     limits: dict[str, Any] | None = None
     account_login: str | None = None
     account_type: str | None = None
+    # When `github_status` last changed (ADR-019 step 4); None on rows that
+    # haven't changed status since it was added.
+    github_status_at: datetime | None = None
+    expire_at: datetime | None = None
+    # The reconciler deleted this uninstalled installation's job records.
+    records_purged_at: datetime | None = None
 
     @property
     def admitted(self) -> bool:
@@ -155,6 +161,10 @@ class Registry(Protocol):
         """Every row, or None if the listing failed."""
         ...
 
+    async def mark_records_purged(self, installation_id: int) -> None:
+        """Note that an uninstalled installation's job records are gone."""
+        ...
+
 
 def entry_from_doc(installation_id: int, data: dict[str, Any]) -> RegistryEntry:
     return RegistryEntry(
@@ -167,6 +177,9 @@ def entry_from_doc(installation_id: int, data: dict[str, Any]) -> RegistryEntry:
         limits=data.get("limits"),
         account_login=data.get("account_login"),
         account_type=data.get("account_type"),
+        github_status_at=data.get("github_status_at"),
+        expire_at=data.get("expire_at"),
+        records_purged_at=data.get("records_purged_at"),
     )
 
 
@@ -187,6 +200,9 @@ class NoopRegistry:
         return None
 
     async def list_all(self) -> dict[int, RegistryEntry] | None:
+        return None
+
+    async def mark_records_purged(self, installation_id: int) -> None:
         return None
 
 
@@ -229,9 +245,14 @@ class FirestoreRegistry:
         account: Account | None = None,
     ) -> None:
         now = datetime.now(UTC)
-        fields: dict[str, Any] = {
-            "github_status": status,
-            "updated_at": now,
+        fields: dict[str, Any] = {"github_status": status, "updated_at": now}
+        if account is not None:
+            fields["account_login"] = account.login
+        # Written only on a real change, so a duplicate or late event can't
+        # move the cut-off time (the reconciler's grace runs from it), nor
+        # push a deleted row's expiry out.
+        transition: dict[str, Any] = {
+            "github_status_at": now,
             # Only an uninstalled installation's row expires.
             "expire_at": now + DELETED_RETENTION
             if status == "deleted"
@@ -240,13 +261,18 @@ class FirestoreRegistry:
         doc = self._doc(installation_id)
         try:
             async with asyncio.timeout(CALL_TIMEOUT_SECONDS):
-                if account is None:
+                snapshot = await doc.get()
+                if snapshot.exists:
+                    current = (snapshot.to_dict() or {}).get("github_status")
+                    changed = (current or "active") != status
                     try:
-                        await doc.update(fields)
+                        # Never touches `state`: only the owner decides that.
+                        await doc.update(fields | (transition if changed else {}))
                     except NotFound:
                         pass  # no row to update (deleted by TTL in between)
                     return
-                fields["account_login"] = account.login
+                if account is None:
+                    return  # nothing to update, and no account to create from
                 try:
                     await doc.create(
                         {
@@ -257,19 +283,40 @@ class FirestoreRegistry:
                             "created_at": now,
                             **{
                                 k: v
-                                for k, v in fields.items()
+                                for k, v in (fields | transition).items()
                                 if v is not firestore.DELETE_FIELD
                             },
                         }
                     )
                 except AlreadyExists:
-                    # Never touches `state`: only the owner decides that.
-                    await doc.set(fields, merge=True)
+                    # Another event created it in between: refresh the status
+                    # without claiming a transition, but keep its expiry in
+                    # step with it (only an uninstalled row expires).
+                    await doc.set(
+                        fields | {"expire_at": transition["expire_at"]}, merge=True
+                    )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Registry write failed",
                 extra={
                     "operation": f"github_status:{status}",
+                    "installation_id": installation_id,
+                    "error_class": type(exc).__name__,
+                },
+            )
+
+    async def mark_records_purged(self, installation_id: int) -> None:
+        try:
+            async with asyncio.timeout(CALL_TIMEOUT_SECONDS):
+                await self._doc(installation_id).update(
+                    {"records_purged_at": datetime.now(UTC)}
+                )
+        except Exception as exc:  # noqa: BLE001
+            # Harmless: the next run purges nothing and tries again.
+            logger.warning(
+                "Registry write failed",
+                extra={
+                    "operation": "records_purged",
                     "installation_id": installation_id,
                     "error_class": type(exc).__name__,
                 },
