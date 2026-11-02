@@ -18,8 +18,9 @@ resource "google_compute_firewall" "deny_internal_egress" {
     protocol = "all"
   }
 
-  # With the VM name: internal IPs are reused. Tenants drive the volume;
-  # sampling comes before any VM runs here (ADR-020 step 2).
+  # With the VM name: internal IPs are reused. Kept whole, not sampled: it's
+  # billed as generated anyway. Tenants drive the volume; logging.tf counts it
+  # per VM and alerts.
   log_config {
     metadata = "INCLUDE_ALL_METADATA"
   }

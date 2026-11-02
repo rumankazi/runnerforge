@@ -1,0 +1,99 @@
+---
+title: Pool log volume
+description: Runbook for the pool log alerts, when a tenant VM writes NAT, firewall, DNS or serial logs fast enough to cost real money.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Symptom
+
+Email from "RunnerForge pool alerts" (the pool project's own channel), severity WARNING, with one of:
+
+| Alert | Fires when |
+|---|---|
+| **Pool VM internal-deny log > 5/s (5m)** | one VM's connections to internal ranges are denied more than 5 times a second for 5 minutes |
+| **Pool VM NAT log > 50/s (10m)** | one VM's NAT log entries pass 50 a second for 10 minutes |
+| **Pool VM DNS queries > 100/s (10m)** | one VM sends more than 100 DNS queries a second for 10 minutes |
+| **Pool VM serial log > 50/s (10m)** | one VM writes more than 50 serial-port log lines a second for 10 minutes |
+| **Pool log ingestion > 100 KB/s (30m)** | the pool project stores more than 100 KB of logs a second for 30 minutes |
+
+The thresholds are first guesses, to be tuned from the step-6 isolation probe
+([ADR-020](/docs/design/decisions#hosted-isolation-a-pool-project-for-tenant-vms)).
+
+## Impact
+
+Tenants control how much these logs write. NAT and firewall logs are billed as they are generated, about $0.25/GiB,
+whether or not Logging stores them, and storing them costs about $0.25/GiB more from the first byte (no free tier).
+DNS and serial logs cost about $0.50/GiB stored, after the project's free 50 GiB a month. At the
+pool's caps the worst case is a few hundred dollars a day. Left running, it could trip the pool's budget and stop
+every tenant's runners.
+
+The per-VM alerts usually mean a job is scanning internal ranges, flooding connections or DNS, or printing to the
+serial console. The ingestion alert can also mean many ordinary jobs at once.
+
+<Callout type="warn">
+Until the step-7 per-VM kill and the step-8 spend breaker exist, only the owner's installation runs in the pool. A
+pool alert before then comes from one of your own jobs.
+</Callout>
+
+## Diagnose
+
+All commands are read-only.
+
+**1. Find the VM.** The per-VM alerts group by VM, and the incident names it (`vm_name`, or `instance_id` for
+serial). Or count recent entries by VM:
+
+```bash
+gcloud logging read 'resource.type="gce_subnetwork" AND LOG_ID("compute.googleapis.com/firewall") AND jsonPayload.disposition="DENIED"' --project=runnerforge-pool --freshness=15m --limit=500 --format='value(jsonPayload.instance.vm_name)' | sort | uniq -c | sort -rn | head
+```
+
+For NAT, use `resource.type="nat_gateway" AND LOG_ID("compute.googleapis.com/nat_flows")` and
+`jsonPayload.endpoint.vm_name`. For DNS, use `resource.type="dns_query"` and `jsonPayload.vmInstanceName`: only 1%
+of DNS entries are stored, so counts are a sample.
+
+**2. Find the installation and job.** The VM's labels name them:
+
+```bash
+gcloud compute instances describe <vm-name> --zone=europe-west4-a --project=runnerforge-pool --format='yaml(labels)'
+```
+
+## Mitigate
+
+These change production; run them yourself.
+
+**1. Stop the job.** Delete the VM, and if the installation isn't yours, suspend it (see
+[Tenants](/docs/guides/runbooks/tenants)):
+
+```bash
+gcloud compute instances delete <vm-name> --zone=europe-west4-a --project=runnerforge-pool --quiet
+```
+
+**2. If the volume is pool-wide or keeps coming back, stop generating the logs.** Each takes effect at once for every
+VM:
+
+```bash
+gcloud compute firewall-rules update pool-deny-internal-egress --no-enable-logging --project=runnerforge-pool
+```
+
+```bash
+gcloud compute routers nats update runnerforge-pool-nat --router=runnerforge-pool-router --region=europe-west4 --no-enable-logging --project=runnerforge-pool
+```
+
+```bash
+gcloud dns policies update runnerforge-pool-query-logging --no-enable-logging --project=runnerforge-pool
+```
+
+Without these logs, an abuse report against a NAT IP can no longer be traced to a VM, so turn them back on as soon as
+the source is gone. The next pool apply restores all three (the conftest policies block committing them off); until
+then, drift detection reports them.
+
+## Escalate
+
+If the logs keep coming after the VM is gone, check for VMs nobody expects:
+
+```bash
+gcloud compute instances list --project=runnerforge-pool --format='table(name,zone.basename(),status,creationTimestamp,labels)'
+```
+
+A pool VM the orchestrator didn't create means someone else can create VMs in the pool: treat it as an incident and
+check the pool's IAM policy and audit logs.

@@ -23,7 +23,8 @@
 #     E2_CPUS   = 24    (binding for E2 family — why we don't default to e2)
 #     N2_CPUS   = 200   (50× n2-standard-4 — gates both on-demand AND spot
 #                        for n2 family)
-#     CPUS      = 200   (N1-only in modern regions; doesn't gate E2/N2)
+#     CPUS      = 200   (N1 and E2 share it; doesn't gate N2, which has its
+#                        own pool: cloud.google.com/compute/resource-usage)
 #     N2D_CPUS  = 16    (tiny)
 #     C2_CPUS   = 8     (tiny)
 #
