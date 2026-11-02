@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.26.0...orchestrator-v0.26.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **deps:** lock file maintenance ([#359](https://github.com/rumankazi/runnerforge/issues/359)) ([b499706](https://github.com/rumankazi/runnerforge/commit/b49970632a5283e7557405d4a994fc75abf49877))
+
 ## [0.26.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.25.0...orchestrator-v0.26.0) (2026-11-01)
 
 
