@@ -23,8 +23,8 @@ The code is the source of truth. If an ADR here disagrees with `apps/orchestrato
 | [012](#opentelemetry-traces-exported-to-cloud-trace) | OpenTelemetry traces to Cloud Trace | accepted |
 | [013](#runner-image-pinned-at-startup-with-deprecate-then-delete-retention) | Runner image pinned at startup, deprecate-then-delete retention | accepted |
 | [014](#gce-enforced-runtime-cap-with-delete) | GCE-enforced runtime cap with DELETE | accepted |
-| [015](#installation-allow-list-as-a-stop-gap-admission-control) | Installation allow-list as stop-gap admission control | accepted |
-| [016](#multi-tenancy-scope-installation-as-tenant) | Multi-tenancy scope: installation = tenant | accepted |
+| [015](#installation-allow-list-as-a-stop-gap-admission-control) | Installation allow-list as stop-gap admission control | accepted, revised |
+| [016](#multi-tenancy-scope-installation-as-tenant) | Multi-tenancy scope: installation = tenant | accepted, revised |
 | [017](#docs-site-static-export-on-cloudflare-workers) | Docs site: static export on Cloudflare Workers | accepted |
 | [018](#per-job-state-in-firestore-behind-a-jobstore-protocol) | Per-job state in Firestore behind a `JobStore` protocol | accepted |
 | [019](#tenant-registry-install-to-register-admin-approval-per-installation-limits) | Tenant registry: install to register, admin approval, per-installation limits | accepted |
@@ -224,7 +224,7 @@ Structured JSON logs only (`logger.py`). Every metric is a log-based metric. All
 | `Webhook event received` | `webhook_event_count` |
 | `Sweep completed` | `sweep_checked_count`, `sweep_deleted_count`, `sweep_error_count` |
 
-The full surface (24 log-based metrics, 2 SLOs, 9 alert policies, the dashboard) is Terraform-managed in `infra/terraform/observability_*.tf`.
+The full surface (25 log-based metrics, 2 SLOs, 10 alert policies, the dashboard) is Terraform-managed in `infra/terraform/observability_*.tf`.
 
 ### Consequences
 
@@ -300,11 +300,11 @@ CI workflows need to act on GCP: push images to Artifact Registry, deploy Cloud 
 Scale-to-zero with skip-fast. The `/webhook` handler in `main.py` runs, in order:
 
 1. HMAC signature check (401 on failure).
-2. Dispatch on the `X-GitHub-Event` header: anything other than `workflow_job` gets 200 and is ignored.
+2. Dispatch on the `X-GitHub-Event` header: `installation` events update the tenant registry ([ADR-019](#tenant-registry-install-to-register-admin-approval-per-installation-limits)); anything else other than `workflow_job` gets 200 and is ignored.
 3. JSON and Pydantic parse.
 4. Label check: return 200 unless `runs-on` contains `runnerforge` (case-insensitive).
-5. Admission check for `queued` events ([ADR-015](#installation-allow-list-as-a-stop-gap-admission-control)).
-6. Log `Webhook event received`, then dispatch to the `queued` / `in_progress` / `completed` handler.
+5. In allowlist mode, the allow-list check for `queued` events ([ADR-015](#installation-allow-list-as-a-stop-gap-admission-control)).
+6. Log `Webhook event received`. In registry mode, which production runs, admission ([ADR-019](#tenant-registry-install-to-register-admin-approval-per-installation-limits)) comes after this line. Then dispatch to the `queued` / `in_progress` / `completed` handler.
 
 ### Consequences
 
@@ -537,6 +537,8 @@ A runner VM that never gets its `completed` webhook (lost delivery, a stuck job,
 
 <Callout type="info" title="Revisions">
   **2026-10-30**: [ADR-019](#tenant-registry-install-to-register-admin-approval-per-installation-limits) replaces the allow-list with a tenant registry. `ALLOWED_INSTALLATION_IDS` stays, holding installations that are always admitted, unlimited, without a registry read (the owner's), so they keep working when the registry can't be read.
+
+  **2026-11-02**: production admits by the tenant registry (`ADMISSION=registry`, ADR-019 step 3c). In registry mode the list means "always admitted, unlimited, no registry read" and holds only the owner's installation. Every other installation needs an approved registry row, and approving one is `runnerforge-admin approve`, with no Terraform change or release. An empty list then bypasses nobody, while approved tenants are still admitted. `Webhook event received` is logged before admission in registry mode, so each rejection's outcome line counts as a decision in the lost-webhook ratio. Allowlist mode keeps the decision below and stays the default for a self-hosted install without a registry; there an empty list still admits nobody.
 </Callout>
 
 ### Context
@@ -567,6 +569,10 @@ Any GitHub account that installs the App gets its `workflow_job` events sent to 
 <Record type="adr" id="016" status="accepted" date="2026-10-27" />
 
 ## Multi-tenancy scope: installation as tenant
+
+<Callout type="info" title="Revisions">
+  **2026-11-02**: production admits by the tenant registry ([ADR-019](#tenant-registry-install-to-register-admin-approval-per-installation-limits)), not the allow-list. Manual approval is `runnerforge-admin approve`, and per-installation limits exist: an approved tenant gets the beta defaults (2 concurrent VMs, `medium` at most, Spot only, 60-minute jobs). One tenant's burst is bounded by its limits, not only by the project quota, though soft limits can overshoot by a matrix's size. A new installation gets no VMs until the owner approves it. The App is still private, so the free beta isn't open yet.
+</Callout>
 
 ### Context
 
@@ -828,6 +834,12 @@ Readers must tolerate missing fields and check `schema_version`, because a docum
   - It writes **nothing on job records**. A code review found that a verdict there would call finished jobs stuck: a runner gone from GitHub usually ran its job even when the webhooks that would say so were lost. The batch asks GitHub first, as for any record.
   - An installation the owner suspended is checked like any other (its idle runners could still take new jobs); one GitHub suspended isn't, since GitHub refuses its calls. With the allow-list unset in allowlist mode, every installation is checked.
   - Owner decisions: all installations; keep an online idle runner while a waiting job could use it (no state across runs); deregister first; VMs of installations GitHub suspended or deleted stay in step 4.
+
+  **2026-11-02**: rollout step **3c**. Production admits by the tenant registry (`ADMISSION=registry`). A Terraform variable, `admission`, sets the env in `cloud_run.tf`; it accepts only `allowlist` or `registry` and defaults to `registry`. Like the allow-list, it takes effect with the next orchestrator deploy, with no code change. Changes from the plan above:
+  - **The owner stays allow-listed** for the switch, so its jobs read no registry row. It comes off the allow-list only for a production limits test of two runs, under the limits on its row: run A shows the matrix overshoot described under Consequences, and run B, started while A runs, is deferred and then started by the reconciler. The owner's installation is then restored to the allow-list.
+  - **The alert fires on any** `registry_unavailable` rejection in 15 minutes, not at least 3: each is a job lost for good, with no record and no redelivery, so it must be re-run by hand ([runbook](/docs/guides/runbooks/registry-unavailable)). Allow-listed installations never read the registry, so they can't trigger it.
+  - It reads a new metric, `queued_rejection_count`: `Queued webhook outcome` lines with outcome `rejected` or `deferred`, labelled by `outcome` and `reason`. It is separate because adding a label to `queued_outcome_count` would replace that metric. The Orchestrator Health dashboard gains an Admission section that charts it by reason.
+  - **Rollback** never goes to a revision built with an empty allow-list: in allowlist mode that admits nobody.
 </Callout>
 
 ### Context
@@ -922,7 +934,7 @@ An owner `suspend` stops new VMs only; VMs already running end with their job, o
 | `max_runtime_minutes` | 60 (VM cap 1 h 15 min) |
 | `literal_machine_types` | `false` |
 
-**What stays.** `ALLOWED_INSTALLATION_IDS` stays, holding only the owner's installation. An `ADMISSION` setting selects the mode: `allowlist` (the default, which keeps a self-hosted install without a registry working) or `registry`.
+**What stays.** `ALLOWED_INSTALLATION_IDS` stays, holding only the owner's installation. An `ADMISSION` setting selects the mode: `allowlist` (the default, which keeps a self-hosted install without a registry working) or `registry`. Production runs `registry`, set by the Terraform variable `admission`.
 
 ### Rollout
 
@@ -933,12 +945,12 @@ An owner `suspend` stops new VMs only; VMs already running end with their job, o
    - docs: the `trust.mdx` API table (`GET /app/installations`), and the lines in `security.mdx`, `webhook-flow.mdx` and `development/index.mdx` that say installation events are ignored.
 2. **Admin command:** `runnerforge-admin`. Approve the existing tenants with their limits. The owner's installation stays in `ALLOWED_INSTALLATION_IDS`.
 3. **Switch admission** to the registry once shadow mode has shown no surprise rejections:
-   - Terraform sets `ADMISSION=registry` (`cloud_run.tf`, a new variable) before the release that reads it, and rewords the `allowed_installation_ids` description;
+   - Terraform sets `ADMISSION=registry` (`cloud_run.tf`, the variable `admission`) after the releases that read it (3a, 3b), and rewords the `allowed_installation_ids` description; it takes effect with the next deploy;
    - the same release brings limits in `compute_client` and `handlers`, deferral and the decision kinds in `reconcile.py` (registration-token calls from the reconciler go in the `trust.mdx` table), the record and cross-check gate, and the new outcome values;
-   - an alert on `rejected` outcomes with reason `registry_unavailable`. `not_approved` is the normal outcome for every pending installation, so strangers' installs must not page; it alerts only for installations that were approved before;
+   - an alert on any `rejected` outcome with reason `registry_unavailable`. `not_registered` and `pending` are the normal outcomes for strangers' installs, so they must not page;
    - `handle_in_progress` reads readiness from the `runner_name` VM, and ADR-018 gets a revision note adding `rejected` and `deferred` decision kinds and their status rows ("Limit reached", "Waiting for a free runner"), above "Starting";
    - docs: `limits.mdx`, `trust.mdx`, `security.mdx`, `webhook-flow.mdx`, `getting-started.mdx`, and an ADR-016 revision note;
-   - rolling back below this release means admission by the allow-list only.
+   - rolling back below this release means admission by the allow-list only. Never roll back to a revision built with an empty allow-list, which admits nobody.
 4. **Cleanup** in the reconciler: VMs of suspended or deleted installations, and records after uninstall. Idle orphan VMs moved ahead of 3c (2026-11-01).
 5. **Dashboard onboarding** (4.5).
 

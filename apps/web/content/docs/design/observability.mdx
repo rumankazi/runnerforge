@@ -59,17 +59,24 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `POST /webhook` | INFO | `main.py` middleware | `httpRequest.status` | `webhook_request_count`, `webhook_rejection_count` |
 | `Webhook signature validation failed` | WARNING | `main.py` | `signature_prefix` (first 10 chars) | |
 | `Ignoring GitHub event` | INFO | `main.py` | `github_event` (non-`workflow_job` events) | |
-| `Installation not allowed` | WARNING | `main.py` | context `installation_id`, `repo`, `sender` | |
+| `Installation not allowed` | WARNING | `main.py` | context `installation_id`, `repo`, `sender` (`ADMISSION=allowlist` only, logged before `Webhook event received`) | |
 | `Job store write failed` | WARNING | `job_store.py` | `operation`, `job_key`, `error_class` | `job_store_write_failure_count` (all but the background `record_fact:vm` and `record_fact:preempted`) |
 | `Installation event` | INFO | `admission.py` | `action`, `installation_id` | |
 | `Ignoring installation action` | INFO | `admission.py` | `action` (e.g. `new_permissions_accepted`) | |
-| `Admission shadow decision` | INFO | `admission.py` | `would_admit`, `reason` (`allowlisted`, `approved`, `not_registered`, `pending`, `suspended`, `github_inactive`, `registry_unavailable`), `allowlist_admits`, `agrees` | |
-| `Registry read failed`, `Registry write failed` | WARNING | `registry.py` | `operation`, `installation_id`, `error_class` | |
+| `Admission shadow decision` | INFO | `admission.py` | `would_admit`, `reason` (`allowlisted`, `approved`, `not_registered`, `pending`, `suspended`, `github_inactive`, `registry_unavailable`), `allowlist_admits`, `agrees` (`ADMISSION=allowlist` only, with a registry) | |
+| `Registry limits invalid, using the beta defaults` | WARNING | `admission.py` | `installation_id` | |
+| `Registry read failed`, `Registry write failed` | WARNING | `registry.py` | `operation`, `installation_id`, `error_class`. A failed `get` with no cached row rejects the job as `registry_unavailable` | |
 | `Registry backfill skipped` | WARNING | `admission.py` | `reason` (`list_failed`, `read_failed`), `error_class` (`list_failed`) | |
 | `Registry backfill could not confirm installation` | WARNING | `admission.py` | `installation_id`, `error_class` | |
 | `Job store read failed` | WARNING | `job_store.py` | `operation` (`list_due`, `list_open`), `error_class` | |
 | `Webhook event received` | INFO | `main.py` | `event_type` (`queued`, `in_progress`, `completed`) | `webhook_event_count` |
-| `Queued webhook outcome` | INFO | `handlers.py` | `outcome` (`vm_submitted`, `already_exists`, `policy_rejected`, `already_completed`) | `queued_outcome_count` |
+| `Admission decision` | INFO | `main.py` | `admitted`, `reason` (as in the shadow decision), `limited` (`ADMISSION=registry`, `queued` only, after `Webhook event received`) | |
+| `Queued webhook outcome` | INFO | `handlers.py` | `outcome` (`vm_submitted`, `already_exists`, `policy_rejected`, `already_completed`, and in registry mode `rejected`, `deferred`), `reason` (`rejected`: the admission reason or `limit_size`; `deferred`: `limit_concurrency`; `deferral_unrecorded` on `vm_submitted` or `already_exists`) | `queued_outcome_count`, `queued_rejection_count` (`rejected`, `deferred`) |
+| `Installation not admitted` | WARNING | `handlers.py` | `reason` (`not_registered`, `pending`, `suspended`, `github_inactive`, `registry_unavailable`) | |
+| `Limit rejected` | WARNING | `handlers.py` | `reason` (`limit_size`), `machine_type`, `max_size` | |
+| `Job deferred` | INFO | `handlers.py` | `active_vms` (the reconciler's capacity pass starts it later) | |
+| `Concurrency check failed, admitting` | WARNING | `handlers.py` | `error_class` | |
+| `Deferral not recorded, admitting` | WARNING | `handlers.py` | `active_vms` | |
 | `Machine policy rejected` | WARNING | `handlers.py` | `reason`, `offending_tokens` | `machine_policy_reject_count` |
 | `Submitted VM creation` | INFO | `compute_client.py` | `vm_name`, `operation_id`, `machine_type`, `spot`, `image_version` | `vm_creation_count` |
 | `VM already exists` | WARNING | `compute_client.py` | `instance_name` | |
@@ -98,8 +105,12 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Reconcile skipped record without identity` | WARNING | `reconcile.py` | `job_key` | |
 
 Startup lines worth knowing: `Resolved runner image` (`image_name`, `image_version`), `Loaded machine types cache`
-(`zone`, `count`), `Clients initialized`, and the admission mode: `Installation allow-list active`
-(`allowed_installation_count`) or the WARNING `ALLOWED_INSTALLATION_IDS unset: every installation can create VMs`.
+(`zone`, `count`), `Clients initialized`, and the admission mode. Production admits by the tenant registry
+(`ADMISSION=registry`) and logs `Admission by tenant registry` (`allowed_installation_count`), plus the WARNING
+`ADMISSION=registry without a registry: only allow-listed installations can create VMs` when the registry is
+disabled. Allowlist mode, the default for a self-hosted install without a registry, logs `Installation allow-list
+active` (`allowed_installation_count`) or the WARNING `ALLOWED_INSTALLATION_IDS unset: every installation can create
+VMs`.
 Degraded-mode warnings: `Runner image resolve failed — VMs will boot from family alias` and
 `Failed to load machine types cache - validation in degraded mode`.
 
@@ -150,7 +161,7 @@ If the VM is missing or its labels are malformed, `webhook.handle_in_progress` s
 
 ## Log-based metrics
 
-All 23 are in `observability_metrics.tf`. All but one scope to `resource.type="cloud_run_revision"` and
+All 25 are in `observability_metrics.tf`. All but one scope to `resource.type="cloud_run_revision"` and
 `service_name="runnerforge-orchestrator"`.
 
 | Metric | Kind | Source | Labels |
@@ -159,6 +170,7 @@ All 23 are in `observability_metrics.tf`. All but one scope to `resource.type="c
 | `webhook_rejection_count` | counter | `POST /webhook` with status 400–499 | `response_status_code` |
 | `webhook_event_count` | counter | `Webhook event received` | `event_type` |
 | `queued_outcome_count` | counter | `Queued webhook outcome` | `outcome` |
+| `queued_rejection_count` | counter | `Queued webhook outcome` with `outcome` `rejected` or `deferred` | `outcome`, `reason` |
 | `vm_creation_count` | counter | `Submitted VM creation` | `machine_type`, `image_version`, `spot` |
 | `vm_creation_outcome_count` | counter | `VM creation outcome` | `outcome`, `machine_type`, `image_version`, `error_code`, `spot` |
 | `vm_deletion_count` | counter | `Submitted VM deletion` | `reason` |
@@ -230,8 +242,8 @@ samples in that range can't be split exactly at 300 s.
 
 ## Alert policies
 
-Nine policies in `observability_alerts.tf`, all sent to one email notification channel, "RunnerForge Alerts"
-(`observability_channels.tf`). Only the policy-rejection and job-store alerts have a `documentation` block linking their runbook; for the
+Ten policies in `observability_alerts.tf`, all sent to one email notification channel, "RunnerForge Alerts"
+(`observability_channels.tf`). Only the policy-rejection, job-store and registry-unavailable alerts have a `documentation` block linking their runbook; for the
 others, use the runbook column.
 
 | Policy (display name) | Fires when | Severity | Runbook |
@@ -239,9 +251,10 @@ others, use the runbook column.
 | Availability SLO fast burn (10x over 1h) | Burn rate of the availability SLO over a 1 h lookback > 10. Auto-closes after 30 min. | CRITICAL | [Availability SLO](/docs/guides/runbooks/webhook-availability) |
 | Time-to-Register SLO fast burn (10x over 1h) | Burn rate of the time-to-register SLO over a 1 h lookback > 10. Auto-closes after 30 min. | CRITICAL | [Time-to-Register SLO](/docs/guides/runbooks/time-to-register) |
 | VM creation failure ratio > 5% (5m) | `failure` + `timeout` outcomes over all outcomes > 0.05, 5-minute alignment, held 5 min | ERROR | [VM creation failures](/docs/guides/runbooks/vm-creation-failures) |
-| Lost-webhook ratio &lt; 0.9 (5m) | `queued_outcome_count` over queued `webhook_event_count` below 0.9, 5-minute alignment, held 5 min. Inactive when there's no data. Label-policy rejections and duplicates are outcomes, so they don't lower it. | ERROR | [Lost webhooks](/docs/guides/runbooks/lost-webhooks) |
+| Lost-webhook ratio &lt; 0.9 (5m) | `queued_outcome_count` over queued `webhook_event_count` below 0.9, 5-minute alignment, held 5 min. Inactive when there's no data. Label-policy rejections, duplicates and admission rejections and deferrals are outcomes, so they don't lower it. | ERROR | [Lost webhooks](/docs/guides/runbooks/lost-webhooks) |
 | Every queued job rejected by label policy (1h) | PromQL: ≥ 3 `machine_policy_reject_count` in 1 h `unless` any `vm_creation_count` in that hour. Evaluated every 60 s. | WARNING | [Policy rejection storm](/docs/guides/runbooks/policy-rejections) |
 | Job store write failures >= 3 (15m) | More than 2 `job_store_write_failure_count` in a 15-minute window: webhook writes, plus the reconciler's `patch` and `completed`/`in_progress` facts. `record_fact:vm` and `record_fact:preempted` are excluded from every caller (the reconciler's stuck verdicts included; it retries those), and so are reconciler reads. | WARNING | [Job store write failures](/docs/guides/runbooks/job-store-writes) |
+| Queued job rejected: registry unavailable (15m) | Any `queued_rejection_count` with `outcome` `rejected` and `reason` `registry_unavailable` in a 15-minute window. Each is a job lost for good: no record, no redelivery, re-run by hand. Allow-listed installations never read the registry. Auto-closes after 30 min. | WARNING | [Registry unavailable](/docs/guides/runbooks/registry-unavailable) |
 | Webhook rejections > 5/min (10m) | More than 50 `webhook_rejection_count` in a 10-minute window, held 10 min | WARNING | [Webhook rejections](/docs/guides/runbooks/webhook-rejections) |
 | Cold-start latency p95 > 30s (5m) | Cloud Run `container/startup_latencies` p95 > 30 000 ms, 5-minute alignment, held 5 min. Inactive when there's no data. | WARNING | [Cold-start latency](/docs/guides/runbooks/cold-start-latency) |
 | Cloud Run instance count > 40 (80% of max=50) | Cloud Run `container/instance_count` max > 40, 1-minute alignment, held 10 min | WARNING | [Instance saturation](/docs/guides/runbooks/instance-saturation) |
@@ -268,5 +281,6 @@ back to the JSON, then commit. Sections:
 | Spot & Policy | VM creation rate by spot, preemptions (audit log vs job-confirmed), machine policy rejects by reason |
 | Webhook delivery latency | End-to-end time-to-runner p50/p95, GitHub delivery lag p50/p95 |
 | Reconciler | Runs per hour (expect 12), stuck / errors / started / orphans deleted per run, job store write failures by operation, queued webhook outcomes by outcome |
+| Admission | Queued rejections and deferrals by `outcome` and `reason` |
 
 For how the charts' aligners and reducers work, see [Cloud Monitoring charts](/docs/guides/cloud-monitoring-charts).

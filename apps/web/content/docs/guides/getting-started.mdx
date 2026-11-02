@@ -22,8 +22,9 @@ What the beta will be:
 
 - **Free.** Runners run on RunnerForge's own Google Cloud project. There is no billing and no
   "bring your own GCP project" mode.
-- **Approved manually.** Only installations on an allow-list get VMs. An installation is one GitHub
-  personal account or one organization. Both kinds are supported.
+- **Approved manually.** Only installations the maintainer approves get VMs, each within its own
+  [limits](/docs/guides/limits#per-installation-limits). An installation is one GitHub personal
+  account or one organization. Both kinds are supported.
 - **Best effort.** There is no SLA. Read [Limits](/docs/guides/limits) before you rely on it.
 
 ## How the beta works
@@ -38,8 +39,8 @@ published here when the beta opens. Pick **Only select repositories** and choose
 you want runners for. [Trust & threat model](/docs/design/trust) explains what the App can and
 cannot do.
 
-Installing alone does not start anything. Until your installation is approved, jobs that ask for
-`runnerforge` stay queued.
+Installing registers your installation with RunnerForge as `pending`, but doesn't start anything.
+Until your installation is approved, jobs that ask for `runnerforge` stay queued.
 
 </Step>
 <Step>
@@ -67,10 +68,9 @@ public, so don't put anything secret in it.
 
 ### Wait for approval
 
-The maintainer reviews the request and adds your installation ID to the allow-list. The list is
-part of the deployed configuration (`allowed_installation_ids` in `infra/terraform/variables.tf`),
-and a change to it only takes effect with the next orchestrator release, so approval is not
-instant. You'll get a reply on the issue.
+The maintainer reviews the request and approves your installation in the tenant registry, with the
+beta's default [limits](/docs/guides/limits#per-installation-limits). Approval takes effect within
+about a minute, with no deploy. You'll get a reply on the issue.
 
 </Step>
 <Step>
@@ -92,7 +92,7 @@ jobs:
 ```
 
 `small` picks the VM size. Leave it out to get the default (`medium`). Add `spot` to get a cheaper
-VM that Google Cloud can reclaim mid-job. [Runner labels](/docs/guides/runner-labels) lists every
+VM that Google Cloud can reclaim mid-job; under the beta's default limits every VM is Spot anyway. [Runner labels](/docs/guides/runner-labels) lists every
 label RunnerForge understands.
 
 </Step>
@@ -101,9 +101,10 @@ label RunnerForge understands.
 ## What happens to a job
 
 1. GitHub sends RunnerForge a `workflow_job` webhook when the job is queued.
-2. RunnerForge checks that your installation is approved and that it understands every label in
-   `runs-on`. If either check fails, it does nothing and the job stays queued (see
-   [Runner labels](/docs/guides/runner-labels#when-a-job-is-rejected)).
+2. RunnerForge checks that your installation is approved, that it understands every label in
+   `runs-on`, and that the job fits your limits. If a check fails, it does nothing and the job stays
+   queued (see [Runner labels](/docs/guides/runner-labels#when-a-job-is-rejected)). If your
+   installation already has as many VMs as its limit allows, the job waits and starts once one frees.
 3. It creates a VM from the [runner image](/docs/guides/runner-image). The VM registers as an
    ephemeral runner on your repository and takes exactly one job.
 4. When GitHub reports the job as completed, RunnerForge deletes the VM. A VM is also deleted after

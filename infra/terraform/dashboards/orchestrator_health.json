@@ -1146,6 +1146,58 @@
         "width": 24,
         "xPos": 24,
         "yPos": 204
+      },
+      {
+        "height": 4,
+        "widget": {
+          "sectionHeader": {
+            "dividerBelow": true,
+            "subtitle": "Queued jobs the tenant registry rejected or deferred (ADR-019)"
+          },
+          "title": "Admission"
+        },
+        "width": 48,
+        "yPos": 220
+      },
+      {
+        "height": 16,
+        "widget": {
+          "title": "Queued rejections and deferrals by reason",
+          "xyChart": {
+            "chartOptions": {
+              "mode": "COLOR"
+            },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "300s",
+                "plotType": "STACKED_BAR",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "crossSeriesReducer": "REDUCE_SUM",
+                      "perSeriesAligner": "ALIGN_DELTA",
+                      "groupByFields": [
+                        "metric.label.\"outcome\"",
+                        "metric.label.\"reason\""
+                      ]
+                    },
+                    "filter": "metric.type=\"logging.googleapis.com/user/queued_rejection_count\" resource.type=\"cloud_run_revision\""
+                  }
+                },
+                "legendTemplate": "${metric.labels.outcome}: ${metric.labels.reason}"
+              }
+            ],
+            "yAxis": {
+              "label": "webhooks",
+              "scale": "LINEAR"
+            }
+          }
+        },
+        "width": 48,
+        "xPos": 0,
+        "yPos": 224
       }
     ]
   }

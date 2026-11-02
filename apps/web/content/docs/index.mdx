@@ -12,8 +12,9 @@ FastAPI orchestrator on Cloud Run. The orchestrator boots a VM from a Packer-bui
 that asks for `runnerforge`, and deletes it when the job completes. Terraform owns everything else.
 
 <Callout type="info" title="Who can use it today">
-  The GitHub App is private. Only installations on the orchestrator's allow-list get VMs. A free hosted
-  beta with manual approval is planned; see [Status](#status).
+  The GitHub App is private, so only the owner can install it. An installation gets VMs only once it's
+  approved in the tenant registry, within its own limits; the owner's installation is allow-listed and unlimited. A free hosted beta is planned; see
+  [Status](#status).
 </Callout>
 
 <Cards>
@@ -62,7 +63,8 @@ that asks for `runnerforge`, and deletes it when the job completes. Terraform ow
   optional `spot`. See [label parsing](/docs/design/webhook-flow#label-parsing).
 - The VM is deleted when the job completes. If that delete is missed, the reconciler's orphan cleanup
   (every 5 minutes), the daily sweep or GCE's own runtime cap removes it.
-- Only allow-listed GitHub App installations can create VMs. An installation is one GitHub user or
+- Only GitHub App installations approved in the tenant registry (and the owner's, allow-listed and unlimited) can
+  create VMs, each within its own [limits](/docs/guides/limits#per-installation-limits). An installation is one GitHub user or
   organization, and it is the unit of tenancy.
 - The orchestrator sees job events and mints runner registration tokens. It never reads repository
   contents; your job's code runs only on the job's own VM. See [Trust & threat model](/docs/design/trust).
@@ -91,7 +93,7 @@ These are the SLOs and alerts codified in Terraform, not aspirations.
 | --- | --- | --- |
 | Availability | 99.5% of requests are non-5xx, per calendar month. 4xx (bad signatures, scanners) counts as good. | `observability_slos.tf` → `availability` |
 | Time to register | 99.5% of 5-minute windows in a calendar month have at least 99.5% of runners picking up their job within 300 s of RunnerForge receiving the queued webhook (`runner_readiness_seconds`). | `observability_slos.tf` → `time-to-register` |
-| No lost work | Alert when queued webhooks that reached a decision (`queued_outcome_count`: VM submitted, duplicate, or label rejection) divided by accepted queued webhooks (`webhook_event_count`, `event_type=queued`) stays below 0.9 for 5 minutes. | `observability_alerts.tf` → `lost_webhook_ratio` |
+| No lost work | Alert when queued webhooks that reached a decision (`queued_outcome_count`: VM submitted, duplicate, label or admission rejection, or deferral) divided by accepted queued webhooks (`webhook_event_count`, `event_type=queued`) stays below 0.9 for 5 minutes. | `observability_alerts.tf` → `lost_webhook_ratio` |
 | No orphaned VMs | No VM runs longer than 6 h 15 min. GCE deletes it, and the sweep backs that up. | `compute_client.MAX_VM_RUN_DURATION` |
 
 ## Status
@@ -102,14 +104,15 @@ These are the SLOs and alerts codified in Terraform, not aspirations.
 | 2 | CI/CD with canary deploys, runner-image CD, dedicated service accounts, OpenTelemetry, dashboards and SLOs | Done |
 | 3.1–3.6 | Terraform apply in CI with OPA policies and drift detection, shared clients, Cloud NAT, observability as code, Spot VMs and label-based sizing, image retention, scoped image IAM role | Done |
 | 4.0 | Safety fixes before outside tenants: ownership check before delete, exact-repo sweep, GitHub default labels, event-type dispatch, VM runtime cap, installation allow-list (orchestrator 0.18.0) | Done |
+| 4.1 | Docs and website refresh (runnerforge.com) | Done |
+| — | Job store: a Firestore record per job and a 5-minute reconciler (ADR-018) | Done |
+| 4.2 | Tenant registry: approval and per-installation limits, deferred jobs started as slots free, orphan VM cleanup (ADR-019, orchestrator 0.26.0) | Done, except cleanup after a suspend or uninstall |
 
 **Next (planned, no dates):**
 
-1. Docs and website refresh.
-2. Tenant registry: a record per installation that holds its approval and its limits.
-3. Hosted isolation: stronger separation between different tenants' runner VMs.
-4. Usage tracking per installation, to enforce those limits.
-5. User-facing dashboard.
-6. Self-hosting: run the whole backend in your own GCP project.
+1. Hosted isolation: stronger separation between different tenants' runner VMs.
+2. Usage tracking per installation.
+3. User-facing dashboard.
+4. Self-hosting: run the whole backend in your own GCP project.
 
 **Deferred:** bring-your-own GCP project for the hosted service, and paid billing.
