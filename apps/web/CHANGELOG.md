@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.13.0](https://github.com/rumankazi/runnerforge/compare/web-v1.12.0...web-v1.13.0) (2026-11-01)
+
+
+### Features
+
+* **infra:** orphans-deleted metric on the Reconciler dashboard ([#358](https://github.com/rumankazi/runnerforge/issues/358)) ([7b22824](https://github.com/rumankazi/runnerforge/commit/7b228248842b46b2979766b852b557f3825df47f))
+* **orchestrator:** reconciler deletes orphan VMs ([#355](https://github.com/rumankazi/runnerforge/issues/355)) ([26f0fbe](https://github.com/rumankazi/runnerforge/commit/26f0fbe5943861d416faa9e9d602f4e31548bf3a))
+
 ## [1.12.0](https://github.com/rumankazi/runnerforge/compare/web-v1.11.0...web-v1.12.0) (2026-11-01)
 
 
