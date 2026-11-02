@@ -37,6 +37,8 @@ for cap in "${CAPS[@]}"; do
 		continue
 	fi
 
+	# Empty for a global quota. The ${dims[@]+...} form below keeps bash 3.2
+	# (macOS) from failing on an empty array under set -u.
 	dims=()
 	if [[ "$extra" != "-" ]]; then
 		dims=(--dimensions="region=${REGION}${extra:+,$extra}")
@@ -48,7 +50,7 @@ for cap in "${CAPS[@]}"; do
 		--preference-id="$id" \
 		--service=compute.googleapis.com \
 		--quota-id="$quota_id" \
-		"${dims[@]}" \
+		${dims[@]+"${dims[@]}"} \
 		--preferred-value=0 \
 		--allow-high-percentage-quota-decrease \
 		--justification="RunnerForge pool hard ceilings (ADR-020)." \
