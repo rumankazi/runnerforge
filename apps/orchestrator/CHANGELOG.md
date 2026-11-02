@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.26.1...orchestrator-v0.27.0) (2026-11-02)
+
+
+### Features
+
+* **orchestrator:** clean up after installations GitHub cuts off ([#370](https://github.com/rumankazi/runnerforge/issues/370)) ([225ac3b](https://github.com/rumankazi/runnerforge/commit/225ac3bb6ca30c9f244e493780a3401d8b5ca264))
+
 ## [0.26.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.26.0...orchestrator-v0.26.1) (2026-11-02)
 
 
