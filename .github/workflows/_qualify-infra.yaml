@@ -31,6 +31,9 @@ jobs:
       TFACTION_JOB_TYPE: terraform
       TFACTION_IS_APPLY: "false"
       TFACTION_WORKING_DIR: ${{ inputs.working_directory }}
+      # Wait for a running apply or plan instead of failing on its state lock
+      # (PR plans, plan previews, applies and drift checks share each lock).
+      TF_CLI_ARGS_plan: -lock-timeout=10m
     outputs:
       has_changes: ${{ steps.plan.outputs.changed }}
     steps:

@@ -25,7 +25,7 @@ Terraform's GCS backend acquires a state lock via a `.tflock` object before plan
 
 Cancellation is built into two workflows: `qualify.yaml` and `drift-detection.yaml` both set `cancel-in-progress: true`, so a new push to a PR (or a newer drift run) cancels a plan that may be holding the lock. `deploy-infra.yaml` does not cancel in-progress applies.
 
-Nothing in this repo sets a lock timeout (`tfaction-root.yaml` has none). A legitimate concurrent run looks exactly like a stale lock in the error, which is why the next step matters.
+Every plan and apply waits up to 10 minutes for the lock (`-lock-timeout=10m` through `TF_CLI_ARGS_plan` and `TF_CLI_ARGS_apply` in `_qualify-infra.yaml`, `drift-detection.yaml` and `deploy-infra.yaml`), so a run that overlaps another just waits. Seeing this error means the lock was held for more than 10 minutes. A legitimate long-running run looks exactly like a stale lock in the error, which is why the next step matters.
 
 ## First step — confirm it's actually stale
 
