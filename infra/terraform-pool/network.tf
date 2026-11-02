@@ -75,8 +75,9 @@ resource "google_compute_router_nat" "pool" {
   enable_endpoint_independent_mapping = false
   min_ports_per_vm                    = 8192
 
-  # Every translation and drop, for abuse tracing. Tenants drive the volume;
-  # sampling comes before any VM runs here (ADR-020 step 2).
+  # Translations and drops, for abuse tracing: best effort, since GCP caps NAT
+  # logging per vCPU. Kept whole, not sampled: it's billed as generated anyway.
+  # Tenants drive the volume; logging.tf counts it per VM and alerts.
   log_config {
     enable = true
     filter = "ALL"

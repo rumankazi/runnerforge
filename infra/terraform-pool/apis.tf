@@ -8,6 +8,7 @@ locals {
     "cloudquotas.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
+    "dns.googleapis.com",
   ]
 }
 

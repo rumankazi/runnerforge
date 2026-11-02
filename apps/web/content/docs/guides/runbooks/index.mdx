@@ -6,7 +6,7 @@ description: What to do when an alert fires or a Terraform pipeline gets stuck, 
 import { Card, Cards } from 'fumadocs-ui/components/card';
 
 Each alert runbook follows the same shape: Symptom, Impact, Diagnose (read-only commands), Mitigate (changes,
-marked as such), Escalate. Every alert email comes from the "RunnerForge Alerts" channel and carries the policy's
+marked as such), Escalate. Every alert email comes from the "RunnerForge Alerts" channel (the pool project's from "RunnerForge pool alerts") and carries the policy's
 display name; each runbook's Symptom section quotes it. For how the alerts are defined, see
 [Observability](/docs/design/observability#alert-policies).
 
@@ -47,6 +47,11 @@ display name; each runbook's Symptom section quotes it. For how the alerts are d
     title="Registry unavailable"
     description="WARNING. Queued jobs rejected because the tenant registry couldn't be read; each is a lost job."
     href="/docs/guides/runbooks/registry-unavailable"
+  />
+  <Card
+    title="Pool log volume"
+    description="WARNING. A tenant VM writing NAT, firewall, DNS or serial logs fast, billed as generated."
+    href="/docs/guides/runbooks/pool-log-volume"
   />
   <Card
     title="Webhook rejections"
