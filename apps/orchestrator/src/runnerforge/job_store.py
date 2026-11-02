@@ -131,6 +131,13 @@ class JobStore(Protocol):
         """Update fields of an existing record; never creates one."""
         ...
 
+    async def delete_by_installation(
+        self, installation_id: int, limit: int
+    ) -> int | None:
+        """Delete up to `limit` of one installation's records, open or not
+        (ADR-019: after an uninstall). The count deleted; None if it failed."""
+        ...
+
 
 def claimable(rec: dict[str, Any], expected_start: int) -> bool:
     """A record a reconciler start may take: not running or done, and not
@@ -223,6 +230,11 @@ class NoopJobStore:
     async def patch(self, key: str, fields: dict[str, Any]) -> None:
         return None
 
+    async def delete_by_installation(
+        self, installation_id: int, limit: int
+    ) -> int | None:
+        return 0
+
 
 class FirestoreJobStore:
     # Every call catches Exception on purpose: failing open covers bugs and
@@ -280,7 +292,21 @@ class FirestoreJobStore:
         try:
             # One bound for the whole write, however many calls it takes.
             async with asyncio.timeout(CALL_TIMEOUT_SECONDS):
-                if name == "completed" or reopen:
+                if not base:
+                    # Without base fields a write can't make a valid record
+                    # (no installation, no expiry), so it only updates one:
+                    # a record deleted after an uninstall stays deleted.
+                    if name == "completed" or reopen:
+                        data["open"] = name != "completed"
+                    try:
+                        await doc.update(data, retry=_RETRY)
+                    except NotFound:
+                        logger.info(
+                            "Job record gone, fact dropped",
+                            extra={"job_key": key, "fact": name},
+                        )
+                        return False
+                elif name == "completed" or reopen:
                     # A late in_progress after completed reopens the record;
                     # the reconciler closes it again.
                     data["open"] = name != "completed"
@@ -405,6 +431,32 @@ class FirestoreJobStore:
             pass
         except Exception as exc:  # noqa: BLE001
             _log_failure("patch", key, exc)
+
+    async def delete_by_installation(
+        self, installation_id: int, limit: int
+    ) -> int | None:
+        # Equality only (the automatic single-field index), and only the
+        # field it filters on: a delete needs no more of each record.
+        query = (
+            self._client.collection(JOBS_COLLECTION)
+            .where(filter=FieldFilter("installation_id", "==", installation_id))
+            .select(["installation_id"])
+            .limit(limit)
+        )
+        try:
+            async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
+                refs = [snap.reference async for snap in query.stream(retry=_RETRY)]
+                if refs:
+                    # One commit (at most 500 writes); deleting a missing
+                    # document succeeds, so a retry next run is harmless.
+                    batch = self._client.batch()
+                    for ref in refs:
+                        batch.delete(ref)
+                    await batch.commit()
+        except Exception as exc:  # noqa: BLE001
+            _log_failure("delete_by_installation", str(installation_id), exc)
+            return None
+        return len(refs)
 
     async def warm_up(self) -> None:
         """One bounded read so channel, TLS and token setup happen at startup."""

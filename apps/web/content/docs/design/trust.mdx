@@ -41,7 +41,7 @@ All of them are in [`github_client.py`](https://github.com/rumankazi/runnerforge
 | `GET /repos/{owner}/{repo}/actions/runners?name={vm_name}` | Daily sweep, only for a VM that is between 1 hour and 6h15m old; and every 5 minutes in the reconciler, for a VM over 15 minutes old (at most 10 a run) | Checks whether the runner on a still-running VM is busy, so an idle or finished VM can be deleted |
 | `DELETE /repos/{owner}/{repo}/actions/runners/{runner_id}` | Reconciler, only for a runner of ours that GitHub lists as idle, with no job of yours it could take, right before its VM is deleted | Removes the runner's registration, so GitHub can't hand it one of your jobs while its VM shuts down |
 | `GET /app/installations` | Reconciler, once an hour (as the App, with its JWT; paginated) | Lists every installation of the App, to keep the tenant registry current if an `installation` webhook was lost |
-| `GET /app/installations/{installation_id}` | Reconciler, once an hour, only for an installation missing from that list | Confirms it was really uninstalled before its row is marked so |
+| `GET /app/installations/{installation_id}` | Reconciler, once an hour, only for an installation missing from that list; and every 5 minutes for an installation whose row says it was suspended or uninstalled (at most 10 a run) | Confirms with GitHub that it was really uninstalled or suspended before acting on it |
 | `GET /repos/{owner}/{repo}/actions/jobs/{job_id}` | Reconciler, every 5 minutes, for job records that are open and due a check (at most 25 a run, with backoff up to 6 hours per job), and for jobs waiting for a free slot under your limits (at most 3 per free slot a run) | Reads the job's status, conclusion and runner, to fill in what the webhooks missed, and to check a waiting job still needs a runner before starting one |
 
 There are no other calls. In particular, the orchestrator never reads repository contents, pull requests, issues or workflow files through the API. Your installation settings show the exact permissions the App holds.
@@ -72,7 +72,7 @@ The database `runnerforge` is in `europe-west4`. It holds a record only for jobs
 
 - **Identity:** `installation_id`, `repository_id`, `repo` (`owner/name`), `run_id`, `job_id`, `run_attempt` and your job's labels.
 - **What happened:** the decision (VM submitted, duplicate, label rejection with its reason and the offending labels, or a rejection or deferral under your approval or limits with its reason), the VM creation outcome, the runner name, the job's conclusion, a preemption, or the step that failed and its error class. Each with a timestamp.
-- **Retention:** a TTL policy deletes each record after 90 days, usually within a day of expiry. Point-in-time recovery keeps 7 days of earlier versions.
+- **Retention:** a TTL policy deletes each record after 90 days, usually within a day of expiry. After you uninstall the App, the reconciler deletes all of your installation's records within a few runs (5 minutes apart) of your VMs being gone. Point-in-time recovery keeps 7 days of earlier versions, deleted records included.
 
 **In Firestore, one row per installation (the tenant registry):**
 
@@ -108,7 +108,7 @@ Other tenant-level controls that exist today:
 
 - **Repository scoping.** You choose which repositories the installation covers. An attacker with full control of RunnerForge could act only on those repositories, but on each of them with the full `Administration: write` permission described above.
 - **Short-lived GitHub tokens.** Installation tokens and registration tokens each expire after 1 hour (GitHub sets both lifetimes). The App's private key is the only long-lived credential. It's stored in GCP Secret Manager and mounted into the orchestrator as a file. It isn't in source control or Terraform state.
-- **You can cut access at any time.** Suspending or uninstalling the App on your account or organization stops RunnerForge from getting new tokens for it.
+- **You can cut access at any time.** Suspending or uninstalling the App on your account or organization stops RunnerForge from getting new tokens for it. Within about 5 minutes the reconciler deletes your idle VMs; one still running a job is deleted 15 minutes after a suspension, or at once after an uninstall. Their runners stay listed as offline in your repository settings, because RunnerForge can no longer remove them. Logs and traces aren't erased; they expire on their own retention.
 - **Signed webhooks.** The orchestrator rejects any webhook that isn't signed with the App's webhook secret, so a forged request can't create VMs.
 
 If the App's private key leaks, the maintainer can generate a new key and delete the old one in the App settings. You don't need to do anything. Key rotation is manual today.
@@ -130,4 +130,4 @@ More detail on the implementation is in [Security](/docs/design/security).
 - **No certification or third-party audit.** This is a portfolio platform-engineering project, not a commercial service. You can check the claims here against the public source code, but no third party has attested them.
 - **No bug bounty.** Please report security issues privately to the maintainer, not in a public issue.
 
-Last reviewed: 2026-11-02.
+Last reviewed: 2026-11-02 (cut-off cleanup).

@@ -163,4 +163,7 @@ class ReconcileResult(BaseModel):
     registry_changes: int = 0  # registry rows created or updated by the backfill
     started: int = 0  # VMs the capacity pass started for waiting jobs (ADR-019)
     orphans_deleted: int = 0  # VMs deleted because their runner had no job left
+    # ADR-019 step 4: installations GitHub suspended or uninstalled
+    cutoff_vms_deleted: int = 0
+    cutoff_records_deleted: int = 0  # job records of uninstalled installations
     errors: list[str]  # per-record failures (one record never aborts a run)

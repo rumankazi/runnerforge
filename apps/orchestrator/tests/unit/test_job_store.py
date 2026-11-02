@@ -713,3 +713,119 @@ async def test_noop_store_claims_and_lists_nothing():
     store = NoopJobStore()
     assert await store.list_open_by_installation(7, 20) == []
     assert await store.claim_start(KEY, 0, DECISION, NEXT) is False
+
+
+# --- writes without base fields (ADR-019 step 4) ---
+
+
+@pytest.mark.parametrize(("name", "is_open"), [("vm", True), ("completed", False)])
+async def test_record_fact_without_base_only_updates(name, is_open):
+    """The reconciler and its watchers write facts with no base fields; such
+    a write updates the record and never creates one."""
+    doc = MagicMock()
+    doc.update = AsyncMock()
+    doc.set = AsyncMock()
+
+    written = await FirestoreJobStore(_client_with_doc(doc)).record_fact(
+        KEY, {}, name, {"outcome": "success"}, source="reconcile"
+    )
+
+    assert written is True
+    (data,), _ = doc.update.await_args
+    assert data["open"] is is_open
+    assert data[name]["outcome"] == "success"
+    doc.set.assert_not_awaited()
+
+
+async def test_record_fact_without_base_or_reopen_keeps_open_as_is():
+    doc = MagicMock()
+    doc.update = AsyncMock()
+
+    await FirestoreJobStore(_client_with_doc(doc)).record_fact(
+        KEY, {}, "vm", {"outcome": "success"}, reopen=False
+    )
+
+    (data,), _ = doc.update.await_args
+    assert "open" not in data
+
+
+async def test_record_fact_without_base_drops_a_fact_for_a_deleted_record(caplog):
+    """A record deleted after an uninstall stays deleted: no stub without an
+    installation or an expiry."""
+    doc = MagicMock()
+    doc.update = AsyncMock(side_effect=NotFound("gone"))
+    doc.set = AsyncMock()
+    doc.create = AsyncMock()
+
+    with caplog.at_level(logging.INFO):
+        written = await FirestoreJobStore(_client_with_doc(doc)).record_fact(
+            KEY, {}, "vm", {"outcome": "success"}, reopen=False
+        )
+
+    assert written is False
+    doc.set.assert_not_awaited()
+    doc.create.assert_not_awaited()
+    [record] = [
+        r for r in caplog.records if r.message == "Job record gone, fact dropped"
+    ]
+    assert (record.job_key, record.fact) == (KEY, "vm")
+
+
+# --- delete_by_installation ---
+
+
+def _purge_client(snaps) -> tuple[MagicMock, MagicMock]:
+    client = MagicMock()
+    query = client.collection.return_value.where.return_value.select.return_value
+    query.limit.return_value.stream = MagicMock(return_value=_AsyncSnapshots(snaps))
+    batch = MagicMock()
+    batch.commit = AsyncMock()
+    client.batch.return_value = batch
+    return client, batch
+
+
+async def test_delete_by_installation_deletes_one_page_in_one_commit():
+    snaps = [_snap("a", {}), _snap("b", {})]
+    client, batch = _purge_client(snaps)
+
+    count = await FirestoreJobStore(client).delete_by_installation(7, 200)
+
+    assert count == 2
+    where = client.collection.return_value.where.call_args.kwargs["filter"]
+    assert (where.field_path, where.op_string, where.value) == (
+        "installation_id",
+        "==",
+        7,
+    )
+    client.collection.return_value.where.return_value.select.assert_called_once_with(
+        ["installation_id"]
+    )
+    client.collection.return_value.where.return_value.select.return_value.limit.assert_called_once_with(
+        200
+    )
+    assert [c.args[0] for c in batch.delete.call_args_list] == [
+        s.reference for s in snaps
+    ]
+    batch.commit.assert_awaited_once()
+
+
+async def test_delete_by_installation_with_nothing_left_commits_nothing():
+    client, batch = _purge_client([])
+
+    assert await FirestoreJobStore(client).delete_by_installation(7, 200) == 0
+    batch.commit.assert_not_awaited()
+
+
+async def test_delete_by_installation_failure_reports_none(caplog):
+    client, batch = _purge_client([_snap("a", {})])
+    batch.commit = AsyncMock(side_effect=ServiceUnavailable("down"))
+
+    with caplog.at_level(logging.WARNING):
+        assert await FirestoreJobStore(client).delete_by_installation(7, 200) is None
+
+    [record] = [r for r in caplog.records if r.message == "Job store write failed"]
+    assert record.operation == "delete_by_installation"
+
+
+async def test_noop_store_deletes_nothing():
+    assert await job_store.NoopJobStore().delete_by_installation(7, 200) == 0

@@ -23,6 +23,8 @@ def test_reconcile_endpoint_returns_result_and_logs_counts(monkeypatch, caplog):
         errors=["100-200-1: RuntimeError"],
         started=2,
         orphans_deleted=1,
+        cutoff_vms_deleted=2,
+        cutoff_records_deleted=5,
     )
     run_mock = AsyncMock(return_value=result)
     monkeypatch.setattr("runnerforge.main.run_reconcile", run_mock)
@@ -57,6 +59,7 @@ def test_reconcile_endpoint_returns_result_and_logs_counts(monkeypatch, caplog):
     assert log.error_count == 1
     assert log.started == 2
     assert log.orphans_deleted == 1
+    assert (log.cutoff_vms_deleted, log.cutoff_records_deleted) == (2, 5)
 
 
 def test_reconcile_endpoint_watches_started_vms(monkeypatch):

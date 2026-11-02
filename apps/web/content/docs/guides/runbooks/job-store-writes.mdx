@@ -11,7 +11,8 @@ Email from "RunnerForge Alerts": **Job store write failures >= 3 (15m)**, severi
 
 It fires when at least 3 `Job store write failed` lines land in a 15-minute window
 (`job_store_write_failure_count`). That covers webhook writes and the reconciler's writes (`patch`, and
-`record_fact:completed`/`in_progress` with `source: reconcile`); reconciler reads log `Job store read failed` and
+`record_fact:completed`/`in_progress` with `source: reconcile`, and `delete_by_installation`, the purge of an
+uninstalled installation's records, which the next run retries); reconciler reads log `Job store read failed` and
 aren't counted. Writes from background tasks (`record_fact:vm`, `record_fact:preempted`) are left
 out of the metric: they run after the response while Cloud Run throttles the CPU, so their timeout can fire late
 even when the write landed.

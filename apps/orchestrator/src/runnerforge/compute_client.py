@@ -703,7 +703,7 @@ async def get_vm_labels_by_job(
 
 async def delete_vm(
     instance_name: str,
-    reason: Literal["webhook", "sweep", "reconcile"],
+    reason: Literal["webhook", "sweep", "reconcile", "cutoff"],
     zone: str = GCP_ZONE,
     project_id: str = GCP_PROJECT_ID,
 ) -> str | None:

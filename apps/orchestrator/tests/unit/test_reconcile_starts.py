@@ -113,6 +113,13 @@ def world(monkeypatch, fake_job_store):
         reconcile, "list_runnerforge_vms", AsyncMock(side_effect=lambda: world.vms)
     )
     monkeypatch.setattr(reconcile, "get_registry", lambda: world.registry)
+    # The cut-off cleanup is tested on its own; here its GitHub check fails,
+    # so it acts on nothing.
+    monkeypatch.setattr(
+        reconcile,
+        "get_app_installation",
+        AsyncMock(side_effect=RuntimeError("not under test")),
+    )
 
     async def decide(iid):
         return world.admission[iid]

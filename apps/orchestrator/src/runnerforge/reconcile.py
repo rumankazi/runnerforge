@@ -9,10 +9,12 @@ isn't throttled the way background tasks are.
 Every fact it writes has `source: reconcile`. VM labels stay the authority for
 which VMs exist.
 
-Each run first deletes orphan VMs: runners GitHub no longer lists, or lists
-as idle with no job they could take. With ADMISSION=registry, it then starts
-VMs for jobs waiting under an installation's limit (ADR-019, the capacity
-pass). Last, it checks due records.
+Each run first cleans up after installations GitHub cut off (suspended or
+uninstalled, ADR-019 step 4), then deletes orphan VMs: runners GitHub no
+longer lists, or lists as idle with no job they could take. With
+ADMISSION=registry, it then starts VMs for jobs waiting under an
+installation's limit (ADR-019, the capacity pass). Last, it checks due
+records.
 """
 
 import asyncio
@@ -49,6 +51,7 @@ from runnerforge.github_client import (
     JobNotFound,
     RepoNotFound,
     delete_runner,
+    get_app_installation,
     get_installation_token,
     get_job,
     get_runner,
@@ -65,7 +68,7 @@ from runnerforge.job_store import (
 )
 from runnerforge.machine_policy import MachinePolicyError, resolve_labels
 from runnerforge.models import GitHubJob, ReconcileResult, VmInfo
-from runnerforge.registry import RegistryEntry, get_registry
+from runnerforge.registry import DELETED_RETENTION, RegistryEntry, get_registry
 
 logger = logging.getLogger(__name__)
 
@@ -128,9 +131,35 @@ ORPHAN_BUDGET_SECONDS = 30.0
 ORPHAN_CHECK_TIMEOUT_SECONDS = 15.0
 MAX_ORPHAN_CHECKS = 10
 
+# Cut-off cleanup (ADR-019 step 4): installations GitHub suspended or
+# uninstalled. Each is confirmed with GitHub first: the row's status comes
+# from whichever event arrived last. It runs first, in its own slice.
+CUTOFF_BUDGET_SECONDS = 30.0
+CUTOFF_CALL_TIMEOUT_SECONDS = 10.0
+MAX_CUTOFF_CONFIRMS = 10
+MAX_CUTOFF_DELETES = 10
+# A suspended installation's VM that is on a job gets this long, which
+# absorbs a quick unsuspend; an idle one goes at once (it could take jobs
+# nobody would tell us about). An uninstalled installation's go at once.
+CUTOFF_BUSY_GRACE = timedelta(minutes=15)
+# A suspended installation's records aren't checked (GitHub refuses the
+# calls); they're looked at again this often, so they resume soon after an
+# unsuspend.
+CUTOFF_PAUSE = timedelta(minutes=15)
+# Job records deleted per uninstalled installation per run.
+PURGE_LIMIT = 200
+
 
 class _InstallationGone(Exception):
     """The App installation is gone (token request returned 404)."""
+
+
+@dataclass(frozen=True)
+class _Cutoff:
+    """An installation GitHub confirmed as cut off this run."""
+
+    status: str  # "suspended" | "deleted"
+    since: datetime  # when it was cut off: only VMs made before it are touched
 
 
 async def run_reconcile(
@@ -174,13 +203,44 @@ async def run_reconcile(
         if isinstance(rec.get("in_progress"), dict)
     }
 
-    counts["backfilled"] = await _backfill(store, vms, {k for k, _ in open_records})
+    # Read in both modes for the cut-off cleanup; None is a failed read.
+    all_rows = await get_registry().list_all()
+    cutoff_deadline = time.monotonic() + CUTOFF_BUDGET_SECONDS
+    cutoffs = await _confirm_cutoffs(now, all_rows, counts, cutoff_deadline)
+
+    # A cut-off installation's VMs get no records back: it sends no
+    # webhooks, and an uninstalled one's records are being deleted.
+    counts["backfilled"] = await _backfill(
+        store,
+        [vm for vm in vms if _installation(vm) not in cutoffs],
+        {k for k, _ in open_records},
+    )
 
     tokens: dict[int, str | Exception] = {}
-    rows = (await get_registry().list_all() or {}) if ADMISSION == "registry" else {}
+    rows = (all_rows or {}) if ADMISSION == "registry" else {}
     # Before the pass and the batch, so both see the freed slots.
-    deleted = await _delete_orphans(
-        now, vms, listed, busy_runners, tokens, counts, errors, rows
+    deleted = await _delete_cutoff_vms(
+        now,
+        vms,
+        cutoffs,
+        # Every VM counts as busy unless all open records were read.
+        busy_runners if listed is not None and len(listed) < OPEN_LIMIT else None,
+        counts,
+        errors,
+        cutoff_deadline,
+    )
+    await _purge_cutoff_records(
+        store, vms, cutoffs, all_rows or {}, counts, cutoff_deadline
+    )
+    deleted |= await _delete_orphans(
+        now,
+        [vm for vm in vms if vm.name not in deleted],
+        listed,
+        busy_runners,
+        tokens,
+        counts,
+        errors,
+        rows,
     )
     vms = [vm for vm in vms if vm.name not in deleted]
     # Before the batch, so a slow batch can't starve it.
@@ -206,6 +266,13 @@ async def run_reconcile(
         if time.monotonic() - started > RUN_BUDGET_SECONDS:
             more_due = True
             break
+        if _record_installation(rec) in cutoffs:
+            # Suspended: GitHub refuses the calls, and the suspension may be
+            # lifted, so no verdict. Uninstalled: the record is being
+            # deleted. Either way, look again later without counting it, so
+            # these records can't hold the head of every batch.
+            await store.patch(key, {"next_check_at": now + CUTOFF_PAUSE})
+            continue
         checked += 1
         try:
             async with asyncio.timeout(RECORD_TIMEOUT_SECONDS):
@@ -230,9 +297,11 @@ async def run_reconcile(
         backfilled=counts["backfilled"],
         more_due=more_due,
         errors=errors,
-        registry_changes=registry_changes,
+        registry_changes=registry_changes + counts["registry_repairs"],
         started=counts["started"],
         orphans_deleted=counts["orphans_deleted"],
+        cutoff_vms_deleted=counts["cutoff_vms_deleted"],
+        cutoff_records_deleted=counts["cutoff_records_deleted"],
     )
 
 
@@ -529,6 +598,8 @@ class _Pass:
     on_started: Callable[[OperationHandle], None] | None
     # VMs the orphan cleanup deleted this run; a live listing may still show them.
     deleted: set[str] = field(default_factory=set)
+    # Installations whose row says GitHub suspended them.
+    suspended: set[int] = field(default_factory=set)
     started_keys: set[str] = field(default_factory=set)
     attempts: int = 0
     stocked_out: set[str | None] = field(default_factory=set)
@@ -566,6 +637,7 @@ async def _capacity_pass(
         busy_runners,
         on_started,
         deleted,
+        {iid for iid, row in rows.items() if row.github_status == "suspended"},
     )
     managed: set[int] = set()
     queues: list[_Queue] = []
@@ -651,8 +723,12 @@ async def _queue(run: _Pass, iid: int, admission: Admission) -> _Queue | None:
     if not waiting:
         return None
     if not admission.admitted:
-        # Suspended, uninstalled or no longer approved: its deferred jobs
-        # won't start, and the record says why.
+        if iid in run.suspended:
+            # Suspended on GitHub, which can be lifted: its deferred jobs
+            # keep waiting, and start again once it is.
+            return None
+        # Uninstalled, or suspended or no longer approved by the owner: its
+        # deferred jobs won't start, and the record says why.
         for key, _ in waiting:
             await run.store.patch(
                 key,
@@ -1029,3 +1105,188 @@ def _on_github_runner(rec: dict[str, Any]) -> bool:
     return isinstance(rec.get("in_progress"), dict) or isinstance(
         rec.get("completed"), dict
     )
+
+
+# --- cut-off installations (ADR-019 step 4) ---
+
+
+def _installation(vm: VmInfo) -> int | None:
+    iid = vm.labels.installation_id
+    return int(iid) if iid.isdigit() else None
+
+
+def _record_installation(rec: dict[str, Any]) -> int | None:
+    iid = rec.get("installation_id")
+    return iid if isinstance(iid, int) else None
+
+
+async def _confirm_cutoffs(
+    now: datetime,
+    rows: dict[int, RegistryEntry] | None,
+    counts: Counter[str],
+    deadline: float,
+) -> dict[int, _Cutoff]:
+    """Installations whose row says GitHub suspended or uninstalled them, as
+    GitHub confirms it now (GET /app/installations/{id}, with the App's own
+    JWT, which works while an installation is suspended). The row comes from
+    whichever event arrived last, so a lost or reordered `unsuspend` must not
+    delete an active installation's VMs. A row GitHub contradicts is put
+    right; a check that fails skips the installation for the run."""
+    if rows is None:
+        logger.warning(
+            "Cut-off cleanup skipped", extra={"reason": "registry_unavailable"}
+        )
+        return {}
+    candidates = sorted(
+        (
+            row
+            for row in rows.values()
+            if row.github_status in ("suspended", "deleted")
+            # Once its records are gone, an uninstalled installation is only
+            # looked at again hourly, for stragglers, until its row expires.
+            and not (
+                row.records_purged_at is not None and not registry_backfill_due(now)
+            )
+        ),
+        # Work left first (purged rows only look for stragglers), then a
+        # different order each run, so the cap can't always pass over the
+        # same installations.
+        key=lambda row: (
+            row.records_purged_at is not None,
+            zlib.crc32(f"{row.installation_id}/{now:%Y%m%d%H%M}".encode()),
+        ),
+    )
+    if len(candidates) > MAX_CUTOFF_CONFIRMS:
+        logger.warning(
+            "Cut-off cleanup incomplete",
+            extra={"unchecked": len(candidates) - MAX_CUTOFF_CONFIRMS},
+        )
+    cutoffs: dict[int, _Cutoff] = {}
+    for row in candidates[:MAX_CUTOFF_CONFIRMS]:
+        iid = row.installation_id
+        if time.monotonic() > deadline:
+            logger.warning("Cut-off cleanup incomplete", extra={"installation_id": iid})
+            break
+        try:
+            async with asyncio.timeout(CUTOFF_CALL_TIMEOUT_SECONDS):
+                found = await get_app_installation(iid)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "Cut-off check failed",
+                extra={"installation_id": iid, "error_class": type(e).__name__},
+            )
+            continue
+        if found is None:
+            status = "deleted"
+        elif found.suspended_at is not None:
+            status = "suspended"
+        else:
+            status = "active"
+        if status != row.github_status:
+            await get_registry().record_github_status(iid, status)
+            counts["registry_repairs"] += 1
+            logger.info(
+                "Registry status repaired",
+                extra={"installation_id": iid, "was": row.github_status, "now": status},
+            )
+        if status == "active":
+            continue
+        if status == "suspended":
+            since = found.suspended_at  # GitHub's own time
+        elif row.github_status == "deleted":
+            since = row.github_status_at or (
+                row.expire_at - DELETED_RETENTION if row.expire_at else now
+            )
+        else:
+            since = now  # just learned it's gone
+        cutoffs[iid] = _Cutoff(status, since)
+    return cutoffs
+
+
+async def _delete_cutoff_vms(
+    now: datetime,
+    vms: list[VmInfo],
+    cutoffs: dict[int, _Cutoff],
+    busy_runners: set[str | None] | None,
+    counts: Counter[str],
+    errors: list[str],
+    deadline: float,
+) -> set[str]:
+    """Delete the VMs of cut-off installations. No runner check is possible
+    (GitHub refuses the installation's calls) and its runner can't be
+    deregistered, so GitHub keeps an offline entry for it. Only VMs made
+    before the cut-off: a newer one means GitHub was still sending webhooks.
+    `busy_runners` is None when the records couldn't be read: every VM then
+    counts as busy. Returns the VMs deleted."""
+    deleted: set[str] = set()
+    for vm in vms:
+        cut = cutoffs.get(_installation(vm))
+        if cut is None or vm.status not in ACTIVE_STATUSES:
+            continue
+        if vm.creation_timestamp >= cut.since:
+            continue
+        busy = busy_runners is None or vm.name in busy_runners
+        if cut.status == "suspended" and busy and now - cut.since < CUTOFF_BUSY_GRACE:
+            continue
+        if len(deleted) >= MAX_CUTOFF_DELETES or time.monotonic() > deadline:
+            logger.warning("Cut-off cleanup incomplete", extra={"vm_name": vm.name})
+            break
+        try:
+            async with asyncio.timeout(CUTOFF_CALL_TIMEOUT_SECONDS):
+                operation = await delete_vm(instance_name=vm.name, reason="cutoff")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{vm.name}: {type(e).__name__}")
+            logger.error(
+                "Cut-off VM delete failed",
+                extra={"vm_name": vm.name, "error_class": type(e).__name__},
+            )
+            continue
+        deleted.add(vm.name)
+        if operation is None:
+            continue  # GCE had no such VM any more
+        counts["cutoff_vms_deleted"] += 1
+        logger.info(
+            "Cut-off VM deleted",
+            extra={
+                "vm_name": vm.name,
+                "installation_id": _installation(vm),
+                "github_status": cut.status,
+                "busy": busy,
+                "age_minutes": int((now - vm.creation_timestamp).total_seconds() / 60),
+            },
+        )
+    return deleted
+
+
+async def _purge_cutoff_records(
+    store: JobStore,
+    vms: list[VmInfo],
+    cutoffs: dict[int, _Cutoff],
+    rows: dict[int, RegistryEntry],
+    counts: Counter[str],
+    deadline: float,
+) -> None:
+    """Delete an uninstalled installation's job records (ADR-018, ADR-019),
+    once the run's listing shows none of its VMs in any status: a VM left
+    over would give its job a record back. Bounded per run; the next run
+    goes on where this one stopped."""
+    present = {_installation(vm) for vm in vms}
+    for iid, cut in sorted(cutoffs.items()):
+        if cut.status != "deleted" or iid in present:
+            continue
+        if time.monotonic() > deadline:
+            logger.warning("Cut-off cleanup incomplete", extra={"installation_id": iid})
+            break
+        count = await store.delete_by_installation(iid, PURGE_LIMIT)
+        if count is None:
+            continue  # logged by the store; the next run tries again
+        counts["cutoff_records_deleted"] += count
+        more = count >= PURGE_LIMIT
+        if count:
+            logger.info(
+                "Cut-off records deleted",
+                extra={"installation_id": iid, "count": count, "more": more},
+            )
+        row = rows.get(iid)
+        if not more and row is not None and row.records_purged_at is None:
+            await get_registry().mark_records_purged(iid)
