@@ -24,12 +24,9 @@ variable "admission" {
 variable "allowed_installation_ids" {
   description = "GitHub App installation IDs that are always admitted, unlimited, without a registry read (the owner's). With admission = \"registry\" every other installation still needs an approved registry row, and an empty list means none bypasses the registry. With admission = \"allowlist\" only these get VMs, and an empty list allows nobody: never roll back to allowlist with an empty list."
   type        = list(string)
-  # TEMPORARILY EMPTY for the ADR-019 step 3c limits test: the owner's
-  # installation (135399152) is admitted by its registry row instead, so
-  # set-limits applies to it. Restore it right after the test. While empty,
-  # never roll back to an ADMISSION=allowlist revision built from this
-  # template: it would admit nobody.
-  default = []
+  default = [
+    "135399152", # rumankazi (dogfood: rumankazi/runnerforge)
+  ]
 
   validation {
     condition     = alltrue([for id in var.allowed_installation_ids : can(regex("^[0-9]+$", id))])
