@@ -1,6 +1,7 @@
 plan_workflow_name: qualify.yaml
 target_groups:
   - working_directory: infra/terraform
+  - working_directory: infra/terraform-pool
 available_providers:
   - name: registry.terraform.io/hashicorp/google
   - name: registry.terraform.io/hashicorp/time
@@ -13,5 +14,6 @@ drift_detection:
   issue_repo_owner: rumankazi
   issue_repo_name: runnerforge
   # Maximum number of drift issues processed per scheduled job run. Default is 1.
-  num_of_issues: 1
+  # One per target, so both are checked on every run.
+  num_of_issues: 2
   minimum_detection_interval: 1

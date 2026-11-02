@@ -33,6 +33,14 @@ jobs:
             infra:
               - infra/terraform/**
               - infra/policies/**
+              - tfaction-root.yaml
+              - aqua.yaml
+              - .github/workflows/_qualify-infra.yaml
+            infra_pool:
+              - infra/terraform-pool/**
+              - infra/policies/**
+              - tfaction-root.yaml
+              - aqua.yaml
               - .github/workflows/_qualify-infra.yaml
           force-all-on: |
             - .github/workflows/qualify.yaml

@@ -52,12 +52,12 @@ Thumbs.db
 .vercel
 
 # Terraform
-infra/terraform/.terraform/
-infra/terraform/*.tfstate
-infra/terraform/*.tfstate.*
-infra/terraform/*.tfvars
-infra/terraform/*.tfplan
-infra/terraform/crash.log
+infra/terraform*/.terraform/
+infra/terraform*/*.tfstate
+infra/terraform*/*.tfstate.*
+infra/terraform*/*.tfvars
+infra/terraform*/*.tfplan
+infra/terraform*/crash.log
 
 # Cloudflare wrangler local state
 .wrangler/

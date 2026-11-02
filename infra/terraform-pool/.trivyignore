@@ -1,0 +1,7 @@
+# GCP-0029 (LOW): VPC flow logs not enabled on the subnetwork
+# GCP-0076 (LOW): VPC flow logs sampling/aggregation
+# Deliberate — every VM on this subnet runs a tenant's job, so tenants control
+# the flow-log volume and its cost. Attribution comes from the NAT log and the
+# internal-deny firewall log instead (ADR-020).
+GCP-0029
+GCP-0076

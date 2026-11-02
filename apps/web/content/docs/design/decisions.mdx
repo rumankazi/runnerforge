@@ -1021,7 +1021,7 @@ A review of what a job can reach from its runner VM (2026-11-02) found:
 
 **VMs.**
 - **No service account** and no scopes. The metadata server, which a firewall can't block, then serves no token. The orchestrator no longer needs `actAs` on a runner service account.
-- Instance metadata: `enable-oslogin=TRUE` with no OS Login grants, `block-project-ssh-keys=TRUE`, and `serial-port-logging-enable=TRUE`. Serial logs land in the pool project and are tenant-written, so no metric or alert reads them. The Ops Agent leaves the image.
+- Instance metadata: `enable-oslogin=TRUE` (metadata SSH keys are ignored; only the owner and `roles/editor` holders could log in, and no ingress rule lets SSH in), `block-project-ssh-keys=TRUE`, and `serial-port-logging-enable=TRUE`. Serial logs land in the pool project and are tenant-written, so no metric or alert reads them. The Ops Agent leaves the image.
 - Every VM is created on the pool's own subnetwork, not `default`. The pool's default compute service account is disabled.
 
 **Network** (the pool's own VPC, IPv4 only; no `default-*` rules):

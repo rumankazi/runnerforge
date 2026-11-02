@@ -39,14 +39,30 @@ jobs:
       contents: read
     if: ${{ fromJSON(needs.preflight.outputs.changes).infra }}
     uses: ./.github/workflows/_qualify-infra.yaml
+    with:
+      working_directory: infra/terraform
     secrets:
       RELEASE_BOT_APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
       RELEASE_BOT_PRIVATE_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
 
+  infra-pool:
+    name: Infra pool
+    needs: preflight
+    permissions:
+      id-token: write
+      pull-requests: write
+      contents: read
+    if: ${{ fromJSON(needs.preflight.outputs.changes).infra_pool }}
+    uses: ./.github/workflows/_qualify-infra.yaml
+    with:
+      working_directory: infra/terraform-pool
+    secrets:
+      RELEASE_BOT_APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
+      RELEASE_BOT_PRIVATE_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
 
   gate:
     name: Gate
-    needs: [orchestrator, web, infra]
+    needs: [orchestrator, web, infra, infra-pool]
     if: always()
     runs-on: ubuntu-latest
     steps:
