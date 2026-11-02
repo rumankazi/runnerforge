@@ -65,31 +65,37 @@
     },
     {
       "groupName": "orchestrator deps (minor)",
+      "groupSlug": "orchestrator-deps-minor",
       "matchFileNames": ["apps/orchestrator/**"],
       "matchUpdateTypes": ["minor"]
     },
     {
       "groupName": "orchestrator deps (patch)",
+      "groupSlug": "orchestrator-deps-patch",
       "matchFileNames": ["apps/orchestrator/**"],
       "matchUpdateTypes": ["patch"]
     },
     {
       "groupName": "web deps (minor)",
+      "groupSlug": "web-deps-minor",
       "matchFileNames": ["apps/web/**"],
       "matchUpdateTypes": ["minor"]
     },
     {
       "groupName": "web deps (patch)",
+      "groupSlug": "web-deps-patch",
       "matchFileNames": ["apps/web/**"],
       "matchUpdateTypes": ["patch"]
     },
     {
       "groupName": "runner-image deps (minor)",
+      "groupSlug": "runner-image-deps-minor",
       "matchFileNames": ["infra/packer/**"],
       "matchUpdateTypes": ["minor"]
     },
     {
       "groupName": "runner-image deps (patch)",
+      "groupSlug": "runner-image-deps-patch",
       "matchFileNames": ["infra/packer/**"],
       "matchUpdateTypes": ["patch"]
     },
