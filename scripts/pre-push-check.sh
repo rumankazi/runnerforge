@@ -33,19 +33,23 @@ check_workflows() {
 }
 
 check_infra() {
-	heading "Terraform fmt check"
-	(cd infra/terraform && terraform fmt -check -recursive)
+	# Each tfaction target: the control project and the tenant VM pool (ADR-020).
+	local dir
+	for dir in infra/terraform infra/terraform-pool; do
+		heading "Terraform fmt check ($dir)"
+		(cd "$dir" && terraform fmt -check -recursive)
 
-	heading "Terraform validate"
-	(cd infra/terraform && terraform init -backend=false -input=false >/dev/null && terraform validate)
+		heading "Terraform validate ($dir)"
+		(cd "$dir" && terraform init -backend=false -input=false >/dev/null && terraform validate)
 
-	heading "Trivy IaC scan"
-	# Mirror tfaction: it runs trivy with cwd = the module dir (so the module's
-	# .trivyignore is honoured) and fails the job on any reported finding.
-	(cd infra/terraform && trivy config --exit-code 1 .)
+		heading "Trivy IaC scan ($dir)"
+		# Mirror tfaction: it runs trivy with cwd = the module dir (so the module's
+		# .trivyignore is honoured) and fails the job on any reported finding.
+		(cd "$dir" && trivy config --exit-code 1 .)
 
-	heading "tflint"
-	(cd infra/terraform && tflint --recursive)
+		heading "tflint ($dir)"
+		(cd "$dir" && tflint --recursive)
+	done
 
 	if [ -d "infra/policies" ]; then
 		heading "Conftest policy unit tests"

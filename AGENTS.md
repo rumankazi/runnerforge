@@ -22,7 +22,7 @@ bun run types:check               # fumadocs-mdx && next typegen && tsc --noEmit
 bun run build
 bun run dev
 ```
-Infra — run in `infra/terraform/` (local = static checks only):
+Infra — run in `infra/terraform/`, and the same block in `infra/terraform-pool/` (local = static checks only):
 ```bash
 terraform fmt -check -recursive
 terraform init -backend=false -input=false && terraform validate
@@ -51,7 +51,8 @@ apps/orchestrator/src/runnerforge/  FastAPI app
   validation.py / models.py / logger.py / tracing.py (OpenTelemetry)
 apps/orchestrator/tests/  unit/ (mocked), integration/ (TestClient + respx), fixtures/
 apps/web/            Next.js App Router; docs in content/docs/ (design, ADRs, runbooks)
-infra/terraform/     single root module, GCS backend (bucket runnerforge-terraform-state); driven by tfaction
+infra/terraform/     control-project root module, GCS backend (bucket runnerforge-terraform-state); driven by tfaction
+infra/terraform-pool/ tenant VM pool project runnerforge-pool (ADR-020): network, firewall, NAT; own state (prefix pool) and tfaction target
 infra/packer/        runner VM image (Debian 12) — own release stream
 infra/policies/      OPA rego policies + *_test.rego, applied to terraform plans in CI
 .github/workflows/   qualify.yaml = PR gate (path-filtered → _qualify-{orchestrator,web,infra}.yaml + gate)
@@ -104,7 +105,7 @@ conftest 0.68.2. Install with `mise install` / `aqua i -a` where available.
   owner's credentials. `list` is read-only.
 - DON'T run `wrangler deploy` / `wrangler versions deploy` / `wrangler triggers deploy` for `apps/web`: production deploys come from
   Workers Builds on merge to `main`. `bun run cf:preview` (local `wrangler dev`) is fine.
-- DON'T touch `infra/terraform/.tfaction/`, `.terraform.lock.hcl` (unless upgrading providers), or state.
+- DON'T touch `infra/terraform*/.tfaction/`, `.terraform.lock.hcl` (unless upgrading providers), or state.
 - DON'T add a ruff/prettier config or new lint rules as a side effect of another change.
 - DON'T expect `test-jobs.yaml` to run on hosted runners — it dogfoods `[runnerforge, small, spot]`.
 

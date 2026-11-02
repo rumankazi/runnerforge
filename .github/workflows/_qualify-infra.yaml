@@ -2,6 +2,11 @@ name: Qualify Infra
 
 on:
   workflow_call:
+    inputs:
+      working_directory:
+        description: "The tfaction target to plan: infra/terraform (control) or infra/terraform-pool (ADR-020)"
+        required: true
+        type: string
     secrets:
       RELEASE_BOT_APP_ID:
         required: true
@@ -25,7 +30,7 @@ jobs:
       CI_TERRAFORM_PLAN_SA: ci-terraform-plan@runnerforge.iam.gserviceaccount.com
       TFACTION_JOB_TYPE: terraform
       TFACTION_IS_APPLY: "false"
-      TFACTION_WORKING_DIR: infra/terraform
+      TFACTION_WORKING_DIR: ${{ inputs.working_directory }}
     outputs:
       has_changes: ${{ steps.plan.outputs.changed }}
     steps:

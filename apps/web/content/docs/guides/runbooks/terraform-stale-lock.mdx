@@ -40,7 +40,8 @@ Before force-unlocking, verify no other operation is in progress:
 From a local terminal authenticated to GCP (`gcloud auth application-default login` if needed):
 
 ```bash
-cd infra/terraform
+cd infra/terraform        # lock path .../orchestrator/default.tflock (control project)
+# cd infra/terraform-pool # lock path .../pool/default.tflock (tenant VM pool, ADR-020)
 terraform force-unlock <lock-id>
 ```
 
@@ -48,7 +49,7 @@ terraform force-unlock <lock-id>
 
 After force-unlock, re-run the failed workflow:
 
-- For `deploy-infra` failure → trigger via Actions UI → Deploy Infra → workflow_dispatch
+- For `deploy-infra` failure → re-run the failed jobs of that push run. A lock failure happens before Terraform touches state, so the PR's saved plan still applies.
 - For `_qualify-infra` failure on a PR → push a no-op commit to the PR branch (or close + reopen the PR)
 
 ## When NOT to force-unlock
