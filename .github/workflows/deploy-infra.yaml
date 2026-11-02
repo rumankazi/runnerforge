@@ -92,7 +92,8 @@ jobs:
       id-token: write # For OIDC. https://docs.github.com/en/actions/concepts/security/openid-connect
       # If you use GitHub Apps, please grant these permissions to the GitHub App instead
       contents: read # To checkout a private repository
-      issues: write # For drift detection
+      issues: write # For drift detection, and the apply result on the drift issue
+      pull-requests: write # The apply result comment on the merged PR
       actions: read # To download plan files from GitHub Artifacts
     env:
       WIF_PROVIDER: projects/8547588670/locations/global/workloadIdentityPools/github/providers/github
@@ -100,6 +101,9 @@ jobs:
       TFACTION_JOB_TYPE: terraform
       TFACTION_IS_APPLY: "true"
       TFACTION_WORKING_DIR: infra/terraform
+      # Wait for a PR plan (Renovate rebases every open PR on each merge)
+      # instead of failing on the state lock.
+      TF_CLI_ARGS_apply: -lock-timeout=10m
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -147,7 +151,6 @@ jobs:
         with:
           # pull-requests:write
           action: terraform-init
-          github_token: ${{ steps.token.outputs.token }}
 
       - name: Apply
         id: apply
@@ -155,7 +158,6 @@ jobs:
         with:
           # pull-requests:write
           action: apply
-          github_token: ${{ steps.token.outputs.token }}
 
       - name: Update related PR branches
         # https://suzuki-shunsuke.github.io/tfaction/docs/unreleased/update-pr-branch
@@ -199,7 +201,8 @@ jobs:
       id-token: write # For OIDC. https://docs.github.com/en/actions/concepts/security/openid-connect
       # If you use GitHub Apps, please grant these permissions to the GitHub App instead
       contents: read # To checkout a private repository
-      issues: write # For drift detection
+      issues: write # For drift detection, and the apply result on the drift issue
+      pull-requests: write # The apply result comment on the merged PR
       actions: read # To download plan files from GitHub Artifacts
     env:
       WIF_PROVIDER: projects/8547588670/locations/global/workloadIdentityPools/github/providers/github
@@ -207,6 +210,9 @@ jobs:
       TFACTION_JOB_TYPE: terraform
       TFACTION_IS_APPLY: "true"
       TFACTION_WORKING_DIR: infra/terraform-pool
+      # Wait for a PR plan (Renovate rebases every open PR on each merge)
+      # instead of failing on the state lock.
+      TF_CLI_ARGS_apply: -lock-timeout=10m
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -254,7 +260,6 @@ jobs:
         with:
           # pull-requests:write
           action: terraform-init
-          github_token: ${{ steps.token.outputs.token }}
 
       - name: Apply
         id: apply
@@ -262,7 +267,6 @@ jobs:
         with:
           # pull-requests:write
           action: apply
-          github_token: ${{ steps.token.outputs.token }}
 
       - name: Update related PR branches
         # https://suzuki-shunsuke.github.io/tfaction/docs/unreleased/update-pr-branch

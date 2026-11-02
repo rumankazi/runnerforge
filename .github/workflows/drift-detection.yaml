@@ -14,6 +14,8 @@ concurrency:
 env:
   WIF_PROVIDER: projects/8547588670/locations/global/workloadIdentityPools/github/providers/github
   CI_TERRAFORM_PLAN_SA: ci-terraform-plan@runnerforge.iam.gserviceaccount.com
+  # Wait for a running apply or plan instead of failing on its state lock.
+  TF_CLI_ARGS_plan: -lock-timeout=10m
 
 jobs:
   pick-out:
