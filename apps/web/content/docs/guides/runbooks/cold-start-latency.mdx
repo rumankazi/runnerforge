@@ -15,9 +15,10 @@ so quiet periods don't trigger it. The 30 s threshold is a placeholder (see the 
 `observability_alerts.tf`).
 
 The service scales to zero (`min_instance_count = 0` in `cloud_run.tf`), so the first webhook after an idle period
-always hits a cold start. Startup runs `config.py` (env vars, the App private key file, `ALLOWED_INSTALLATION_IDS`)
-and then `lifespan` in `main.py`: HTTP client, GCE clients, runner image lookup, machine-types list for the zone,
-and the Cloud Logging client.
+always hits a cold start. Startup runs `config.py` (env vars, the App private key file, `ALLOWED_INSTALLATION_IDS`,
+`ADMISSION`) and then `lifespan` in `main.py`: HTTP client, GCE clients, runner image lookup, machine-types list for
+the zone, the Cloud Logging client, the job store's Firestore client and the tenant registry. It ends by logging the
+admission mode.
 
 ## Impact
 
@@ -39,11 +40,13 @@ gcloud logging read '
   resource.type="cloud_run_revision"
   resource.labels.service_name="runnerforge-orchestrator"
   (
-    jsonPayload.message="Installation allow-list active"
-    OR jsonPayload.message:"ALLOWED_INSTALLATION_IDS unset"
-    OR jsonPayload.message="Resolved runner image"
+    jsonPayload.message="Resolved runner image"
     OR jsonPayload.message:"Runner image resolve failed"
     OR jsonPayload.message:"machine types"
+    OR jsonPayload.message="Admission by tenant registry"
+    OR jsonPayload.message:"ADMISSION=registry without a registry"
+    OR jsonPayload.message="Installation allow-list active"
+    OR jsonPayload.message:"ALLOWED_INSTALLATION_IDS unset"
     OR jsonPayload.message="Clients initialized"
   )
 ' --project=runnerforge --freshness=2h --limit=100 \
@@ -51,7 +54,11 @@ gcloud logging read '
 ```
 
 A long gap before `Resolved runner image` or `Loaded machine types cache` means a slow GCE API call. A gap before
-the first line means slow imports or container start.
+the first line means slow imports or container start. Production logs `Admission by tenant registry` (with
+`allowed_installation_count`) just before `Clients initialized`; a WARNING `ADMISSION=registry without a registry`
+there means the instance has no Firestore client and admits only allow-listed installations (see
+[Registry unavailable](/docs/guides/runbooks/registry-unavailable)). In allowlist mode, the self-host default, the
+line is `Installation allow-list active` or `ALLOWED_INSTALLATION_IDS unset`.
 
 **3. Check GCP status** (status.cloud.google.com) for Cloud Run or Compute Engine issues in `europe-west4`.
 

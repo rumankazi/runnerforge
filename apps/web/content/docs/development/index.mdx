@@ -7,7 +7,7 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 This page tracks what has shipped and what is planned. The code is the source of truth: if a page here disagrees with `apps/orchestrator/`, `infra/`, or `.github/workflows/`, the code wins.
 
-Current releases are in [`.release-please-manifest.json`](https://github.com/rumankazi/runnerforge/blob/main/.release-please-manifest.json). The orchestrator is at **0.18.0**.
+Current releases are in [`.release-please-manifest.json`](https://github.com/rumankazi/runnerforge/blob/main/.release-please-manifest.json). The orchestrator is at **0.26.0**.
 
 ## Where we are
 
@@ -17,10 +17,12 @@ Current releases are in [`.release-please-manifest.json`](https://github.com/rum
 | 2.x | CI/CD, image pipeline, tracing, dashboards | Done |
 | 3.1–3.6 | Operational maturity | Done |
 | 4.0 | Safety fixes before letting other installations in | Done |
-| 4.1–4.6 | Hosted beta and self-hosting | Planned |
+| 4.1 | Docs refresh | Done |
+| 4.2 | Tenant registry and per-installation limits | Done, except cleanup after a suspend or uninstall |
+| 4.3–4.6 | Hosted beta and self-hosting | Planned |
 
 <Callout type="info" title="Product direction">
-  The GitHub App is private today. The plan is a free hosted beta on RunnerForge's own GCP project, with manual approval (the installation allow-list) and per-installation limits, and later a package for self-hosting the whole backend. One installation (a GitHub user or organization) is one tenant. There is no bring-your-own-GCP-project mode and no paid billing on the roadmap for now.
+  The GitHub App is private today. The plan is a free hosted beta on RunnerForge's own GCP project, with manual approval in the tenant registry and per-installation limits (both already in place), and later a package for self-hosting the whole backend. One installation (a GitHub user or organization) is one tenant. There is no bring-your-own-GCP-project mode and no paid billing on the roadmap for now.
 </Callout>
 
 ## Phase 1: webhook foundation (done)
@@ -61,17 +63,17 @@ These close the gaps that mattered before any installation other than the owner'
 - **GitHub's default labels work.** `self-hosted`, `linux` and `x64` are accepted, and label matching is case-insensitive (`machine_policy.py`, and the RunnerForge-label check in `main.py`). `windows`, `macos` and `arm64` are rejected.
 - **`workflow_job` and `installation` are processed.** `/webhook` dispatches on the `X-GitHub-Event` header. `installation` events keep the tenant registry current (ADR-019); `ping` and other events get a 200 and are ignored.
 - **Every VM has a runtime cap.** VMs are created with `max_run_duration` of 6h15m and `instance_termination_action=DELETE` (`compute_client.MAX_VM_RUN_DURATION`). The sweep's `HARD_LIMIT` reuses the same value. Disks carry the instance labels. `RUNNER_IMAGE_PROJECT` sets where the runner image comes from and defaults to `GCP_PROJECT_ID`.
-- **Installation allow-list.** `ALLOWED_INSTALLATION_IDS` comes from the Terraform variable `allowed_installation_ids` (`variables.tf`, `cloud_run.tf`). Unset allows every installation; an empty value allows none. Only `queued` events are gated, so VMs of a removed installation are still cleaned up. The "Webhook event received" log line is written after the gate.
+- **Installation allow-list.** `ALLOWED_INSTALLATION_IDS` comes from the Terraform variable `allowed_installation_ids` (`variables.tf`, `cloud_run.tf`). Unset allows every installation; an empty value allows none. Only `queued` events are gated, so VMs of a removed installation are still cleaned up. The "Webhook event received" log line is written after the gate. Since ADR-019 this is `ADMISSION=allowlist`, the default for a self-hosted install; production admits by the tenant registry, with the owner's installation still listed.
 
-## Phase 4.1 onward (planned)
+## Phase 4.1 onward
 
-Not built yet. Scope may change, and there are no dates.
+Scope may change, and there are no dates for what isn't done.
 
 | # | Scope |
 |---|---|
 | 4.1 | Docs: correct out-of-date pages and add the missing ones. Done. |
-| — | Job store: per-job history and status ([ADR-018](/docs/design/decisions#per-job-state-in-firestore-behind-a-jobstore-protocol)). Next. |
-| 4.2 | Tenant registry: a record of approved installations and their limits. |
+| — | Job store: per-job history and status, and the 5-minute reconciler ([ADR-018](/docs/design/decisions#per-job-state-in-firestore-behind-a-jobstore-protocol)). Done. |
+| 4.2 | Tenant registry: a record of approved installations and their limits ([ADR-019](/docs/design/decisions#tenant-registry-install-to-register-admin-approval-per-installation-limits)). Production admits by it (`ADMISSION=registry`): `runnerforge-admin` approves, over-limit jobs are deferred and started by the reconciler, and orphan VMs are deleted. Done, except cleanup of VMs and records after a suspend or uninstall (rollout step 4). |
 | 4.3 | Hosted isolation: keep tenants' runner VMs apart from each other on the shared project. |
 | 4.4 | Usage tracking per installation. |
 | 4.5 | User-facing dashboard. |

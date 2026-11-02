@@ -3,8 +3,9 @@ title: Limits
 description: What a RunnerForge runner can and can't do during the free beta, and how to ask for more.
 ---
 
-These are the limits that exist in the code and infrastructure today. Per-installation limits are
-planned but not built yet; this page says so where it matters.
+These are the limits that exist in the code and infrastructure today. Each approved installation
+also has its own limits, which are tighter than some of the values below; see
+[Per-installation limits](#per-installation-limits).
 
 ## At a glance
 
@@ -12,12 +13,12 @@ planned but not built yet; this page says so where it matters.
 |---|---|---|
 | OS and architecture | Linux x64 only (Debian 12) | `infra/packer/` |
 | Location | One zone: `europe-west4-a` | `GCP_ZONE` in `infra/terraform/cloud_run.tf` |
-| Max VM runtime | 6 hours 15 minutes, then the VM is deleted | `MAX_VM_RUN_DURATION` in `compute_client.py` |
+| Max VM runtime | 6 hours 15 minutes, then the VM is deleted (1 hour 15 minutes under the beta defaults) | `MAX_VM_RUN_DURATION` in `compute_client.py`, your installation's limits |
 | Boot disk | 10 GB | `compute_client.py` |
 | Work disk | 50 GB `pd-balanced` | `compute_client.py` |
 | Jobs per VM | 1 (ephemeral runner) | `startup_script.sh` |
 | Public IP | None; outbound traffic goes through shared Cloud NAT | `compute_client.py`, `infra/terraform/network.tf` |
-| Who can use it | Approved installations only | `allowed_installation_ids` in `infra/terraform/variables.tf` |
+| Who can use it | Approved installations only | The tenant registry (`admission` in `infra/terraform/variables.tf`) |
 | SLA | None | |
 
 ## Runtime
@@ -30,7 +31,11 @@ minutes cover boot and runner registration.
 Normally the VM is deleted much sooner, as soon as GitHub reports the job as completed. A daily
 cleanup at 00:12 UTC (`infra/terraform/scheduler.tf`) also removes VMs that outlived their job.
 
-If you set `timeout-minutes` above 360, the job is still cut off at the VM cap.
+Under the beta defaults your installation's runtime limit is 60 minutes, so its VMs get a cap of
+**1 hour 15 minutes**: the limit plus the same 15 minutes.
+
+If you set `timeout-minutes` above your runtime limit (360 minutes without one), the job is still cut
+off at the VM cap.
 
 ## Disks
 
@@ -65,15 +70,33 @@ All runners for all users run in one Google Cloud project and share its regional
 - Other machine families have small default CPU quotas, such as 24 vCPUs for E2 and 16 for N2D.
 
 When a quota is exhausted, Compute Engine refuses the VM and your job stays queued with no runner.
-RunnerForge doesn't retry the creation; re-run the job later.
+For an installation with limits, the reconciler tries again on a later run, a limited number of times
+per job. Otherwise RunnerForge doesn't retry the creation; re-run the job later.
 
-<Callout type="warn" title="Not enforced per installation yet">
-  Today there is no per-installation cap on concurrent runners, machine size, or total usage, and
-  [literal machine types](/docs/guides/runner-labels#literal-machine-types) are not restricted per
-  installation. One busy installation can use up the shared quota for everyone. Per-installation
-  limits are planned. Until they ship, approval is the control, and abuse gets an installation removed
-  from the allow-list.
-</Callout>
+## Per-installation limits
+
+Every approved installation has its own limits, stored in the tenant registry
+([ADR-019](/docs/design/decisions#tenant-registry-install-to-register-admin-approval-per-installation-limits)).
+An installation gets these beta defaults when it's approved:
+
+| Limit | Default | Over the limit |
+|---|---|---|
+| Concurrent VMs | 2 | The job waits for a free slot (see below) |
+| Largest size | `medium`: `small`, `medium`, or no size label | The job is rejected |
+| Spot | Always | Every VM is a [Spot VM](/docs/guides/runner-labels#spot-vms), with or without the `spot` label |
+| Job runtime | 60 minutes (VM cap 1 hour 15 minutes) | Compute Engine deletes the VM at the cap |
+| [Literal machine types](/docs/guides/runner-labels#literal-machine-types) | Not allowed | The job is rejected |
+
+- **Waiting for a free slot.** A job queued while your installation already has 2 VMs gets no VM yet.
+  The reconciler, which runs every 5 minutes, starts it once a slot frees, usually within about 5
+  minutes. GitHub may also hand the job to one of your idle runners first.
+- **Rejected jobs** get no VM and stay queued until you cancel them or GitHub cancels them after 24
+  hours. Nothing is reported back to GitHub.
+- **Limits are soft.** Each job counts your VMs before any of them exists, so a burst of jobs queued
+  at the same moment can start more VMs than the limit. The shared quotas above stay the hard ceiling.
+- **The owner can change them.** Limits can be raised or lifted per installation (see
+  [Asking for more](#asking-for-more)). The owner can also suspend an installation: its new jobs get
+  no VM, and VMs already running end with their job or at their cap.
 
 ## Not supported
 

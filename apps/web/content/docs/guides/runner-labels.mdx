@@ -53,7 +53,9 @@ loaded, RunnerForge trusts the label and Compute Engine rejects the VM instead. 
 gets no runner.
 
 <Callout type="warn" title="Shared capacity">
-  Literal types aren't restricted per installation yet. They draw on the same project-wide quotas
+  Under the beta's default [limits](/docs/guides/limits#per-installation-limits), literal types
+  aren't allowed, and a job that names one is rejected. Where an installation's limits allow them,
+  they're capped at the vCPUs of its largest size. They draw on the same project-wide quotas
   as everyone else, and some machine families have very small quotas. See
   [Limits](/docs/guides/limits#shared-capacity). Prefer the size names unless you need a specific
   shape.
@@ -65,6 +67,9 @@ Add `spot` to run on a [Spot VM](https://cloud.google.com/compute/docs/instances
 cost less to run, which helps keep the beta free. In exchange, Compute Engine can reclaim
 (preempt) the VM at any time, and your job then fails or is cancelled. A preempted VM is deleted.
 RunnerForge doesn't retry the job; re-run it from GitHub.
+
+Under the beta's default [limits](/docs/guides/limits#per-installation-limits), every VM is a Spot
+VM, with or without this label.
 
 Use `spot` for jobs that are cheap to retry: tests, linters, builds without side effects. Avoid it
 for deploys or anything that must not stop halfway.
@@ -80,7 +85,13 @@ RunnerForge rejects a job, and creates no VM, when:
 - there's more than one size, such as `[runnerforge, small, large]` or
   `[runnerforge, medium, n2-standard-8]`. Repeating the same size counts too;
 - a literal machine type doesn't exist in the zone;
-- your installation isn't on the allow-list (see [Getting Started](/docs/guides/getting-started)).
+- your installation isn't approved, or is suspended (see [Getting Started](/docs/guides/getting-started));
+- the job asks for more than your installation's [limits](/docs/guides/limits#per-installation-limits)
+  allow: a size above its largest (`large` or `xlarge` under the beta defaults), or a literal machine
+  type they don't allow (any, under the beta defaults).
+
+A job over your installation's concurrent-VM limit isn't rejected. It waits, and starts once a slot
+frees.
 
 <Callout type="error" title="There is no error message today">
   RunnerForge doesn't report the rejection back to GitHub. The job sits at "Waiting for a runner to

@@ -576,15 +576,18 @@ resource "google_logging_metric" "reconcile_orphans_deleted_count" {
 # ---------------------------------------------------------------------------
 # Lost-webhook detection — "queued events accepted vs. queued events that
 # reached a decision". webhook_event_count counts every RunnerForge webhook
-# the handler accepts (after the allow-list), sliced by event_type.
+# the handler accepts (after the allow-list in allowlist mode; every one in
+# registry mode, where admission runs after it), sliced by event_type.
 # queued_outcome_count counts decisions. Sustained divergence for queued
 # means the orchestrator is silently dropping work GitHub thinks it delivered.
 # ---------------------------------------------------------------------------
 
 # Numerator of lost_webhook_ratio: one "Queued webhook outcome" line per
 # queued event that reached a decision (vm_submitted / already_exists /
-# policy_rejected / already_completed). A queued event with no outcome (exception, crash) is the
-# only thing that should count as lost; deliberate no-VM decisions are not.
+# policy_rejected / already_completed, and with ADMISSION=registry rejected /
+# deferred). A queued event with no outcome (exception, crash) is the only
+# thing that should count as lost; deliberate no-VM decisions are not, so
+# admission rejections don't lower the ratio.
 resource "google_logging_metric" "queued_outcome_count" {
   name   = "queued_outcome_count"
   filter = <<-EOT
@@ -604,6 +607,39 @@ resource "google_logging_metric" "queued_outcome_count" {
 
   label_extractors = {
     "outcome" = "EXTRACT(jsonPayload.outcome)"
+  }
+}
+
+# Queued jobs the tenant registry turned away (ADR-019), by outcome and
+# reason: `rejected` (not_registered, pending, suspended, github_inactive,
+# limit_size, registry_unavailable) and `deferred` (limit_concurrency).
+# A separate metric, because adding a label to queued_outcome_count would
+# replace it. registry_unavailable is the alert; the rest are the dashboard's.
+resource "google_logging_metric" "queued_rejection_count" {
+  name   = "queued_rejection_count"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Queued webhook outcome"
+    jsonPayload.outcome=("rejected" OR "deferred")
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+    labels {
+      key        = "outcome"
+      value_type = "STRING"
+    }
+    labels {
+      key        = "reason"
+      value_type = "STRING"
+    }
+  }
+
+  label_extractors = {
+    "outcome" = "EXTRACT(jsonPayload.outcome)"
+    "reason"  = "EXTRACT(jsonPayload.reason)"
   }
 }
 
@@ -790,6 +826,7 @@ resource "time_sleep" "wait_for_log_metrics" {
       google_logging_metric.job_preempted_count.name,
       google_logging_metric.vm_preemption_count.name,
       google_logging_metric.queued_outcome_count.name,
+      google_logging_metric.queued_rejection_count.name,
       google_logging_metric.job_store_write_failure_count.name,
       google_logging_metric.reconcile_stuck_count.name,
       google_logging_metric.reconcile_error_count.name,

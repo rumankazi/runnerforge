@@ -34,12 +34,16 @@ every 5 minutes, a daily sweep (`sweep.py`), and a runtime cap that GCE enforces
     else happens. This keeps traffic for GitHub-hosted runners and your other runners cheap.
   </Step>
   <Step>
-    **Allow-list (`queued` only).** If `ALLOWED_INSTALLATION_IDS` is set and doesn't contain the event's
-    installation, the orchestrator logs `Installation not allowed` and returns **200**. No VM is created.
+    **Allow-list (allowlist mode, `queued` only).** With `ADMISSION=allowlist`, the default for a self-hosted
+    install, if `ALLOWED_INSTALLATION_IDS` is set and doesn't contain the event's installation, the orchestrator
+    logs `Installation not allowed` and returns **200**. No VM is created. Production admits by the tenant
+    registry (`ADMISSION=registry`) instead, after the next step.
   </Step>
   <Step>
-    **Accepted.** The orchestrator logs `Webhook event received` with `event_type`. This comes after the
-    gate on purpose, so rejected installations don't count toward the lost-webhook alert.
+    **Accepted.** The orchestrator logs `Webhook event received` with `event_type`. In allowlist mode this
+    comes after the gate, so installations it turns away don't count toward the lost-webhook alert. In
+    registry mode admission is decided after this line, for every action, so each rejection's outcome line
+    has a matching line here. For `queued` it logs `Admission decision` (`admitted`, `reason`, `limited`).
   </Step>
 </Steps>
 
@@ -52,8 +56,27 @@ every 5 minutes, a daily sweep (`sweep.py`), and a runtime cap that GCE enforces
     `already_completed` and creates no VM.
   </Step>
   <Step>
+    **Admission** (registry mode, [ADR-019](/docs/design/decisions#tenant-registry-install-to-register-admin-approval-per-installation-limits)).
+    An installation in `ALLOWED_INSTALLATION_IDS` (the owner's) is admitted, unlimited, with no registry read.
+    Any other needs an approved registry row that GitHub shows as active. A rejected job logs
+    `Installation not admitted` and the outcome `rejected` with its reason (`not_registered`, `pending`,
+    `suspended`, `github_inactive` or `registry_unavailable`), and returns 200 with no VM.
+    `registry_unavailable` means the read failed and the instance had no cached row; that job has no
+    record and GitHub never redelivers it, so it must be re-run by hand
+    ([runbook](/docs/guides/runbooks/registry-unavailable)).
+  </Step>
+  <Step>
     **Resolve labels** to a machine type and spot flag (see [Label parsing](#label-parsing)). A rejected
     label set logs `Machine policy rejected` with a `reason`, records the decision, and returns 200 with no VM.
+  </Step>
+  <Step>
+    **Apply the limits** (registry mode, installations with limits). A size above `max_size`, or a literal
+    type the limits don't allow, logs `Limit rejected` and the outcome `rejected` (`limit_size`). `spot_only`
+    forces Spot, and the VM's runtime cap becomes `max_runtime_minutes` plus 15 minutes. If the installation
+    already has `max_concurrent_vms` VMs PROVISIONING, STAGING or RUNNING, the job is recorded `deferred`
+    (`limit_concurrency`), logs `Job deferred`, and returns 200 with no VM; the
+    [capacity pass](#capacity-pass) starts it later. If that count fails, the job is admitted; so is one
+    whose deferral can't be recorded, flagged `deferral_unrecorded`.
   </Step>
   <Step>
     **Get a registration token.** The App JWT is exchanged for an installation token. That token then
@@ -76,8 +99,9 @@ returns 500.
 <Callout type="info" title="Job records never block a job">
   Every store call is bounded at 2 s and fails open: a slow or broken store logs `Job store write failed`
   and the webhook carries on. If the first call on a `queued` request fails, that request skips its other
-  writes, so a degraded store adds at most about 4 s. Records are written only for installations on the
-  allow-list, for every action.
+  writes, so a degraded store adds at most about 4 s. Records are written for every action, only for
+  installations that are allow-listed or were approved at least once (in allowlist mode, the allow-list
+  alone). A rejection of an installation never approved is logged, not recorded.
 </Callout>
 
 The VM's startup script then mounts the data disk, runs `config.sh --ephemeral` with the VM name as the
@@ -85,7 +109,7 @@ runner name, and starts the runner. The runner registers with GitHub, and GitHub
 queued job.
 
 <Callout type="warn" title="A rejected job stays queued">
-  When the allow-list or the label policy rejects a job, GitHub still shows it as queued. Unless another
+  When admission, a limit or the label policy rejects a job, GitHub still shows it as queued. Unless another
   of your runners matches its labels, no runner will come, and the job waits until GitHub's own queue
   timeout fails it.
 </Callout>

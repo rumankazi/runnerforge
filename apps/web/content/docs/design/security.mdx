@@ -11,13 +11,19 @@ import { Callout } from 'fumadocs-ui/components/callout';
 
 ## Request path: `/webhook`
 
-Cloud Run is public (`INGRESS_TRAFFIC_ALL`, `allUsers` as `roles/run.invoker` in `cloud_run.tf`) because GitHub delivers webhooks from changing IP addresses. All authentication happens in the app. A webhook goes through these checks in order (`main.py`, then `handlers.py` for the machine policy):
+Cloud Run is public (`INGRESS_TRAFFIC_ALL`, `allUsers` as `roles/run.invoker` in `cloud_run.tf`) because GitHub delivers webhooks from changing IP addresses. All authentication happens in the app. A webhook goes through these checks in order (`main.py`, then `handlers.py` for the machine policy and limits):
 
 1. **HMAC signature.** The orchestrator computes `sha256=` + HMAC-SHA256 of the raw body with the webhook secret and compares it to `X-Hub-Signature-256` using `hmac.compare_digest` (`security.py`). A mismatch returns 401. The warning log keeps only the first 10 characters of the header.
 2. **Event type.** Dispatch is on the `X-GitHub-Event` header, never on payload shape. `workflow_job` drives runners. `installation` events update the tenant registry ([ADR-019](/docs/design/decisions#tenant-registry-install-to-register-admin-approval-per-installation-limits)); they can create a `pending` row or change GitHub's status of a row, never approve one. `ping` and every other event get a 200 and are ignored before the body is parsed.
 3. **RunnerForge label.** A job without the `runnerforge` label (case-insensitive) is acknowledged and skipped.
-4. **Installation allow-list.** For `queued` events, an installation not listed in `ALLOWED_INSTALLATION_IDS` gets a 200, an `Installation not allowed` warning, and no VM. `in_progress` and `completed` always pass, so VMs of an installation removed mid-job are still cleaned up. The `Webhook event received` log line is written after this gate, so rejected installations don't count toward the lost-webhook ratio.
+4. **Admission.** Only `queued` events are gated. `in_progress` and `completed` always pass, so VMs of an installation removed mid-job are still cleaned up. Production admits by the tenant registry (`ADMISSION=registry`, [ADR-019](/docs/design/decisions#tenant-registry-install-to-register-admin-approval-per-installation-limits), `admission.py`):
+   - An installation in `ALLOWED_INSTALLATION_IDS` (the owner's) is admitted, unlimited, without a registry read.
+   - Any other needs a registry row whose `state` is `approved` and whose GitHub status is `active`. Each instance caches a row for 60 s and falls back to the cached row if a read fails.
+   - The decision is made after the `Webhook event received` log line, so a rejection counts toward the lost-webhook ratio as a decision. It gets a 200, no VM, and a `Queued webhook outcome` of `rejected` with its reason: `not_registered`, `pending`, `suspended`, `github_inactive`, or `registry_unavailable` (the read failed and nothing was cached). Only an installation approved before gets the rejection on a job record.
+
+   With `ADMISSION=allowlist`, the default for a self-hosted install, an installation not listed in `ALLOWED_INSTALLATION_IDS` gets a 200, an `Installation not allowed` warning, and no VM. That gate runs before the `Webhook event received` line, so those installations don't count toward the lost-webhook ratio.
 5. **Machine policy.** `machine_policy.py` resolves labels to a machine type. GitHub's default runner labels `self-hosted`, `linux` and `x64` are accepted as no-ops. Any other unknown label, including `windows`, `macos` and `arm64`, rejects the job. Literal machine types (for example `n2-standard-8`) are checked against the zone's machine-type list, which is loaded at startup. If that list can't be loaded, the check is permissive and GCE rejects an invalid type at create time.
+6. **Limits** (registry mode, approved installations with limits; `admission.py`, `handlers.py`). A size above `max_size`, or a literal machine type the limits don't allow, is rejected (`limit_size`). `spot_only` forces Spot, and the VM's runtime cap becomes `max_runtime_minutes` plus 15 minutes. At `max_concurrent_vms` running VMs (one GCE list on the `installation_id` label), the job is deferred, and the reconciler starts it when a slot frees. If that count fails, or the deferral can't be recorded, the job is admitted.
 
 ### Allow-list semantics
 
@@ -30,10 +36,12 @@ Cloud Run is public (`INGRESS_TRAFFIC_ALL`, `allUsers` as `roles/run.invoker` in
 | `123,456` | Only those installation IDs can create VMs. |
 | Malformed ID | `config.py` raises at import, so the new revision fails to start and the deploy stops at the canary step. |
 
-In production, Terraform sets it from `var.allowed_installation_ids` (`variables.tf`, `cloud_run.tf`), and the variable validates that every ID is numeric. CD builds each orchestrator revision from the current service template, while the revision Terraform creates gets no traffic. **A change to the list therefore takes effect with the next orchestrator release**, not with the Terraform apply.
+The table is allowlist mode. In registry mode the list only names the installations that skip the registry, unlimited: unset or empty means none does, never everyone. Production lists only the owner's installation.
 
-<Callout type="warn" title="No per-installation limits yet">
-  The allow-list is the only per-tenant gate today. Within it, a single installation can request any valid machine type and as many concurrent jobs as GitHub sends. The ceilings are project-wide GCE quotas in `europe-west4`, which every installation shares: the quota preferences in `quotas.tf` (200 instances, 1,500 GB SSD) and GCP's default per-family CPU quotas. Per-installation limits are planned.
+In production, Terraform sets it from `var.allowed_installation_ids` and `ADMISSION` from `var.admission` (`variables.tf`, `cloud_run.tf`). The first variable validates that every ID is numeric, the second that the mode is `allowlist` or `registry`; a typo in `ADMISSION` also fails at startup. CD builds each orchestrator revision from the current service template, while the revision Terraform creates gets no traffic. **A change to either therefore takes effect with the next orchestrator release**, not with the Terraform apply. Never roll back to allowlist mode with an empty list: it admits nobody.
+
+<Callout type="warn" title="Limits are soft">
+  Per-installation limits (`registry.Limits`, beta defaults in [Limits](/docs/guides/limits#per-installation-limits)) cap each approved tenant, but each job counts VMs before any of them exists, so a burst can overshoot `max_concurrent_vms`, and a failed count admits. Allow-listed installations have no limits. The hard ceilings are project-wide GCE quotas in `europe-west4`, which every installation shares: the quota preferences in `quotas.tf` (200 instances, 1,500 GB SSD) and GCP's default per-family CPU quotas.
 </Callout>
 
 ## Request paths: `/sweep` and `/reconcile`
@@ -54,7 +62,7 @@ In production, Terraform sets it from `var.allowed_installation_ids` (`variables
 `runner_name` in a `completed` payload is chosen by whoever registered the runner, so the name alone proves nothing. `handlers.handle_completed` deletes a VM only when all of these hold:
 
 1. `runner_name` starts with `runnerforge-`. Other runners are normal traffic, so a non-matching name is logged at info level and skipped.
-2. The VM exists, which `compute_client.get_vm_labels_by_name` checks. A missing VM isn't deleted again, but a failed or cancelled job still gets the preemption cross-check, and only for allow-listed installations, with the name matched exactly in the audit-log query.
+2. The VM exists, which `compute_client.get_vm_labels_by_name` checks. A missing VM isn't deleted again, but a failed or cancelled job still gets the preemption cross-check, and only for installations that get job records (allow-listed, or approved at least once), with the name matched exactly in the audit-log query.
 3. The VM's own labels have `runner=runnerforge` and an `installation_id` equal to the event's installation.
 
 Failing check 3 logs `Refusing to delete VM not owned by this installation` and deletes nothing. A signed webhook from installation A therefore can't delete installation B's VM.
@@ -158,7 +166,7 @@ These resources also have `lifecycle { prevent_destroy = true }`. `.github/CODEO
 ## Known gaps
 
 - Installation tokens aren't down-scoped to the job's repository.
-- There are no per-installation limits on concurrency or machine size. This is planned.
+- Per-installation limits are soft: a burst of jobs can overshoot the concurrency limit, and a failed concurrency count admits the job.
 - All tenants' VMs share one project, one zone and the `default` VPC. Per-tenant isolation is planned.
 - The orchestrator's `compute.instanceAdmin.v1` is project-wide.
 - `ci-terraform-apply` holds `roles/editor`. This is an explicit exception in `no_basic_roles.rego`.

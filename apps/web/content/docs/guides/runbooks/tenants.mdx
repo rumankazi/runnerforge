@@ -10,10 +10,11 @@ Installing the GitHub App registers the installation as `pending` in the tenant 
 Only the owner decides what happens next, with `runnerforge-admin`. It runs on the owner's machine with their own
 gcloud credentials: no service account, workflow or release is involved.
 
-<Callout type="info" title="Admission still uses the allow-list">
-  Until rollout step 3 switches `ADMISSION` to `registry`, approvals only change the shadow decision
-  (`Admission shadow decision` in the orchestrator's logs). Jobs are still admitted by
-  `ALLOWED_INSTALLATION_IDS`.
+<Callout type="info" title="Approvals admit">
+  Production admits by the tenant registry (`ADMISSION=registry`). An approved installation gets VMs within its
+  limits; any other installation's jobs are rejected (`Installation not admitted` in the orchestrator's logs, with
+  the reason). Installations in `ALLOWED_INSTALLATION_IDS` (the owner's) are admitted unlimited without a registry
+  read. A self-hosted install without a registry keeps the default, `ADMISSION=allowlist`, and ignores approvals.
 </Callout>
 
 ## Setup
@@ -38,7 +39,7 @@ needs read and write access to that Firestore database; the project owner role h
 |---|---|
 | `list [--state pending]` | Every row: account, `state`, GitHub's status, first approval, limits |
 | `approve <id> [--unlimited]` | `state: approved`. A row with no limits gets the beta defaults; one with limits keeps them |
-| `suspend <id>` | `state: suspended`: no new VMs. Running VMs end with their job or runtime cap; idle ones are deleted by the reconciler's orphan cleanup |
+| `suspend <id>` | `state: suspended`: no new VMs, and its deferred jobs are rejected instead of started. Running VMs end with their job or runtime cap; idle ones are deleted by the reconciler's orphan cleanup |
 | `set-limits <id> …` | Change limits. Ones not named stay as they are; `--unlimited` or `--defaults` replace all of them |
 
 `set-limits` options: `--max-concurrent-vms N` (1–30), `--max-size small|medium|large|xlarge`,
@@ -64,7 +65,8 @@ unsuspends it.
 
 1. Find it: `uv run runnerforge-admin list --state pending`. Check the account against the access request.
 2. Approve it: `uv run runnerforge-admin approve <id>`. The beta defaults are 2 concurrent VMs, up to `medium`,
-   Spot only, 60 minutes per job and no literal machine types.
+   Spot only, 60 minutes per job (a VM cap of 1 h 15 min) and no literal machine types. A job over the VM limit is
+   deferred, and the reconciler starts it when a slot frees; a job above `max_size` is rejected (`limit_size`).
 3. Check the row: `uv run runnerforge-admin list --state approved`.
 
 ## What gets recorded
