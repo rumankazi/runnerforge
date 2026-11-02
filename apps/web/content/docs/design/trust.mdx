@@ -95,7 +95,7 @@ No tokens are stored there.
 ## Isolation today
 
 <Callout type="warn" title="Tenants share one project">
-  All installations' VMs run in the same GCP project, zone and VPC network (`default`). Each job gets its own VM, but RunnerForge doesn't configure firewall rules to separate one tenant's VMs from another's on that network. Per-tenant isolation is planned and doesn't exist yet.
+  All installations' VMs run in the same GCP project, zone and VPC network (`default`). Each job gets its own VM, but RunnerForge doesn't configure firewall rules to separate one tenant's VMs from another's on that network, and a job can get root on its VM through Docker. Isolation is designed ([ADR-020](/docs/design/decisions#hosted-isolation-a-pool-project-for-tenant-vms): a separate project, VMs with no service account, egress on ports 80 and 443 only) and comes before the App is opened to anyone else.
 </Callout>
 
 Other tenant-level controls that exist today:
