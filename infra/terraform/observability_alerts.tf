@@ -329,11 +329,12 @@ resource "google_monitoring_alert_policy" "registry_unavailable" {
   conditions {
     display_name = "Admission rejections with reason registry_unavailable"
     condition_threshold {
-      filter                  = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.queued_rejection_count.name}\" resource.type=\"cloud_run_revision\" metric.label.outcome=\"rejected\" metric.label.reason=\"registry_unavailable\""
-      comparison              = "COMPARISON_GT"
-      threshold_value         = 0
-      duration                = "0s"
-      evaluation_missing_data = "EVALUATION_MISSING_DATA_INACTIVE"
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.queued_rejection_count.name}\" resource.type=\"cloud_run_revision\" metric.label.outcome=\"rejected\" metric.label.reason=\"registry_unavailable\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      # Fire on the first event. GCP rejects evaluation_missing_data on a
+      # zero duration; with no data the condition simply isn't met.
+      duration = "0s"
 
       aggregations {
         alignment_period     = "900s"
