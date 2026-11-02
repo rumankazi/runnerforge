@@ -10,8 +10,19 @@ variable "github_app_id" {
   default     = "3851412"
 }
 
+variable "admission" {
+  description = "How queued jobs are admitted (ADR-019). \"registry\": installations in allowed_installation_ids always, unlimited; every other installation needs an approved tenant-registry row and gets its limits. \"allowlist\": only allowed_installation_ids, unlimited. Takes effect with the next orchestrator deploy."
+  type        = string
+  default     = "registry"
+
+  validation {
+    condition     = contains(["allowlist", "registry"], var.admission)
+    error_message = "admission must be \"allowlist\" or \"registry\"."
+  }
+}
+
 variable "allowed_installation_ids" {
-  description = "GitHub App installation IDs allowed to create runner VMs. Must stay in place before and after the App is made public: every new tenant is added here explicitly (manual approval during the free beta). An empty list allows nobody."
+  description = "GitHub App installation IDs that are always admitted, unlimited, without a registry read (the owner's). With admission = \"registry\" every other installation still needs an approved registry row, and an empty list means none bypasses the registry. With admission = \"allowlist\" only these get VMs, and an empty list allows nobody: never roll back to allowlist with an empty list."
   type        = list(string)
   default = [
     "135399152", # rumankazi (dogfood: rumankazi/runnerforge)

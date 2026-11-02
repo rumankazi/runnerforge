@@ -1,0 +1,148 @@
+---
+title: Registry unavailable
+description: 'Runbook for the alert "Queued job rejected: registry unavailable (15m)": queued jobs turned away because the tenant registry couldn''t be read.'
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Symptom
+
+Email from "RunnerForge Alerts": **Queued job rejected: registry unavailable (15m)**, severity WARNING.
+
+It fires on any `Queued webhook outcome` line with `outcome: rejected` and `reason: registry_unavailable` in a
+15-minute window (`queued_rejection_count`), and closes 30 minutes after they stop. Production admits by the tenant
+registry (`ADMISSION=registry`,
+[ADR-019](/docs/design/decisions#tenant-registry-install-to-register-admin-approval-per-installation-limits)). For
+an installation that isn't in `ALLOWED_INSTALLATION_IDS`, each instance reads its registry row and caches it for
+60 s. If a read fails, the instance uses the entry it cached last. If it has none, admission fails closed and the
+job is rejected with this reason.
+
+## Impact
+
+Each event is a lost job. A rejection with this reason writes no job record, so the reconciler never sees the job,
+and GitHub doesn't redeliver the webhook. The job stays queued on GitHub until it cancels it after 24 hours. Each
+rejection logs `Installation not admitted` (WARNING, `reason: registry_unavailable`) and then the outcome line;
+both carry the job's `repo`, `run_id`, `job_id` and `installation_id`.
+
+Not affected:
+- installations in `ALLOWED_INSTALLATION_IDS` (the owner's): they are admitted without a registry read;
+- jobs already running: `in_progress` and `completed` are always handled. Only their record facts are skipped,
+  and the reconciler fills them from GitHub;
+- deferred jobs: the reconciler's capacity pass skips an installation it can't read for that run, without marking
+  its jobs stuck, and starts them once reads succeed.
+
+## Diagnose
+
+All commands are read-only.
+
+**1. List the lost jobs.**
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  jsonPayload.message=("Installation not admitted" OR "Queued webhook outcome")
+  jsonPayload.reason="registry_unavailable"
+' --project=runnerforge --freshness=1h --limit=50 \
+  --format='table(timestamp, jsonPayload.message, jsonPayload.installation_id, jsonPayload.repo, jsonPayload.run_id, jsonPayload.job_id, labels.instanceId)'
+```
+
+Each job appears twice, once per line. Keep the `repo`, `run_id` and `job_id` for the tenant.
+
+**2. See why the reads failed.**
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  jsonPayload.message="Registry read failed"
+' --project=runnerforge --freshness=1h --limit=50 \
+  --format='table(timestamp, jsonPayload.operation, jsonPayload.error_class, jsonPayload.installation_id, labels.instanceId, resource.labels.revision_name)'
+```
+
+`operation: get` is an admission read. `list_all` comes from every reconciler run in registry mode (the rows its
+orphan cleanup and capacity pass work from) and from the hourly backfill. A failed `get` on an instance that had the
+row cached admits from the cache, so webhook-path failures without a matching rejection lose no job. A failed
+`list_all`, or a reconciler `get` with nothing cached, skips tenants for that run: their deferred jobs start and
+their orphan VMs are deleted only on a later run.
+
+| What you see | Likely cause |
+|---|---|
+| `TimeoutError` (the 2 s bound), `RetryError`, `DeadlineExceeded` | Firestore is slow or unavailable. Check the [Google Cloud status page](https://status.cloud.google.com/) for Firestore in `europe-west4`. |
+| `PermissionDenied` on every read | The orchestrator's `roles/datastore.user` binding or its condition on `projects/runnerforge/databases/runnerforge` changed (`firestore.tf`), or `FIRESTORE_DATABASE` on the revision doesn't name `runnerforge`. |
+| `RefreshError` | The orchestrator couldn't get an access token from the metadata server: a platform problem, not the registry. |
+| Rejections with no `Registry read failed` line | The instance has no registry: `JOB_STORE=none`, or the Firestore client wasn't created at startup. Check step 3. |
+
+Rejections cluster on new instances. The cache lives in each instance and starts empty, and the service scales to
+zero, so after an idle period or a new revision no instance has a row to fall back on.
+
+**3. Check the revision's settings and startup.** Read the env of the revision serving traffic, not the service
+template: Terraform updates the template, and a change reaches traffic only with the next deploy.
+
+```bash
+gcloud run services describe runnerforge-orchestrator --region europe-west4 --project runnerforge \
+  --format='value(status.traffic)'
+```
+
+```bash
+gcloud run revisions describe <revision> --region europe-west4 --project runnerforge \
+  --format='yaml(spec.containers[0].env)'
+```
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  (
+    jsonPayload.message="Admission by tenant registry"
+    OR jsonPayload.message:"ADMISSION=registry without a registry"
+    OR jsonPayload.message:"Job store"
+    OR jsonPayload.message:"job store init skipped"
+  )
+' --project=runnerforge --freshness=1d --limit=50 \
+  --format='table(timestamp, severity, labels.instanceId, resource.labels.revision_name, jsonPayload.message)'
+```
+
+`ADMISSION=registry without a registry` means the instance can't read the registry at all: every installation
+outside the allow-list is rejected.
+
+**4. Check Firestore's own view.** In Cloud Monitoring, chart `firestore.googleapis.com/api/request_count`
+grouped by `response_code` for database `runnerforge`. Non-`OK` codes confirm the Firestore side.
+
+## Mitigate
+
+<Callout type="warn" title="Mutations">
+  Redelivering creates VMs. A rollback or a Terraform change touches production.
+</Callout>
+
+<Callout type="warn" title="Don't deploy or roll back during a Firestore outage">
+  Instances that have read a tenant's row keep admitting it from their cache while reads fail. A new deploy or a
+  rollback starts fresh instances with empty caches, so every installation outside the allow-list is then rejected
+  until reads succeed. Change the revision only when the revision itself is the cause.
+</Callout>
+
+- **Lost jobs:** once reads succeed again, redeliver each lost `queued` delivery from the GitHub App settings,
+  Advanced, Recent Deliveries, or ask the tenant to re-run the job. Either way the job is admitted again.
+- **Firestore incident:** nothing to change. Admission recovers when Firestore does.
+- **IAM or env change:** restore it through Terraform (`firestore.tf`, `cloud_run.tf`). An env fix takes effect
+  with the next orchestrator deploy.
+- **Regression after a release:** roll back with the `rollback` mode of `deploy-orchestrator.yaml`
+  (approval-gated), to a revision that has `ADMISSION=registry`.
+- **Last resort, for one tenant during a long outage:** add its installation ID to `allowed_installation_ids`
+  (`variables.tf`). It is then admitted unlimited, without its limits, and only from the next orchestrator deploy.
+  That deploy empties every instance's cache (the callout above), so it trades the other tenants' cached admissions
+  for this one. Remove it once reads succeed.
+
+A revision without `ADMISSION=registry` admits by the allow-list alone: only `allowed_installation_ids` gets VMs,
+and with an empty list nobody does. Never roll back to one with an empty list.
+
+## Verify
+
+- No new lines from step 1, and the alert closes 30 minutes after the last one.
+- `Admission decision` lines for tenants show `admitted: true`, `reason: approved`.
+- Dashboard, Admission, "Queued rejections and deferrals by reason": no `rejected: registry_unavailable` bars.
+
+## Escalate
+
+If rejections continue with Firestore healthy and IAM and env unchanged, open a GitHub issue with the
+`error_class`, `instanceId` and revision values from steps 2 and 3.

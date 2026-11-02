@@ -166,9 +166,10 @@ resource "google_monitoring_alert_policy" "webhook_rejection_rate" {
 }
 
 # Lost-webhook detection: queued events that reached a decision ("Queued
-# webhook outcome": VM submitted, duplicate, or label-policy rejection) over
-# queued events admitted ("Webhook event received", logged after the
-# installation allow-list). Should sit at 1.0; a sustained drop below 0.9
+# webhook outcome": VM submitted, duplicate, label-policy rejection, and with
+# ADMISSION=registry an admission rejection or deferral) over queued events
+# accepted ("Webhook event received", logged after the installation
+# allow-list in allowlist mode, before admission in registry mode). Should sit at 1.0; a sustained drop below 0.9
 # means queued events are failing before any decision (token errors, crashes)
 # and those jobs hang in "queued" because GitHub doesn't auto-retry.
 # Deliberate rejections are counted by machine_policy_reject_count instead;
@@ -307,6 +308,49 @@ resource "google_monitoring_alert_policy" "job_store_write_failures" {
 
   documentation {
     content   = "Job store writes on the webhook path are failing; jobs still run, but their records are missing. Runbook: https://github.com/rumankazi/runnerforge/blob/main/apps/web/content/docs/guides/runbooks/job-store-writes.mdx"
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = [google_monitoring_notification_channel.email.name]
+  depends_on            = [time_sleep.wait_for_log_metrics]
+}
+
+# A queued job rejected because the tenant registry couldn't be read
+# (ADR-019): the instance had no cached row for the installation and the
+# Firestore read failed. Admission fails closed, the job gets no record, and
+# GitHub never redelivers the webhook, so each one is a job lost for good.
+# Volume is tiny and every event matters: any in 15 minutes alerts. Allow-
+# listed installations never read the registry, so they can't trigger it.
+resource "google_monitoring_alert_policy" "registry_unavailable" {
+  display_name = "Queued job rejected: registry unavailable (15m)"
+  combiner     = "OR"
+  severity     = "WARNING"
+
+  conditions {
+    display_name = "Admission rejections with reason registry_unavailable"
+    condition_threshold {
+      filter                  = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.queued_rejection_count.name}\" resource.type=\"cloud_run_revision\" metric.label.outcome=\"rejected\" metric.label.reason=\"registry_unavailable\""
+      comparison              = "COMPARISON_GT"
+      threshold_value         = 0
+      duration                = "0s"
+      evaluation_missing_data = "EVALUATION_MISSING_DATA_INACTIVE"
+
+      aggregations {
+        alignment_period     = "900s"
+        per_series_aligner   = "ALIGN_DELTA"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  # A sparse counter: close the incident once it stops, instead of leaving it
+  # open for days.
+  alert_strategy {
+    auto_close = "1800s"
+  }
+
+  documentation {
+    content   = "A queued job was rejected because the tenant registry couldn't be read; it has no record and won't start. Runbook: https://github.com/rumankazi/runnerforge/blob/main/apps/web/content/docs/guides/runbooks/registry-unavailable.mdx"
     mime_type = "text/markdown"
   }
 

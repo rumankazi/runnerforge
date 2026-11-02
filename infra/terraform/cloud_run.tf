@@ -82,6 +82,12 @@ resource "google_cloud_run_v2_service" "orchestrator" {
         name  = "ALLOWED_INSTALLATION_IDS"
         value = join(",", var.allowed_installation_ids)
       }
+      # Admission mode (ADR-019): the tenant registry, or the allow-list alone.
+      # Like the allow-list, takes effect with the next orchestrator deploy.
+      env {
+        name  = "ADMISSION"
+        value = var.admission
+      }
       # Per-job store (ADR-018, firestore.tf). Like the allow-list, takes effect
       # with the next orchestrator release.
       env {

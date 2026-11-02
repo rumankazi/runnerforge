@@ -11,8 +11,8 @@ The code is the source of truth. If this page disagrees with it, the page is wro
 
 ## Where things stand
 
-- **The App is private today.** Only allow-listed installations get VMs. An installation is one GitHub user or organization, and RunnerForge treats each one as a tenant. Personal accounts and organizations are both supported.
-- **Planned:** a free hosted beta on RunnerForge's GCP project, with manual approval through the allow-list and per-installation limits. Running the whole backend yourself is also planned for later. Neither has a date, and there is no paid tier.
+- **The App is private today,** so only the owner can install it. An installation gets VMs only once the owner approves it in the tenant registry, and then only within its limits, unless the owner lifts them. The owner's own installation is on the allow-list (`ALLOWED_INSTALLATION_IDS`): admitted unlimited, without a registry read. An installation is one GitHub user or organization, and RunnerForge treats each one as a tenant. Personal accounts and organizations are both supported.
+- **Planned:** a free hosted beta on RunnerForge's GCP project, with manual approval through the tenant registry and [per-installation limits](/docs/guides/limits#per-installation-limits). Running the whole backend yourself is also planned for later. Neither has a date, and there is no paid tier.
 
 ## What the App can access
 
@@ -37,12 +37,12 @@ All of them are in [`github_client.py`](https://github.com/rumankazi/runnerforge
 | Call | When | Why |
 |---|---|---|
 | `POST /app/installations/{installation_id}/access_tokens` | For each queued job that passes our checks; during the daily cleanup sweep (at most once per installation, only if it needs to check a runner); and every 5 minutes in the reconciler (at most once per installation, only if one of its job records is due a check or waiting for a runner, or one of its VMs needs a runner check) | Gets a short-lived installation token |
-| `POST /repos/{owner}/{repo}/actions/runners/registration-token` | For each queued job that passes our checks; and, once admission uses the tenant registry, in the reconciler for each job it starts under your installation's limits (at most 10 a run, at most 2 per job) | Gets a token the new VM uses to register itself as a runner for that repository |
+| `POST /repos/{owner}/{repo}/actions/runners/registration-token` | For each queued job that passes our checks; and in the reconciler, for each job it starts under your installation's limits (at most 10 a run; at most 2 starts per job, plus up to 3 retries after a zone or quota capacity error) | Gets a token the new VM uses to register itself as a runner for that repository |
 | `GET /repos/{owner}/{repo}/actions/runners?name={vm_name}` | Daily sweep, only for a VM that is between 1 hour and 6h15m old; and every 5 minutes in the reconciler, for a VM over 15 minutes old (at most 10 a run) | Checks whether the runner on a still-running VM is busy, so an idle or finished VM can be deleted |
 | `DELETE /repos/{owner}/{repo}/actions/runners/{runner_id}` | Reconciler, only for a runner of ours that GitHub lists as idle, with no job of yours it could take, right before its VM is deleted | Removes the runner's registration, so GitHub can't hand it one of your jobs while its VM shuts down |
 | `GET /app/installations` | Reconciler, once an hour (as the App, with its JWT; paginated) | Lists every installation of the App, to keep the tenant registry current if an `installation` webhook was lost |
 | `GET /app/installations/{installation_id}` | Reconciler, once an hour, only for an installation missing from that list | Confirms it was really uninstalled before its row is marked so |
-| `GET /repos/{owner}/{repo}/actions/jobs/{job_id}` | Reconciler, every 5 minutes, for job records that are open and due a check (at most 25 a run, with backoff up to 6 hours per job), and, once admission uses the tenant registry, for jobs waiting for a free slot under your limits (at most 3 per free slot a run) | Reads the job's status, conclusion and runner, to fill in what the webhooks missed, and to check a waiting job still needs a runner before starting one |
+| `GET /repos/{owner}/{repo}/actions/jobs/{job_id}` | Reconciler, every 5 minutes, for job records that are open and due a check (at most 25 a run, with backoff up to 6 hours per job), and for jobs waiting for a free slot under your limits (at most 3 per free slot a run) | Reads the job's status, conclusion and runner, to fill in what the webhooks missed, and to check a waiting job still needs a runner before starting one |
 
 There are no other calls. In particular, the orchestrator never reads repository contents, pull requests, issues or workflow files through the API. Your installation settings show the exact permissions the App holds.
 
@@ -71,7 +71,7 @@ Everything below lives in the GCP project `runnerforge`. Cloud Run and the runne
 The database `runnerforge` is in `europe-west4`. It holds a record only for jobs from approved installations ([ADR-018](/docs/design/decisions#per-job-state-in-firestore-behind-a-jobstore-protocol)), keyed `{run_id}-{job_id}-{run_attempt}`:
 
 - **Identity:** `installation_id`, `repository_id`, `repo` (`owner/name`), `run_id`, `job_id`, `run_attempt` and your job's labels.
-- **What happened:** the decision (VM submitted, duplicate, or label rejection with its reason and the offending labels), the VM creation outcome, the runner name, the job's conclusion, a preemption, or the step that failed and its error class. Each with a timestamp.
+- **What happened:** the decision (VM submitted, duplicate, label rejection with its reason and the offending labels, or a rejection or deferral under your approval or limits with its reason), the VM creation outcome, the runner name, the job's conclusion, a preemption, or the step that failed and its error class. Each with a timestamp.
 - **Retention:** a TTL policy deletes each record after 90 days, usually within a day of expiry. Point-in-time recovery keeps 7 days of earlier versions.
 
 **In Firestore, one row per installation (the tenant registry):**
@@ -100,7 +100,8 @@ No tokens are stored there.
 
 Other tenant-level controls that exist today:
 
-- **Admission.** Only allow-listed installations can create VMs. Other installations get no VM, but their webhooks are still acknowledged.
+- **Admission.** Only installations the owner has approved in the tenant registry can create VMs, plus the allow-listed owner's installation. Other installations get no VM, but their webhooks are still acknowledged.
+- **Per-installation limits.** Each approved installation is capped on concurrent VMs, machine size and runtime unless the owner lifts its limits ([Limits](/docs/guides/limits#per-installation-limits)), so one tenant can't take the whole shared pool.
 - **Deletion ownership.** A "job completed" event can delete a VM only if that VM's own labels say RunnerForge created it for the same installation that sent the event. One tenant's events can't delete another tenant's runner.
 
 ## What limits the damage if RunnerForge is compromised
@@ -125,8 +126,8 @@ More detail on the implementation is in [Security](/docs/design/security).
 
 - **Administration is broader than we need.** It's the only permission GitHub accepts for repository-level runner registration.
 - **Tenants aren't isolated** at the project or network level yet. See [Isolation today](#isolation-today).
-- **No per-installation limits yet.** They're planned for the hosted beta.
+- **Limits are soft.** A burst of jobs queued at once can start more VMs than an installation's concurrency limit, and every tenant shares the project's quotas.
 - **No certification or third-party audit.** This is a portfolio platform-engineering project, not a commercial service. You can check the claims here against the public source code, but no third party has attested them.
 - **No bug bounty.** Please report security issues privately to the maintainer, not in a public issue.
 
-Last reviewed: 2026-11-01.
+Last reviewed: 2026-11-02.
