@@ -63,9 +63,9 @@ resource "google_project_iam_member" "ci_terraform_apply_logging_config_writer" 
 
 # What the plan account needs to refresh this module, and nothing that reads a
 # VM: roles/viewer and roles/iam.securityReviewer both list instances, and an
-# instance's metadata holds its runner registration token. Those two hand
-# grants stay until this role is proven, then a separate PR removes them.
-# pool_reader.rego checks that every resource type here is readable with it.
+# instance's metadata holds its runner registration token. It replaced those two
+# hand grants (removed below). pool_reader.rego checks that every resource type
+# here is readable with it.
 resource "google_project_iam_custom_role" "terraform_reader" {
   project     = var.pool_project_id
   role_id     = "poolTerraformReader"
@@ -190,4 +190,60 @@ resource "google_project_iam_member" "orchestrator_pool_logging_viewer" {
   project = var.pool_project_id
   role    = "roles/logging.viewer"
   member  = local.orchestrator
+}
+
+# ------- Grants removed (ADR-020 step 3b) -------
+
+# Grants made outside Terraform that must stay gone. A _member_remove resource
+# removes its grant when created and stays in state while the grant is absent.
+# If the grant comes back, the next refresh drops it from state, so the next
+# plan shows it to add (drift), and applying a plan made after that removes the
+# grant again (tfaction applies the PR's saved plan). Deleting one of these
+# blocks only stops that check; it never restores a grant.
+#
+# So re-granting roles/viewer is no fix for a plan that can't read something:
+# add the missing permission to poolTerraformReader by hand instead, and make
+# the PR that codifies it the next pool merge (terraform-drift runbook).
+#
+# _member_remove rewrites the project policy without the provider's IAM lock or
+# its retry on a concurrent change, so each one waits for every other write to
+# the project policy here (enabling an API can add a service agent to it), and
+# for the removal before it. Add any new one (an IAM member or binding, an API)
+# to the first removal's depends_on.
+
+# Replaced by poolTerraformReader.
+resource "google_project_iam_member_remove" "ci_terraform_plan_pool_viewer" {
+  project = var.pool_project_id
+  role    = "roles/viewer"
+  member  = local.ci_terraform_plan
+
+  depends_on = [
+    google_project_service.enabled,
+    google_project_iam_member.ci_terraform_apply_pool_editor,
+    google_project_iam_member.ci_terraform_apply_pool_security_admin,
+    google_project_iam_member.ci_terraform_apply_pool_role_admin,
+    google_project_iam_member.ci_terraform_apply_logging_config_writer,
+    google_project_iam_member.ci_terraform_plan_pool_reader,
+    google_project_iam_member.orchestrator_pool_vms,
+    google_project_iam_member.orchestrator_pool_logging_viewer,
+  ]
+}
+
+# Replaced by poolTerraformReader.
+resource "google_project_iam_member_remove" "ci_terraform_plan_pool_security_reviewer" {
+  project = var.pool_project_id
+  role    = "roles/iam.securityReviewer"
+  member  = local.ci_terraform_plan
+
+  depends_on = [google_project_iam_member_remove.ci_terraform_plan_pool_viewer]
+}
+
+# Granted by Google when Compute was enabled. The account is disabled
+# (service_accounts.tf); this keeps Editor off it if it's ever re-enabled.
+resource "google_project_iam_member_remove" "default_compute_pool_editor" {
+  project = var.pool_project_id
+  role    = "roles/editor"
+  member  = "serviceAccount:${data.google_project.pool.number}-compute@developer.gserviceaccount.com"
+
+  depends_on = [google_project_iam_member_remove.ci_terraform_plan_pool_security_reviewer]
 }

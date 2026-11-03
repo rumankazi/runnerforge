@@ -5,7 +5,7 @@ description: The daily drift check found differences between the Terraform code 
 
 ## Symptom
 
-The tfaction drift issue for `infra/terraform` is reopened, with a comment from the `drift-detection.yaml` run that holds the plan result between current GCP state and the TF code on `main`. The issue itself is created by `create-drift-issues.yaml`; drift detection reopens it when the plan shows changes and closes it when the plan is clean.
+The tfaction drift issue for `infra/terraform` or `infra/terraform-pool` (one issue per target) is reopened, with a comment from the `drift-detection.yaml` run that holds the plan result between current GCP state and the TF code on `main`. The issue itself is created by `create-drift-issues.yaml`; drift detection reopens it when the plan shows changes and closes it when the plan is clean.
 
 ## What this means
 
@@ -26,6 +26,7 @@ Open the issue's latest comment. The plan shows `~`, `+`, `-` markers for resour
 | `~ google_cloud_run_v2_service.orchestrator` with field-level changes | Someone changed Cloud Run via console (env vars, scaling, etc.) |
 | `+` on a resource the code declares | It was deleted out-of-band; the next apply would recreate it |
 | `-/+` (replace) | A changed field forces replacement; read the `# forces replacement` line before applying |
+| `+ google_project_iam_member_remove.*` (pool) | A grant removed in ADR-020 step 3b is back, made by hand. Remove it by hand now with `gcloud projects remove-iam-policy-binding runnerforge-pool --member=<member> --role=<role> --condition=None`, then find out who added it ([Pool audit alerts](/docs/guides/runbooks/pool-audit)). A pool apply removes it only if its PR was planned after the grant came back |
 
 Runner VMs never show up here: the orchestrator creates them through the GCE API, and Terraform doesn't manage them.
 
@@ -48,6 +49,18 @@ If the change was unintended:
 1. Manually revert via console / gcloud / API to match the TF declaration
 2. Verify with `gcloud` that the resource matches what's in the `.tf` file
 3. Next drift run sees clean state → issue auto-closes.
+
+## Pool plan lacks a permission
+
+`ci-terraform-plan` reads the pool through the custom `poolTerraformReader` role only. If a pool plan or drift run fails with a 403 naming a permission, add that permission to the role by hand (you hold owner):
+
+```bash
+gcloud iam roles update poolTerraformReader --project=runnerforge-pool --add-permissions=<permission>
+```
+
+Then open a PR adding it to the role's `permissions` in `infra/terraform-pool/iam.tf`, to `pool_reader_permissions` in `infra/policies/pool_reader.rego`, and to the `pool_reader_coverage` entry (same file) of the resource type whose refresh failed, so conftest fails if a later PR drops it. Merge it before any other pool change: a pool apply planned after your hand change removes the permission again. Never add `compute.instances.*`, `compute.disks.*` or log-entry reads.
+
+Don't re-grant `roles/viewer` instead: `google_project_iam_member_remove.ci_terraform_plan_pool_viewer` removes it on the next pool apply, and it can read VM metadata, which holds runner registration tokens.
 
 ## Manual re-check (don't wait for the cron)
 
