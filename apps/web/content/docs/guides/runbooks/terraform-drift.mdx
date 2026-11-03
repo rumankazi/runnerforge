@@ -62,6 +62,22 @@ Then open a PR adding it to the role's `permissions` in `infra/terraform-pool/ia
 
 Don't re-grant `roles/viewer` instead: `google_project_iam_member_remove.ci_terraform_plan_pool_viewer` removes it on the next pool apply, and it can read VM metadata, which holds runner registration tokens.
 
+## Default compute account enabled
+
+A plan, apply or drift run fails with "The control project's default compute service account is enabled" or "The pool's default compute service account is enabled". Both accounts must stay disabled ([ADR-020](/docs/design/decisions#hosted-isolation-a-pool-project-for-tenant-vms)): the control one is an editor, so its token can act as `ci-terraform-apply`. Nothing should run as either. Disable it again (you hold owner):
+
+```bash
+gcloud iam service-accounts disable <project-number>-compute@developer.gserviceaccount.com --project=<project>
+```
+
+The control project is `runnerforge` (number 8547588670), the pool `runnerforge-pool` (355964341703). Then find out who enabled it:
+
+```bash
+gcloud logging read 'LOG_ID("cloudaudit.googleapis.com/activity") AND protoPayload.methodName:"EnableServiceAccount"' --project=<project> --freshness=7d --format='table(timestamp,protoPayload.authenticationInfo.principalEmail,protoPayload.resourceName)'
+```
+
+If it was enabled on purpose because something needs it, give that thing its own service account instead. To roll step 3e back, merge a PR deleting `infra/terraform/default_service_account.tf` before you re-enable the control account.
+
 ## Manual re-check (don't wait for the cron)
 
 To verify the fix without waiting until 08:17 UTC tomorrow:
