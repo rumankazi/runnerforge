@@ -141,7 +141,7 @@ A token from any other repository, including forks, fails the exchange. The prov
 |---|---|---|
 | `ci-build` | `workflow_path` = `.github/workflows/deploy-orchestrator.yaml` | `artifactregistry.writer` on the orchestrator repository, `run.developer` on the orchestrator service, `iam.serviceAccountUser` on the orchestrator SA |
 | `ci-terraform-plan` | `attribute.repository` = `rumankazi/runnerforge`, which means any workflow in the repo (used by `_qualify-infra.yaml` and `drift-detection.yaml`) | Project `viewer` and `iam.securityReviewer`; `storage.objectUser` on the state bucket |
-| `ci-terraform-apply` | `workflow_path` = `.github/workflows/deploy-infra.yaml`, which runs on push to `main` in the `prod-infra` environment | Project `editor`, `iam.securityAdmin`, `iam.roleAdmin`, `secretmanager.admin`, the custom `firestoreDatabaseCreator` role; `storage.objectAdmin` on the state bucket |
+| `ci-terraform-apply` | Subject `repo:rumankazi/runnerforge:environment:prod-infra`: a job in the `prod-infra` environment, which allows only `main` and needs the owner's approval. Until [ADR-020](/docs/design/decisions#hosted-isolation-a-pool-project-for-tenant-vms) step 3d removes it, also `workflow_path` = `.github/workflows/deploy-infra.yaml` | Project `editor`, `iam.securityAdmin`, `iam.roleAdmin`, `secretmanager.admin`, the custom `firestoreDatabaseCreator` role; `storage.objectAdmin` on the state bucket |
 | `ci-runner-image-build` | `workflow_path` = `.github/workflows/deploy-runner-image.yaml` | `compute.instanceAdmin.v1`, the custom `runnerImageManager` role, `logging.viewer`, `iam.serviceAccountUser` on `ci-vm-logger` |
 | `ci-vm-logger` | No WIF binding. `ci-runner-image-build` attaches it to the Packer build VM and smoke-test VMs. | `logging.logWriter` |
 
@@ -149,7 +149,17 @@ A token from any other repository, including forks, fails the exchange. The prov
 
 `firestoreDatabaseCreator` is a project custom role holding `datastore.databases.create`, `datastore.locations.get` and `datastore.locations.list`, which `editor` lacks. It has no delete permission; the database is delete-protected.
 
-The `workflow_path` bindings pin a workflow **file**, not a branch. Which refs can run that file is controlled by the workflow's triggers and its GitHub environment: In `deploy-orchestrator.yaml`, the 5% canary runs without approval, while the 100% ramp and rollbacks are gated behind the `prod` environment. Orchestrator images are signed with keyless Cosign during the build.
+The `workflow_path` bindings pin a workflow **file**, not a branch or an environment. Anyone who can push a branch can push a copy of that file with its triggers or `environment:` removed, and its jobs still match the binding. The workflow's own gates (in `deploy-orchestrator.yaml`, the 5% canary runs without approval, while the 100% ramp and rollbacks are gated behind the `prod` environment) only hold for the copy on `main`. Orchestrator images are signed with keyless Cosign during the build.
+
+The environment subject is the gate GitHub enforces: a job only gets `environment:prod-infra` in its token after the environment's branch rule and approval pass. It relies on the repository's OIDC subject settings staying at their defaults (`use_default: true`, `use_immutable_subject: false`; check with `gh api repos/rumankazi/runnerforge/actions/oidc/customization/sub`), and on the repository and environment names. Once the path-bound binding is gone, changing any of them changes the subject, and both apply jobs fail until the owner adds a binding for the new subject by hand:
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding ci-terraform-apply@runnerforge.iam.gserviceaccount.com --project=runnerforge --role=roles/iam.workloadIdentityUser --member="principal://iam.googleapis.com/projects/8547588670/locations/global/workloadIdentityPools/github/subject/<new subject>"
+```
+
+Then codify it as a new `google_service_account_iam_member` at a new address. Editing `member` on `ci_terraform_apply_wif_env` is a replace, which `prevent_destroy` and `no_destroy_protected.rego` both block; retire the old binding with the three-PR procedure.
+
+`prod-infra` lets repository admins bypass its rules; the owner is the only admin. "Only `main`" doesn't mean reviewed: Renovate bypasses the `main` ruleset and automerges patch and lock-file updates, including Terraform providers and `aqua.yaml` tools. For those runs the `prod-infra` approval is the only review, so check the run's commit and actor before approving.
 
 ## Infrastructure guardrails
 
@@ -158,7 +168,7 @@ Every infra PR runs `conftest test` against the Terraform plan JSON in `_qualify
 | Policy | Blocks |
 |---|---|
 | `no_basic_roles.rego` | Any IAM binding with `roles/owner`, `roles/editor` or `roles/viewer`, except for `ci-terraform-plan` and `ci-terraform-apply` |
-| `no_destroy_protected.rego` | Delete or replace of 15 critical resources, including the state bucket, the WIF pool and provider, every service account, the Cloud Run service, both secrets and the Firestore database. Removing one takes three PRs. |
+| `no_destroy_protected.rego` | Delete or replace of 23 critical resources, including the state bucket, the WIF pool and provider, the apply account's environment-bound WIF binding, every service account, the Cloud Run service, both secrets, the Firestore database, and the pool's Terraform grants and metrics-scope link. Removing one takes three PRs. |
 | `no_wif_condition_modificaiton.rego` (sic) | Any change to the WIF provider's `attribute_condition`, tightening included |
 
 These resources also have `lifecycle { prevent_destroy = true }`. `.github/CODEOWNERS` names the owner for every path, with explicit entries for `/infra/`, `/.github/`, the orchestrator source and this directory.
