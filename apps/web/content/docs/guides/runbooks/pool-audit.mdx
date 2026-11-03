@@ -1,0 +1,101 @@
+---
+title: Pool audit alerts
+description: Runbook for the pool's audit-log alerts, when the pool project is changed outside Terraform or something could let a VM out of its sandbox.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Symptom
+
+Email from "RunnerForge pool alerts" with one of:
+
+| Alert | Severity | Fires on |
+|---|---|---|
+| **Pool VM path out of the sandbox** | CRITICAL | any request in the pool that checks a permission for an external IP, a VM service account, another network interface, a peering, a VPN or an interconnect, by anyone (Terraform included); `actAs` on anything but a project-metadata update; a VM's or the project's metadata gaining or changing a login, startup or shutdown key (`ssh-keys`, `serial-port-enable`, `enable-oslogin`, `startup-script` and similar), or the project losing `enable-oslogin` or `serial-port-logging-enable`. A reviewed Terraform change to the project metadata fires it too |
+| **Pool changed outside Terraform** | WARNING | any Admin Activity entry in the pool by a principal other than `ci-terraform-apply` or the orchestrator creating, deleting or updating the metadata of VMs |
+
+Both read the pool's Admin Activity audit log
+([ADR-020](/docs/design/decisions#hosted-isolation-a-pool-project-for-tenant-vms)), which is always on and free. The
+incident carries the method, the principal and the resource. They notify at most once every 5 minutes and close 30
+minutes after the last match.
+
+## Impact
+
+**Path out of the sandbox:** a VM with an external IP skips the NAT and its logs; a VM with a service account has a
+token on its metadata server; a second interface or a peering reaches another network; login metadata opens SSH or the
+serial console. Treat it as an incident until you know who did it.
+
+**Changed outside Terraform:** the pool no longer matches what was reviewed. Drift detection only reports resources in
+Terraform state; this catches everything else.
+
+Expected, not incidents:
+- your own hand steps (quota scripts, a probe VM);
+- entries with no principal email, which some Google-internal operations write.
+
+## Diagnose
+
+All commands are read-only.
+
+**1. Read the entries.**
+
+```bash
+gcloud logging read 'LOG_ID("cloudaudit.googleapis.com/activity")' --project=runnerforge-pool --freshness=1h --format='table(timestamp,protoPayload.authenticationInfo.principalEmail,protoPayload.methodName,protoPayload.resourceName)'
+```
+
+**2. For a VM, check what it has now.**
+
+```bash
+gcloud compute instances describe <vm-name> --zone=europe-west4-a --project=runnerforge-pool --format='yaml(networkInterfaces,serviceAccounts,labels,metadata.items[].key)'
+```
+
+An `accessConfigs` entry is an external IP. Pool VMs have none, and no service account. Only metadata keys are
+shown: the values include the runner's registration token. For the project:
+
+```bash
+gcloud compute project-info describe --project=runnerforge-pool --format='yaml(commonInstanceMetadata.items[].key)'
+```
+
+**3. Who could have done it.** The allow list trusts every principal that can mint a `ci-terraform-apply` token:
+- the `deploy-infra.yaml` workflow (until the environment-bound WIF member replaces the path-bound one, any branch's
+  copy of it);
+- you, as project owner;
+- control-project editors, who can create a key for it or run a resource as it (`actAs`): the apply account itself,
+  the control default compute service account until it's disabled, and the Google APIs service agent. It should have no
+  user-managed keys:
+
+  ```bash
+  gcloud iam service-accounts keys list --iam-account=ci-terraform-apply@runnerforge.iam.gserviceaccount.com --project=runnerforge --managed-by=user
+  ```
+
+## Mitigate
+
+These change production; run them yourself.
+
+**1. Remove the path.** Delete a VM with an external IP, a service account, or login or startup metadata at once:
+
+```bash
+gcloud compute instances delete <vm-name> --zone=europe-west4-a --project=runnerforge-pool --quiet
+```
+
+For a hand change to the network, firewall, routes, IAM or project metadata, revert it by hand to what
+`infra/terraform-pool/` declares. For a resource in Terraform state, the next pool apply also puts it back; the daily
+drift check shows the diff until then. A resource Terraform doesn't manage (a new firewall rule, say) only goes by
+hand.
+
+**2. If the principal isn't you or Terraform,** treat its credentials as compromised: disable the account or remove
+its grants, and check its other activity in both projects.
+
+<Callout type="info" title="The metrics-scope link">
+If a pool plan wants to create `google_monitoring_monitored_project.control_scope`, the link to the control project's
+metrics scope was lost. Re-link it by hand, then re-plan:
+
+```bash
+gcloud beta monitoring metrics-scopes create projects/runnerforge-pool --project=runnerforge
+```
+</Callout>
+
+## Escalate
+
+If you can't tell who made a change, or a VM had an external IP or a service account while running a tenant's job,
+suspend admission for non-owner installations (see [Tenants](/docs/guides/runbooks/tenants)) and review the pool's
+audit log and the NAT log for that VM before re-opening.

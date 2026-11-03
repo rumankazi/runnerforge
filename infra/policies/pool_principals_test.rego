@@ -117,7 +117,26 @@ test_live_policy_without_pool_principal_passes if {
 	}
 }
 
+# Not a basic role: no_basic_roles.rego denies one with an unknown member.
 test_unknown_binding_member_does_not_error if {
-	b := pr_change("google_project_iam_binding", "b", ["create"], {"project": "runnerforge", "role": "roles/viewer", "members": [null, "user:owner@example.com"]})
+	b := pr_change("google_project_iam_binding", "b", ["create"], {"project": "runnerforge", "role": "roles/logging.viewer", "members": [null, "user:owner@example.com"]})
 	count(pr_messages([b])) == 0
+}
+
+test_pool_principal_upper_case_in_control_fails if {
+	pr_flags([pr_member("runnerforge", "serviceAccount:X@RunnerForge-Pool.iam.gserviceaccount.com")], "serviceAccount:x@runnerforge-pool.iam.gserviceaccount.com")
+}
+
+test_live_policy_upper_case_pool_principal_fails if {
+	pd := json.marshal({"bindings": [{"role": "roles/viewer", "members": ["serviceAccount:X@RUNNERFORGE-POOL.iam.gserviceaccount.com"]}]})
+	some msg in deny with input as {
+		"resource_changes": [],
+		"prior_state": {"values": {"root_module": {"resources": [{
+			"address": "data.google_project_iam_policy.control",
+			"mode": "data",
+			"type": "google_project_iam_policy",
+			"values": {"project": "runnerforge", "policy_data": pd},
+		}]}}},
+	}
+	contains(msg, "The live IAM policy of project \"runnerforge\"")
 }

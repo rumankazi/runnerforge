@@ -25,43 +25,12 @@ pool_principal_name(m) if contains(m, pool_project_number)
 
 pool_principal_name(m) if regex.match(`^project(Owner|Editor|Viewer):runnerforge-pool$`, m)
 
-# Every (member, role) a planned IAM resource grants. A grant outside the pool
-# project, or on a resource with no `project` field (a bucket, a service
-# account), counts as outside: that is conservative, and the pool target has
-# no such grants today.
-pool_iam_grants contains g if {
-	some rc in input.resource_changes
-	rc.mode == "managed"
-	regex.match(`^google_.+_iam_member$`, rc.type)
-	a := rc.change.after
-	is_object(a)
-	g := {"address": rc.address, "project": pool_field(a, "project"), "role": a.role, "member": a.member}
-}
-
-pool_iam_grants contains g if {
-	some rc in input.resource_changes
-	rc.mode == "managed"
-	regex.match(`^google_.+_iam_binding$`, rc.type)
-	a := rc.change.after
-	is_object(a)
-	some m in a.members
-	g := {"address": rc.address, "project": pool_field(a, "project"), "role": a.role, "member": m}
-}
-
-pool_iam_grants contains g if {
-	some rc in input.resource_changes
-	rc.mode == "managed"
-	regex.match(`^google_.+_iam_policy$`, rc.type)
-	a := rc.change.after
-	is_object(a)
-	is_string(a.policy_data)
-	some b in json.unmarshal(a.policy_data).bindings
-	some m in b.members
-	g := {"address": rc.address, "project": pool_field(a, "project"), "role": b.role, "member": m}
-}
-
+# A grant outside the pool project, or on a resource with no `project` field
+# (a bucket, a service account), counts as outside (iam_grants in
+# iam_common.rego): that is conservative, and the pool target has no such
+# grants today.
 deny contains msg if {
-	some g in pool_iam_grants
+	some g in iam_grants
 	pool_principal(g.member)
 	g.project != pool_project_id
 	msg := sprintf(
@@ -79,7 +48,8 @@ deny contains msg if {
 	r.type == "google_project_iam_policy"
 	r.values.project != pool_project_id
 	some b in json.unmarshal(r.values.policy_data).bindings
-	some m in b.members
+	some raw in b.members
+	m := iam_member_normalized(raw)
 	pool_principal(m)
 	msg := sprintf(
 		"The live IAM policy of project %q (%q) grants %q to pool principal %q. Remove it by hand; pool identities hold no role in the control project (ADR-020).",
