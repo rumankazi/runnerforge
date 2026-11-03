@@ -133,15 +133,15 @@ GitHub Actions authenticates to GCP with short-lived federated tokens. No servic
 attribute_condition = "assertion.repository_owner == 'rumankazi' && assertion.repository == 'rumankazi/runnerforge'"
 ```
 
-A token from any other repository, including forks, fails the exchange. The provider also maps `attribute.workflow_path` from `assertion.job_workflow_ref.split('@')[0]`, which is the workflow file without its ref.
+A token from any other repository, including forks, fails the exchange. The provider maps `google.subject` from `assertion.sub`, and `attribute.workflow_path` from `assertion.job_workflow_ref.split('@')[0]`, which is the workflow file without its ref.
 
-**Per-SA bindings.** Each CI service account grants `roles/iam.workloadIdentityUser` to a narrower principal set:
+**Per-SA bindings.** Each CI service account grants `roles/iam.workloadIdentityUser` to a narrower principal set, or for `ci-terraform-apply` one subject:
 
 | Service account | Who can impersonate it | Grants |
 |---|---|---|
 | `ci-build` | `workflow_path` = `.github/workflows/deploy-orchestrator.yaml` | `artifactregistry.writer` on the orchestrator repository, `run.developer` on the orchestrator service, `iam.serviceAccountUser` on the orchestrator SA |
 | `ci-terraform-plan` | `attribute.repository` = `rumankazi/runnerforge`, which means any workflow in the repo (used by `_qualify-infra.yaml` and `drift-detection.yaml`) | Project `viewer` and `iam.securityReviewer`; `storage.objectUser` on the state bucket |
-| `ci-terraform-apply` | Subject `repo:rumankazi/runnerforge:environment:prod-infra`: a job in the `prod-infra` environment, which allows only `main` and needs the owner's approval. Until [ADR-020](/docs/design/decisions#hosted-isolation-a-pool-project-for-tenant-vms) step 3d removes it, also `workflow_path` = `.github/workflows/deploy-infra.yaml` | Project `editor`, `iam.securityAdmin`, `iam.roleAdmin`, `secretmanager.admin`, the custom `firestoreDatabaseCreator` role; `storage.objectAdmin` on the state bucket |
+| `ci-terraform-apply` | Subject `repo:rumankazi/runnerforge:environment:prod-infra`: a job in the `prod-infra` environment, in any workflow file, which allows only `main` and needs the owner's approval. It replaced a `workflow_path` binding in [ADR-020](/docs/design/decisions#hosted-isolation-a-pool-project-for-tenant-vms) step 3 | Project `editor`, `iam.securityAdmin`, `iam.roleAdmin`, `secretmanager.admin`, the custom `firestoreDatabaseCreator` role; `storage.objectAdmin` on the state bucket |
 | `ci-runner-image-build` | `workflow_path` = `.github/workflows/deploy-runner-image.yaml` | `compute.instanceAdmin.v1`, the custom `runnerImageManager` role, `logging.viewer`, `iam.serviceAccountUser` on `ci-vm-logger` |
 | `ci-vm-logger` | No WIF binding. `ci-runner-image-build` attaches it to the Packer build VM and smoke-test VMs. | `logging.logWriter` |
 
@@ -151,7 +151,7 @@ A token from any other repository, including forks, fails the exchange. The prov
 
 The `workflow_path` bindings pin a workflow **file**, not a branch or an environment. Anyone who can push a branch can push a copy of that file with its triggers or `environment:` removed, and its jobs still match the binding. The workflow's own gates (in `deploy-orchestrator.yaml`, the 5% canary runs without approval, while the 100% ramp and rollbacks are gated behind the `prod` environment) only hold for the copy on `main`. Orchestrator images are signed with keyless Cosign during the build.
 
-The environment subject is the gate GitHub enforces: a job only gets `environment:prod-infra` in its token after the environment's branch rule and approval pass. It relies on the repository's OIDC subject settings staying at their defaults (`use_default: true`, `use_immutable_subject: false`; check with `gh api repos/rumankazi/runnerforge/actions/oidc/customization/sub`), and on the repository and environment names. Once the path-bound binding is gone, changing any of them changes the subject, and both apply jobs fail until the owner adds a binding for the new subject by hand:
+The environment subject is the gate GitHub enforces: a job only gets `environment:prod-infra` in its token after the environment's branch rule and approval pass. It relies on the repository's OIDC subject settings staying at their defaults (`use_default: true`, `use_immutable_subject: false`; check with `gh api repos/rumankazi/runnerforge/actions/oidc/customization/sub`), and on the repository and environment names. Changing any of them changes the subject, and both apply jobs fail until the owner adds a binding for the new subject by hand:
 
 ```bash
 gcloud iam service-accounts add-iam-policy-binding ci-terraform-apply@runnerforge.iam.gserviceaccount.com --project=runnerforge --role=roles/iam.workloadIdentityUser --member="principal://iam.googleapis.com/projects/8547588670/locations/global/workloadIdentityPools/github/subject/<new subject>"

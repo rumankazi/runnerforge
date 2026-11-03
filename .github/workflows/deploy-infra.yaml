@@ -189,8 +189,9 @@ jobs:
           status: ${{ job.status }}
           # issues:write
 
-  # Same steps as apply. Both stay in this file: the apply service account's
-  # WIF binding is pinned to deploy-infra.yaml (terraform_ci.tf).
+  # Same steps as apply. Both need environment: prod-infra: the apply service
+  # account's WIF binding accepts only that environment's subject
+  # (terraform_ci.tf).
   apply-pool:
     name: ☁️ pool
     runs-on: ubuntu-latest

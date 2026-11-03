@@ -56,8 +56,8 @@ gcloud compute project-info describe --project=runnerforge-pool --format='yaml(c
 ```
 
 **3. Who could have done it.** The allow list trusts every principal that can mint a `ci-terraform-apply` token:
-- the `deploy-infra.yaml` workflow (until the environment-bound WIF member replaces the path-bound one, any branch's
-  copy of it);
+- any job in the `prod-infra` environment, in any workflow file, once you approve it on `main` (Renovate merges to
+  `main` without review, so check the run's commit);
 - you, as project owner;
 - control-project editors, who can create a key for it or run a resource as it (`actAs`): the apply account itself,
   the control default compute service account until it's disabled, and the Google APIs service agent. It should have no

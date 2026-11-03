@@ -108,20 +108,14 @@ resource "google_storage_bucket_iam_member" "ci_terraform_apply_state_admin" {
   member = "serviceAccount:${google_service_account.ci_terraform_apply.email}"
 }
 
-resource "google_service_account_iam_member" "ci_terraform_apply_wif" {
-  service_account_id = google_service_account.ci_terraform_apply.name
-  role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github_pool.workload_identity_pool_id}/attribute.workflow_path/rumankazi/runnerforge/.github/workflows/deploy-infra.yaml"
-}
-
-# Only jobs in the prod-infra environment (branch main, owner approval) get the
-# apply token. ci_terraform_apply_wif above matches any branch's copy of
-# deploy-infra.yaml, so it goes in the next PR (ADR-020 step 3d). The subject
-# is the repo's default OIDC sub (use_default: true, use_immutable_subject:
-# false). Once 3d lands, changing either setting, or renaming the repo or the
-# environment, breaks both apply jobs until a binding for the new subject is
-# added by hand, then codified as a new resource: editing member here is a
-# replace, which prevent_destroy blocks (security.mdx, CI identity).
+# The apply account's only WIF binding: only jobs in the prod-infra environment
+# (branch main, owner approval) get the apply token. It replaced a binding on
+# attribute.workflow_path, which any branch's copy of deploy-infra.yaml matched
+# (ADR-020 step 3). The subject is the repo's default OIDC sub (use_default:
+# true, use_immutable_subject: false). Changing either setting, or renaming the
+# repo or the environment, breaks both apply jobs until a binding for the new
+# subject is added by hand, then codified as a new resource: editing member
+# here is a replace, which prevent_destroy blocks (security.mdx, CI identity).
 resource "google_service_account_iam_member" "ci_terraform_apply_wif_env" {
   service_account_id = google_service_account.ci_terraform_apply.name
   role               = "roles/iam.workloadIdentityUser"

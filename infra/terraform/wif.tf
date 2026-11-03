@@ -15,8 +15,9 @@ resource "google_iam_workload_identity_pool_provider" "github_pool_provider" {
   }
 
   # Two-clause condition: identity must originate from a workflow IN this repo.
-  # Per-workflow restrictions (e.g., "only apply-terraform.yaml can use the apply SA")
-  # are enforced at the per-SA wif binding level via `attribute.workflow_path`.
+  # Narrower restrictions are on each SA's WIF binding: the build SAs match
+  # `attribute.workflow_path` (the file, any branch), and the Terraform apply SA
+  # matches only the prod-infra environment's subject (terraform_ci.tf).
   attribute_condition = join(" && ", [
     "assertion.repository_owner == 'rumankazi'",
     "assertion.repository == 'rumankazi/runnerforge'"
