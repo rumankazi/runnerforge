@@ -59,9 +59,11 @@ gcloud compute project-info describe --project=runnerforge-pool --format='yaml(c
 - any job in the `prod-infra` environment, in any workflow file, once you approve it on `main` (Renovate merges to
   `main` without review, so check the run's commit);
 - you, as project owner;
-- control-project editors, who can create a key for it or run a resource as it (`actAs`): the apply account itself,
-  the control default compute service account until it's disabled, and the Google APIs service agent. It should have no
-  user-managed keys:
+- control-project editors, who can create a key for it or run a resource as it (`actAs`): the apply account itself
+  and the Google APIs service agent. The control default compute service account is an editor too, but disabled
+  ([ADR-020](/docs/design/decisions#hosted-isolation-a-pool-project-for-tenant-vms) step 3e).
+
+  The apply account should have no user-managed keys:
 
   ```bash
   gcloud iam service-accounts keys list --iam-account=ci-terraform-apply@runnerforge.iam.gserviceaccount.com --project=runnerforge --managed-by=user
