@@ -78,8 +78,8 @@ gcloud compute instances delete <vm-name> --zone=europe-west4-a --project=runner
 ```
 
 For a hand change to the network, firewall, routes, IAM or project metadata, revert it by hand to what
-`infra/terraform-pool/` declares. For a resource in Terraform state, the next pool apply also puts it back; the daily
-drift check shows the diff until then. A resource Terraform doesn't manage (a new firewall rule, say) only goes by
+`infra/terraform-pool/` declares. For a resource in Terraform state, a pool apply planned after the change also puts it
+back; the daily drift check shows the diff until then. A resource Terraform doesn't manage (a new firewall rule, say) only goes by
 hand.
 
 **2. If the principal isn't you or Terraform,** treat its credentials as compromised: disable the account or remove

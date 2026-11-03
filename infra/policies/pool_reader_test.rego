@@ -35,7 +35,7 @@ rd_pool_config := [
 	rd_config("managed", "google_monitoring_alert_policy", "pool_log_volume"),
 	rd_config("managed", "google_cloud_quotas_quota_preference", "pool"),
 	rd_config("managed", "google_project_iam_member", "ci_terraform_apply_pool_editor"),
-	rd_config("managed", "google_project_iam_member_remove", "plan_viewer"),
+	rd_config("managed", "google_project_iam_member_remove", "ci_terraform_plan_pool_viewer"),
 	rd_config("managed", "google_project_iam_custom_role", "terraform_reader"),
 	rd_config("managed", "google_compute_subnetwork_iam_member", "orchestrator_pool_subnet"),
 	rd_config("managed", "google_monitoring_monitored_project", "control_scope"),
