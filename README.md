@@ -86,7 +86,7 @@ Every PR runs `qualify.yaml`, which uses a path-aware preflight to dispatch only
 On merge to `main`, dedicated deploy workflows take over:
 
 - `deploy-orchestrator.yaml` — Cloud Build image + Cloud Run deploy with canary ramp, gated on `prod` env approval
-- `deploy-infra.yaml` — re-plans terraform, gates on `prod-terraform` env approval, applies
+- `deploy-infra.yaml` — re-plans terraform, gates on `prod-infra` env approval, applies
 - `deploy-runner-image.yaml` — Packer image build + smoke test + family-alias promotion
 
 Independently, `drift-detection.yaml` runs daily at 08:17 UTC against deployed GCP state. If the plan shows drift, tfaction opens a GitHub issue and auto-closes it once the next clean run completes. Runbooks: [terraform-drift](apps/web/content/docs/guides/runbooks/terraform-drift.mdx) · [terraform-stale-lock](apps/web/content/docs/guides/runbooks/terraform-stale-lock.mdx).

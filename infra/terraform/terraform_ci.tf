@@ -114,6 +114,24 @@ resource "google_service_account_iam_member" "ci_terraform_apply_wif" {
   member             = "principalSet://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github_pool.workload_identity_pool_id}/attribute.workflow_path/rumankazi/runnerforge/.github/workflows/deploy-infra.yaml"
 }
 
+# Only jobs in the prod-infra environment (branch main, owner approval) get the
+# apply token. ci_terraform_apply_wif above matches any branch's copy of
+# deploy-infra.yaml, so it goes in the next PR (ADR-020 step 3d). The subject
+# is the repo's default OIDC sub (use_default: true, use_immutable_subject:
+# false). Once 3d lands, changing either setting, or renaming the repo or the
+# environment, breaks both apply jobs until a binding for the new subject is
+# added by hand, then codified as a new resource: editing member here is a
+# replace, which prevent_destroy blocks (security.mdx, CI identity).
+resource "google_service_account_iam_member" "ci_terraform_apply_wif_env" {
+  service_account_id = google_service_account.ci_terraform_apply.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principal://iam.googleapis.com/projects/${data.google_project.current.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github_pool.workload_identity_pool_id}/subject/repo:rumankazi/runnerforge:environment:prod-infra"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 # --- Outputs ---
 
 output "ci_terraform_plan_sa_email" {

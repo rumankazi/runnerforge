@@ -994,7 +994,7 @@ An owner `suspend` stops new VMs only; VMs already running end with their job, o
   - **The plan account gets a custom reader role** that refreshes the pool module without reading VMs. It replaces both `roles/viewer` and `roles/iam.securityReviewer`, since each can list instances, and an instance's metadata holds its registration token. The two hand grants and the default compute account's Editor are removed in a later PR, once the reader is proven.
   - **The metrics-scope link is made by hand and imported** into the pool root (CI doesn't hold `monitoring.metricsScopes.link`), protected from destroy.
   - **Hand changes are caught by two log-match alerts** on the pool's Admin Activity log rather than log-based metrics: one for any change outside Terraform, one (CRITICAL) for anything that checks an external-IP, service-account, interface, peering, VPN or interconnect permission, or sets login or startup metadata on a VM or the project.
-  - **The apply account's WIF binding moves to the `prod-infra` environment subject** in two control PRs (add, then remove the path-bound one), and the control project's default compute account, which holds Editor and so `actAs` on the apply account, is disabled before the cutover.
+  - **The apply account's WIF binding moves to the `prod-infra` environment subject** in two control PRs (step 3c adds it, step 3d removes the path-bound one), and the control project's default compute account, which holds Editor and so `actAs` on the apply account, is disabled before the cutover.
 </Callout>
 
 Phase 4.3. Required before any stranger's job runs, that is before the App (3851412) goes public.
