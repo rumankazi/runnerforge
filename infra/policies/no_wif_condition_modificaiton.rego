@@ -4,8 +4,8 @@ import rego.v1
 
 # WIF (Workload Identity Federation) attribute_condition is the provider-level
 # gate that determines which workflows can authenticate to GCP at all. It's the
-# top of the trust chain — per-SA workflow_path pinning is the fine-grained
-# defense beneath it. Modifying this condition could broaden the auth surface
+# top of the trust chain — per-SA bindings (a workflow_path, or for the apply SA
+# the prod-infra environment subject) are the fine-grained defense beneath it. Modifying this condition could broaden the auth surface
 # (allow other repos, remove repo restrictions, etc.).
 #
 # Tightening is also blocked by this policy — if you need a legitimate

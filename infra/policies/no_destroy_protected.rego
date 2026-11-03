@@ -29,7 +29,7 @@ protected_resources := {
 	"google_secret_manager_secret.github_webhook_secret",
 	"google_secret_manager_secret.github_app_private_key",
 	"google_firestore_database.runnerforge",
-	# The apply account's only binding once the path-bound one is gone (3d).
+	# The apply account's only WIF binding (ADR-020 step 3).
 	"google_service_account_iam_member.ci_terraform_apply_wif_env",
 	# Pool root module (infra/terraform-pool, ADR-020). Addresses are per state,
 	# so a control resource with the same address is protected too.

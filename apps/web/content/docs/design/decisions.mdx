@@ -240,6 +240,10 @@ The full surface (25 log-based metrics, 2 SLOs, 10 alert policies, the dashboard
 
 ## Workload Identity Federation over service account keys for CI auth
 
+<Callout type="info" title="Revisions">
+  **2026-11-03**: `ci-terraform-apply` is no longer bound through `attribute.workflow_path`, which matched a copy of `deploy-infra.yaml` on any branch, with its `environment:` removed. It now trusts only the subject `repo:rumankazi/runnerforge:environment:prod-infra`, which GitHub issues only after the environment's branch rule (`main`) and approval pass ([ADR-020](#hosted-isolation-a-pool-project-for-tenant-vms) step 3). `ci-build` and `ci-runner-image-build` keep their `workflow_path` bindings for now.
+</Callout>
+
 ### Context
 
 CI workflows need to act on GCP: push images to Artifact Registry, deploy Cloud Run, build runner images, and run Terraform (state bucket, IAM, Secret Manager). We need a credential that lets GitHub Actions do this without storing a portable secret.
@@ -258,7 +262,7 @@ CI workflows need to act on GCP: push images to Artifact Registry, deploy Cloud 
 | SA | Who can impersonate it |
 |---|---|
 | `ci-build` | `deploy-orchestrator.yaml` |
-| `ci-terraform-apply` | `deploy-infra.yaml` |
+| `ci-terraform-apply` | `deploy-infra.yaml` (since 2026-11-03: any job in the `prod-infra` environment) |
 | `ci-runner-image-build` | `deploy-runner-image.yaml` |
 | `ci-terraform-plan` (plan only: `roles/viewer`, `roles/iam.securityReviewer`, `roles/storage.objectUser` on the state bucket) | any workflow in the repo |
 

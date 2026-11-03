@@ -88,7 +88,7 @@ test_denies_destroy_and_replace_of_apply_wif_env_binding if {
 	}
 }
 
-# ADR-020 step 3d deletes the path-bound binding.
+# ADR-020 step 3d deleted the path-bound binding; the plan that does it must pass.
 test_allows_destroy_of_path_bound_apply_wif_binding if {
 	count(deny) == 0 with input as {"resource_changes": [{
 		"address": "google_service_account_iam_member.ci_terraform_apply_wif",
