@@ -56,6 +56,35 @@ resource "google_logging_metric" "pool_vm" {
   }
 }
 
+# The control project's vm_preemption_count, defined again here: log-based
+# metrics are per project, and the preemption audit entries land in the project
+# that owns the VM. Same name and descriptor, so the Orchestrator Health chart
+# sums both through the metrics scope. No alert reads it.
+resource "google_logging_metric" "vm_preemption_count" {
+  project = var.pool_project_id
+  name    = "vm_preemption_count"
+  filter  = <<-EOT
+    LOG_ID("cloudaudit.googleapis.com/system_event")
+    resource.type="gce_instance"
+    protoPayload.methodName="compute.instances.preempted"
+    protoPayload.resourceName:"instances/runnerforge-"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+    labels {
+      key        = "zone"
+      value_type = "STRING"
+    }
+  }
+
+  label_extractors = {
+    "zone" = "EXTRACT(resource.labels.zone)"
+  }
+}
+
 # Serial entries already carry the VM as resource.labels.instance_id.
 resource "google_logging_metric" "pool_serial_entries" {
   project = var.pool_project_id

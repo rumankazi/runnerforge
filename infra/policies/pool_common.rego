@@ -69,3 +69,24 @@ deny contains msg if {
 		[v, pool_project_id],
 	)
 }
+
+# Whether an IAM grant (iam_grants) lands in the pool project. A grant on a
+# resource with no `project` field counts when the resource's id names the pool:
+# a grant on a pool service account from the control target, say.
+pool_iam_target(g) if g.project == pool_project_id
+
+pool_iam_target(g) if {
+	g.project == null
+	some field in pool_iam_resource_fields
+	id := object.get(iam_grant_after(g), field, null)
+	is_string(id)
+	pool_resource_id(lower(id))
+}
+
+pool_iam_resource_fields := {"service_account_id", "secret_id", "crypto_key_id", "key_ring_id"}
+
+pool_resource_id(id) if regex.match(`^projects/(runnerforge-pool|355964341703)/`, id)
+
+pool_resource_id(id) if endswith(id, "@runnerforge-pool.iam.gserviceaccount.com")
+
+pool_resource_id(id) if contains(id, "355964341703-compute@developer.gserviceaccount.com")

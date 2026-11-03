@@ -3,54 +3,74 @@ package main
 import rego.v1
 
 test_denies_destroy_of_protected_resource if {
-	some msg in deny with input as {
-		"resource_changes": [{
-			"address": "google_storage_bucket.terraform_state",
-			"type": "google_storage_bucket",
-			"change": {"actions": ["delete"]},
-		}],
-	}
+	some msg in deny with input as {"resource_changes": [{
+		"address": "google_storage_bucket.terraform_state",
+		"type": "google_storage_bucket",
+		"change": {"actions": ["delete"]},
+	}]}
 	contains(msg, "protected-destroy allowlist")
 }
 
 test_denies_replace_of_protected_resource if {
-	some msg in deny with input as {
-		"resource_changes": [{
-			"address": "google_iam_workload_identity_pool.github_pool",
-			"type": "google_iam_workload_identity_pool",
-			"change": {"actions": ["delete", "create"]},
-		}],
-	}
+	some msg in deny with input as {"resource_changes": [{
+		"address": "google_iam_workload_identity_pool.github_pool",
+		"type": "google_iam_workload_identity_pool",
+		"change": {"actions": ["delete", "create"]},
+	}]}
 	contains(msg, "protected-destroy allowlist")
 }
 
 test_allows_destroy_of_unprotected_resource if {
-	count(deny) == 0 with input as {
-		"resource_changes": [{
-			"address": "google_compute_instance.disposable",
-			"type": "google_compute_instance",
-			"change": {"actions": ["delete"]},
-		}],
-	}
+	count(deny) == 0 with input as {"resource_changes": [{
+		"address": "google_compute_instance.disposable",
+		"type": "google_compute_instance",
+		"change": {"actions": ["delete"]},
+	}]}
 }
 
 test_allows_update_of_protected_resource if {
-	count(deny) == 0 with input as {
-		"resource_changes": [{
-			"address": "google_cloud_run_v2_service.orchestrator",
-			"type": "google_cloud_run_v2_service",
-			"change": {"actions": ["update"]},
-		}],
-	}
+	count(deny) == 0 with input as {"resource_changes": [{
+		"address": "google_cloud_run_v2_service.orchestrator",
+		"type": "google_cloud_run_v2_service",
+		"change": {"actions": ["update"]},
+	}]}
 }
 
 test_denies_replace_of_job_store_database if {
-	some msg in deny with input as {
-		"resource_changes": [{
-			"address": "google_firestore_database.runnerforge",
-			"type": "google_firestore_database",
-			"change": {"actions": ["delete", "create"]},
-		}],
-	}
+	some msg in deny with input as {"resource_changes": [{
+		"address": "google_firestore_database.runnerforge",
+		"type": "google_firestore_database",
+		"change": {"actions": ["delete", "create"]},
+	}]}
 	contains(msg, "protected-destroy allowlist")
+}
+
+test_denies_destroy_of_pool_protected_resources if {
+	addresses := [
+		"google_project_iam_member.ci_terraform_apply_pool_editor",
+		"google_project_iam_member.ci_terraform_apply_pool_security_admin",
+		"google_project_iam_member.ci_terraform_apply_pool_role_admin",
+		"google_project_iam_member.ci_terraform_plan_pool_reader",
+		"google_project_iam_member.ci_terraform_apply_logging_config_writer",
+		"google_project_iam_custom_role.terraform_reader",
+		"google_monitoring_monitored_project.control_scope",
+	]
+	every addr in addresses {
+		some msg in deny with input as {"resource_changes": [{
+			"address": addr,
+			"mode": "managed",
+			"type": split(addr, ".")[0],
+			"change": {"actions": ["delete"], "after": null},
+		}]}
+		contains(msg, sprintf("Resource %q is in the protected-destroy allowlist", [addr]))
+	}
+}
+
+test_allows_destroy_of_unprotected_pool_grant if {
+	count(deny) == 0 with input as {"resource_changes": [{
+		"address": "google_project_iam_member.orchestrator_pool_logging_viewer",
+		"mode": "managed",
+		"type": "google_project_iam_member",
+		"change": {"actions": ["delete"], "after": null},
+	}]}
 }
