@@ -74,3 +74,26 @@ test_allows_destroy_of_unprotected_pool_grant if {
 		"change": {"actions": ["delete"], "after": null},
 	}]}
 }
+
+test_denies_destroy_and_replace_of_apply_wif_env_binding if {
+	addr := "google_service_account_iam_member.ci_terraform_apply_wif_env"
+	every actions in [["delete"], ["delete", "create"], ["create", "delete"]] {
+		some msg in deny with input as {"resource_changes": [{
+			"address": addr,
+			"mode": "managed",
+			"type": "google_service_account_iam_member",
+			"change": {"actions": actions},
+		}]}
+		contains(msg, sprintf("Resource %q is in the protected-destroy allowlist", [addr]))
+	}
+}
+
+# ADR-020 step 3d deletes the path-bound binding.
+test_allows_destroy_of_path_bound_apply_wif_binding if {
+	count(deny) == 0 with input as {"resource_changes": [{
+		"address": "google_service_account_iam_member.ci_terraform_apply_wif",
+		"mode": "managed",
+		"type": "google_service_account_iam_member",
+		"change": {"actions": ["delete"], "after": null},
+	}]}
+}
