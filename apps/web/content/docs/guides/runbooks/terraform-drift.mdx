@@ -50,17 +50,28 @@ If the change was unintended:
 2. Verify with `gcloud` that the resource matches what's in the `.tf` file
 3. Next drift run sees clean state → issue auto-closes.
 
-## Pool plan lacks a permission
+## Plan lacks a permission
 
-`ci-terraform-plan` reads the pool through the custom `poolTerraformReader` role only. If a pool plan or drift run fails with a 403 naming a permission, add that permission to the role by hand (you hold owner):
+`ci-terraform-plan` reads each project through one custom role. In the pool that's been true since ADR-020 step 3. In the control project it also holds `roles/viewer` and `roles/iam.securityReviewer` until the owner removes them by hand (step 3f):
+
+| Target | Role | Codify in |
+|---|---|---|
+| `infra/terraform` | `controlTerraformReader` in `runnerforge` | `infra/terraform/terraform_ci.tf`, and `control_reader_permissions` and `control_reader_coverage` in `infra/policies/control_reader.rego` |
+| `infra/terraform-pool` | `poolTerraformReader` in `runnerforge-pool` | `infra/terraform-pool/iam.tf`, and `pool_reader_permissions` and `pool_reader_coverage` in `infra/policies/pool_reader.rego` |
+
+If a plan or drift run fails with a 403 naming a permission, add that permission to the role by hand (you hold owner):
 
 ```bash
-gcloud iam roles update poolTerraformReader --project=runnerforge-pool --add-permissions=<permission>
+gcloud iam roles update <role> --project=<project> --add-permissions=<permission>
 ```
 
-Then open a PR adding it to the role's `permissions` in `infra/terraform-pool/iam.tf`, to `pool_reader_permissions` in `infra/policies/pool_reader.rego`, and to the `pool_reader_coverage` entry (same file) of the resource type whose refresh failed, so conftest fails if a later PR drops it. Merge it before any other pool change: a pool apply planned after your hand change removes the permission again. Never add `compute.instances.*`, `compute.disks.*` or log-entry reads.
+Then open a PR adding it to the role, to the policy's permission list, and to the coverage entry of the resource type whose refresh failed, so conftest fails if a later PR drops it. Merge it before any other change to that target: an apply planned after your hand change removes the permission again.
 
-Don't re-grant `roles/viewer` instead: `google_project_iam_member_remove.ci_terraform_plan_pool_viewer` removes it on the next pool apply, and it can read VM metadata, which holds runner registration tokens.
+A pool plan that stalls for about 5 minutes on `google_monitoring_monitored_project.control_scope` and then fails with a 403 lacks a permission in the **control** project: the pool reads the control project's metrics scope with `resourcemanager.projects.get` from `controlTerraformReader`.
+
+**During step 3f,** between the hand removal and the PR that deletes the two grants' blocks, every PR that plans the control target fails conftest, because the plan would grant both again. Every PR that touches `infra/policies/` plans the control target too. This is on purpose, since it stops Renovate from re-granting them. The drift comment shows `+ create` for `ci_terraform_plan_viewer` and `ci_terraform_plan_iam_security` until then; don't re-grant them to clear it. A permission fix in that window still starts by hand. Then put its role and policy change into that PR, so its apply keeps the permission. If it can't wait, re-grant both by hand, merge the fix, and remove them again after 7 minutes.
+
+Never add `compute.instances.*`, `compute.disks.*`, log-entry, Firestore-document, secret-version or object reads; conftest rejects them. Don't re-grant `roles/viewer` or `roles/iam.securityReviewer` instead: both list VMs, whose metadata holds runner registration tokens. In the pool, `google_project_iam_member_remove.ci_terraform_plan_pool_viewer` removes Viewer again on the next pool apply; in the control project, conftest fails any plan that would grant either one.
 
 ## Default compute account enabled
 

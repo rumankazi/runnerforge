@@ -88,6 +88,20 @@ test_denies_destroy_and_replace_of_apply_wif_env_binding if {
 	}
 }
 
+test_denies_destroy_and_replace_of_control_reader if {
+	every addr in ["google_project_iam_custom_role.control_terraform_reader", "google_project_iam_member.ci_terraform_plan_control_reader"] {
+		every actions in [["delete"], ["delete", "create"], ["create", "delete"]] {
+			some msg in deny with input as {"resource_changes": [{
+				"address": addr,
+				"mode": "managed",
+				"type": split(addr, ".")[0],
+				"change": {"actions": actions},
+			}]}
+			contains(msg, sprintf("Resource %q is in the protected-destroy allowlist", [addr]))
+		}
+	}
+}
+
 # ADR-020 step 3d deleted the path-bound binding; the plan that does it must pass.
 test_allows_destroy_of_path_bound_apply_wif_binding if {
 	count(deny) == 0 with input as {"resource_changes": [{

@@ -20,6 +20,9 @@ resource "google_service_account" "ci_terraform_apply" {
 
 # For ci_terraform_plan
 
+# Being replaced by controlTerraformReader below (ADR-020 step 3f): the owner
+# removes both by hand once it's applied, then a later PR deletes these blocks.
+# Until then control_reader.rego fails any plan that would grant them again.
 resource "google_project_iam_member" "ci_terraform_plan_viewer" {
   project = data.google_project.current.project_id
   role    = "roles/viewer"
@@ -30,6 +33,69 @@ resource "google_project_iam_member" "ci_terraform_plan_iam_security" {
   project = data.google_project.current.project_id
   role    = "roles/iam.securityReviewer"
   member  = "serviceAccount:${google_service_account.ci_terraform_plan.email}"
+}
+
+# What the plan account needs to refresh this root, plus the pool root's read of
+# this project's metrics scope (resourcemanager.projects.get), and nothing that
+# reads a VM, a log entry, a Firestore document, a secret version or an object.
+# It replaces the two grants above (ADR-020 step 3f): roles/viewer and
+# roles/iam.securityReviewer both list instances, whose metadata holds runner
+# registration tokens. infra/policies/control_reader.rego holds the policy's
+# copy of the permissions and the map of what each type reads: change them
+# together. project and role_id are literal so the policy reads them at plan time.
+resource "google_project_iam_custom_role" "control_terraform_reader" {
+  project     = "runnerforge"
+  role_id     = "controlTerraformReader"
+  title       = "RunnerForge control Terraform reader"
+  description = "Refreshes infra/terraform for plans and drift detection. Never add VM, disk, log-entry, Firestore-document, secret-version or object reads (ADR-020)."
+  permissions = [
+    "artifactregistry.repositories.get",
+    "artifactregistry.repositories.getIamPolicy",
+    "cloudquotas.quotas.get",
+    "cloudscheduler.jobs.fullView",
+    "cloudscheduler.jobs.get",
+    "compute.routers.get",
+    "compute.subnetworks.get",
+    "datastore.databases.getMetadata",
+    "datastore.schemas.get",
+    "iam.googleapis.com/workloadIdentityPoolProviders.get",
+    "iam.googleapis.com/workloadIdentityPools.get",
+    "iam.googleapis.com/workloadIdentityPools.getAttestationRules",
+    "iam.roles.get",
+    "iam.serviceAccounts.get",
+    "iam.serviceAccounts.getIamPolicy",
+    "logging.logMetrics.get",
+    "monitoring.alertPolicies.get",
+    "monitoring.dashboards.get",
+    "monitoring.notificationChannels.get",
+    "monitoring.services.get",
+    "monitoring.slos.get",
+    "resourcemanager.projects.get",
+    "resourcemanager.projects.getIamPolicy",
+    "run.services.get",
+    "run.services.getIamPolicy",
+    "secretmanager.secrets.get",
+    "secretmanager.secrets.getIamPolicy",
+    "serviceusage.services.list",
+    "storage.buckets.get",
+    "storage.buckets.getIamPolicy",
+  ]
+
+  # Only a role_id or project change replaces it; editing permissions doesn't.
+  # A deleted custom role's ID can't be reused for weeks.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_project_iam_member" "ci_terraform_plan_control_reader" {
+  project = "runnerforge"
+  role    = "projects/runnerforge/roles/${google_project_iam_custom_role.control_terraform_reader.role_id}"
+  member  = "serviceAccount:${google_service_account.ci_terraform_plan.email}"
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "google_storage_bucket_iam_member" "ci_terraform_plan_state_user" {
