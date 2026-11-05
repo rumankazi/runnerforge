@@ -208,48 +208,75 @@ test_pool_target_custom_role_in_control_fails if {
 	contains(msg, `"google_project_iam_custom_role.control_terraform_reader" declares a custom role in project runnerforge from the pool target`)
 }
 
-cr_plan_member(name, role, actions) := {
-	"address": sprintf("google_project_iam_member.%s", [name]),
+cr_plan_grant(type, name, after) := {
+	"address": sprintf("%s.%s", [type, name]),
 	"mode": "managed",
-	"type": "google_project_iam_member",
-	"change": {"actions": actions, "after": {"project": "runnerforge", "role": role, "member": pool_plan_member}},
+	"type": type,
+	"change": {"actions": ["no-op"], "after": after},
 }
 
-cr_regrant(changes, address) if {
+cr_plan_member(name, role) := cr_plan_grant("google_project_iam_member", name, {"project": "runnerforge", "role": role, "member": pool_plan_member})
+
+cr_state_user(bucket, role) := cr_plan_grant("google_storage_bucket_iam_member", "ci_terraform_plan_state_user", {"bucket": bucket, "role": role, "member": pool_plan_member})
+
+cr_plan_flags(changes, address) if {
 	some msg in deny with input as {"resource_changes": changes}
-	contains(msg, sprintf("%q would grant", [address]))
+	contains(msg, sprintf("%q grants", [address]))
+	contains(msg, "to ci-terraform-plan outside the pool")
 }
 
-test_plan_broad_control_grants_unchanged_pass if {
+test_plan_reader_and_state_user_pass if {
 	count(deny) == 0 with input as {"resource_changes": [
-		cr_plan_member("ci_terraform_plan_viewer", "roles/viewer", ["no-op"]),
-		cr_plan_member("ci_terraform_plan_iam_security", "roles/iam.securityReviewer", ["no-op"]),
+		cr_plan_member("ci_terraform_plan_control_reader", "projects/runnerforge/roles/controlTerraformReader"),
+		cr_state_user("b/runnerforge-terraform-state", "roles/storage.objectUser"),
 	]}
+	count(deny) == 0 with input as {"resource_changes": [cr_state_user("runnerforge-terraform-state", "roles/storage.objectUser")]}
 }
 
-test_plan_broad_control_grants_regranted_fail if {
-	cr_regrant([cr_plan_member("ci_terraform_plan_viewer", "roles/viewer", ["create"])], "google_project_iam_member.ci_terraform_plan_viewer")
-	cr_regrant([cr_plan_member("ci_terraform_plan_iam_security", "roles/iam.securityReviewer", ["create"])], "google_project_iam_member.ci_terraform_plan_iam_security")
-	cr_regrant([cr_plan_member("v", "roles/viewer", ["delete", "create"])], "google_project_iam_member.v")
-}
-
-test_plan_broad_control_grant_upper_case_or_binding_fails if {
-	upper := object.union(cr_plan_member("v", "roles/viewer", ["create"]), {"change": {"after": {"member": "serviceAccount:CI-Terraform-Plan@runnerforge.iam.gserviceaccount.com"}}})
-	cr_regrant([upper], "google_project_iam_member.v")
-	b := {
-		"address": "google_project_iam_binding.v",
-		"mode": "managed",
-		"type": "google_project_iam_binding",
-		"change": {"actions": ["update"], "after": {"project": "runnerforge", "role": "roles/viewer", "members": [pool_plan_member]}},
+test_plan_other_control_roles_fail if {
+	every role in ["roles/viewer", "roles/iam.securityReviewer", "roles/editor", "roles/owner", "roles/compute.viewer"] {
+		cr_plan_flags([cr_plan_member("x", role)], "google_project_iam_member.x")
 	}
-	cr_regrant([b], "google_project_iam_binding.v")
 }
 
-test_plan_broad_grant_in_pool_is_left_to_pool_reader if {
-	m := object.union(cr_plan_member("v", "roles/viewer", ["create"]), {"change": {"after": {"project": "runnerforge-pool"}}})
-	not cr_regrant([m], "google_project_iam_member.v")
+test_plan_reader_role_in_another_project_fails if {
+	m := cr_plan_grant("google_project_iam_member", "x", {"project": "elsewhere", "role": "projects/runnerforge/roles/controlTerraformReader", "member": pool_plan_member})
+	cr_plan_flags([m], "google_project_iam_member.x")
 }
 
-test_plan_reader_grant_passes if {
-	count(deny) == 0 with input as {"resource_changes": [cr_plan_member("ci_terraform_plan_control_reader", "projects/runnerforge/roles/controlTerraformReader", ["create"])]}
+test_plan_viewer_as_binding_or_policy_fails if {
+	b := cr_plan_grant("google_project_iam_binding", "v", {"project": "runnerforge", "role": "roles/viewer", "members": [pool_plan_member]})
+	cr_plan_flags([b], "google_project_iam_binding.v")
+	policy := json.marshal({"bindings": [{"role": "roles/iam.securityReviewer", "members": [pool_plan_member]}]})
+	p := cr_plan_grant("google_project_iam_policy", "p", {"project": "runnerforge", "policy_data": policy})
+	cr_plan_flags([p], "google_project_iam_policy.p")
+}
+
+test_plan_upper_case_member_fails if {
+	upper := cr_plan_grant("google_project_iam_member", "v", {"project": "runnerforge", "role": "roles/viewer", "member": "serviceAccount:CI-Terraform-Plan@runnerforge.iam.gserviceaccount.com"})
+	cr_plan_flags([upper], "google_project_iam_member.v")
+}
+
+test_plan_other_bucket_grants_fail if {
+	cr_plan_flags([cr_state_user("b/runnerforge-terraform-state", "roles/storage.objectAdmin")], "google_storage_bucket_iam_member.ci_terraform_plan_state_user")
+	cr_plan_flags([cr_state_user("b/runnerforge_cloudbuild", "roles/storage.objectUser")], "google_storage_bucket_iam_member.ci_terraform_plan_state_user")
+}
+
+test_plan_token_creator_on_control_sa_fails if {
+	sa := cr_plan_grant("google_service_account_iam_member", "plan_token", {
+		"service_account_id": "projects/runnerforge/serviceAccounts/ci-terraform-apply@runnerforge.iam.gserviceaccount.com",
+		"role": "roles/iam.serviceAccountTokenCreator",
+		"member": pool_plan_member,
+	})
+	cr_plan_flags([sa], "google_service_account_iam_member.plan_token")
+}
+
+test_plan_grant_in_pool_is_left_to_pool_reader if {
+	m := cr_plan_grant("google_project_iam_member", "v", {"project": "runnerforge-pool", "role": "roles/viewer", "member": pool_plan_member})
+	not cr_plan_flags([m], "google_project_iam_member.v")
+}
+
+test_plan_removal_of_viewer_is_not_a_grant if {
+	r := cr_plan_grant("google_project_iam_member_remove", "ci_terraform_plan_control_viewer", {"project": "runnerforge", "role": "roles/viewer", "member": pool_plan_member})
+	count(deny) == 0 with input as {"resource_changes": [r]}
 }

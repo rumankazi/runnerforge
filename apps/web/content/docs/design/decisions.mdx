@@ -241,6 +241,8 @@ The full surface (25 log-based metrics, 2 SLOs, 10 alert policies, the dashboard
 ## Workload Identity Federation over service account keys for CI auth
 
 <Callout type="info" title="Revisions">
+  **2026-11-05**: `ci-terraform-plan` no longer holds `roles/viewer` or `roles/iam.securityReviewer` in either project. It reads each through a custom role that reads settings only, never a VM, a log entry, a Firestore document, a secret version or an object ([ADR-020](#hosted-isolation-a-pool-project-for-tenant-vms) steps 3 and 3f).
+
   **2026-11-03**: `ci-terraform-apply` is no longer bound through `attribute.workflow_path`, which matched a copy of `deploy-infra.yaml` on any branch, with its `environment:` removed. It now trusts only the subject `repo:rumankazi/runnerforge:environment:prod-infra`, which GitHub issues only after the environment's branch rule (`main`) and approval pass ([ADR-020](#hosted-isolation-a-pool-project-for-tenant-vms) step 3). `ci-build` and `ci-runner-image-build` keep their `workflow_path` bindings for now.
 </Callout>
 
@@ -264,7 +266,7 @@ CI workflows need to act on GCP: push images to Artifact Registry, deploy Cloud 
 | `ci-build` | `deploy-orchestrator.yaml` |
 | `ci-terraform-apply` | `deploy-infra.yaml` (since 2026-11-03: any job in the `prod-infra` environment) |
 | `ci-runner-image-build` | `deploy-runner-image.yaml` |
-| `ci-terraform-plan` (plan only: `roles/viewer`, `roles/iam.securityReviewer`, `roles/storage.objectUser` on the state bucket) | any workflow in the repo |
+| `ci-terraform-plan` (plan only: the custom `controlTerraformReader` and `poolTerraformReader` roles, `roles/storage.objectUser` on the state bucket; `roles/viewer` and `roles/iam.securityReviewer` until 2026-11-05) | any workflow in the repo |
 
 - No `google_service_account_key` resource exists anywhere in Terraform.
 
@@ -1001,6 +1003,8 @@ An owner `suspend` stops new VMs only; VMs already running end with their job, o
   - **The apply account's WIF binding moves to the `prod-infra` environment subject** in two control PRs (step 3c adds it, step 3d removes the path-bound one), and the control project's default compute account, which holds Editor and so `actAs` on the apply account, is disabled before the cutover. Step 3e does that by hand: `google_project_default_service_accounts` finds default accounts by display name, and the control project's older one doesn't match, so that resource would do nothing there. The control root reads the account back on every plan and fails while it's enabled ([Terraform drift](/docs/guides/runbooks/terraform-drift#default-compute-account-enabled)). Its grants stay until step 9, so the rollback is to re-enable it and, in a PR merged first, delete that check.
   - **Step 3f gives the plan account a control reader role too.** In the control project it still holds `roles/viewer` and `roles/iam.securityReviewer`, which let any branch's workflow read VM metadata (runner registration tokens), Firestore documents, logs and traces. `controlTerraformReader` holds the 30 reads that refreshing the control root makes (gets, IAM policies and `serviceusage.services.list`), including `resourcemanager.projects.get`, which the pool root needs for the control project's metrics scope. Same order as the pool: the role first, then the owner removes the two grants by hand, a drift run proves both roots refresh without them, and a later PR deletes their blocks and codifies the removal. Meanwhile conftest fails any plan that would grant them again, so no apply re-grants them. A missing permission is added to the role ([Terraform drift](/docs/guides/runbooks/terraform-drift#plan-lacks-a-permission)).
   - **Plans are public.** The repository is public, and every plan run uploads its plan, prior state included, as a workflow artifact anyone signed in to GitHub can download for 90 days. Neither root keeps a secret in state; conftest now fails a plan that adds a type that would (a secret version, a service account key, a generated password and the like), or a Scheduler job with a header or body.
+
+  **2026-11-05**: step 3f is done. The owner removed `roles/viewer` and `roles/iam.securityReviewer` from the plan account in the control project by hand after the reader role was applied ([#388](https://github.com/rumankazi/runnerforge/pull/388)). The next drift runs refreshed both roots without them: the pool showed no changes, and the control root only the two removed grants, besides the `orchestrator_health` dashboard update every control plan shows. A second PR deleted their blocks and codified the removal with `google_project_iam_member_remove`, as step 3b did in the pool. Conftest now allows the plan account only `controlTerraformReader` and `objectUser` on the state bucket outside the pool, and `no_basic_roles` has no exception for it.
 </Callout>
 
 Phase 4.3. Required before any stranger's job runs, that is before the App (3851412) goes public.

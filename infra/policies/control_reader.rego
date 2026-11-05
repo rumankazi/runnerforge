@@ -265,24 +265,37 @@ deny contains msg if {
 	msg := sprintf("Custom role %q (controlTerraformReader) adds %q. It reads settings only, never a VM, a log entry, a document, a secret version or an object (ADR-020).", [rc.address, p])
 }
 
-# ci-terraform-plan's broad control grants, replaced by controlTerraformReader.
-# The owner removes them by hand once the role is applied (ADR-020 step 3f).
-# From then on a plan that would grant them again fails, so nothing re-grants
-# them before the PR that deletes their blocks: an apply runs the PR's saved plan.
-control_plan_broad_roles := {"roles/viewer", "roles/iam.securityReviewer"}
+# ci-terraform-plan, as a member known at plan time, holds nothing else outside
+# the pool: no roles/viewer or roles/iam.securityReviewer (both list instances,
+# whose metadata holds runner registration tokens; removed in ADR-020 step 3f),
+# and no editor, owner or token creator on a project, a bucket or a service
+# account. Its pool grants are pool_reader.rego's.
+control_plan_reader_role := "projects/runnerforge/roles/controlTerraformReader"
+
+control_state_bucket := "runnerforge-terraform-state"
 
 deny contains msg if {
 	some g in iam_grants
 	g.member == pool_plan_member
-	g.type in pool_project_iam_types
 	not pool_iam_target(g)
-	g.role in control_plan_broad_roles
-	some rc in input.resource_changes
-	rc.address == g.address
-	some action in rc.change.actions
-	action in {"create", "update"}
+	not control_plan_grant_allowed(g)
 	msg := sprintf(
-		"%q would grant %s to ci-terraform-plan in runnerforge. It reads the control project through controlTerraformReader only (ADR-020 step 3f); add a missing permission to that role instead (terraform-drift runbook).",
-		[g.address, g.role],
+		"%q grants %v to ci-terraform-plan outside the pool. It holds only %s on project runnerforge and roles/storage.objectUser on bucket %s (ADR-020 step 3f). Add a missing read to controlTerraformReader instead (terraform-drift runbook).",
+		[g.address, g.role, control_plan_reader_role, control_state_bucket],
 	)
+}
+
+control_plan_grant_allowed(g) if {
+	g.type in {"google_project_iam_member", "google_project_iam_binding"}
+	g.project == control_project_id
+	g.role == control_plan_reader_role
+}
+
+# A plan stores a bucket IAM member's bucket as "b/<name>".
+control_plan_grant_allowed(g) if {
+	g.type == "google_storage_bucket_iam_member"
+	g.role == "roles/storage.objectUser"
+	b := pool_field(iam_grant_after(g), "bucket")
+	is_string(b)
+	trim_prefix(b, "b/") == control_state_bucket
 }
