@@ -20,26 +20,11 @@ resource "google_service_account" "ci_terraform_apply" {
 
 # For ci_terraform_plan
 
-# Being replaced by controlTerraformReader below (ADR-020 step 3f): the owner
-# removes both by hand once it's applied, then a later PR deletes these blocks.
-# Until then control_reader.rego fails any plan that would grant them again.
-resource "google_project_iam_member" "ci_terraform_plan_viewer" {
-  project = data.google_project.current.project_id
-  role    = "roles/viewer"
-  member  = "serviceAccount:${google_service_account.ci_terraform_plan.email}"
-}
-
-resource "google_project_iam_member" "ci_terraform_plan_iam_security" {
-  project = data.google_project.current.project_id
-  role    = "roles/iam.securityReviewer"
-  member  = "serviceAccount:${google_service_account.ci_terraform_plan.email}"
-}
-
 # What the plan account needs to refresh this root, plus the pool root's read of
 # this project's metrics scope (resourcemanager.projects.get), and nothing that
 # reads a VM, a log entry, a Firestore document, a secret version or an object.
-# It replaces the two grants above (ADR-020 step 3f): roles/viewer and
-# roles/iam.securityReviewer both list instances, whose metadata holds runner
+# It replaced roles/viewer and roles/iam.securityReviewer (ADR-020 step 3f,
+# removed below), which both list instances, whose metadata holds runner
 # registration tokens. infra/policies/control_reader.rego holds the policy's
 # copy of the permissions and the map of what each type reads: change them
 # together. project and role_id are literal so the policy reads them at plan time.
@@ -96,6 +81,58 @@ resource "google_project_iam_member" "ci_terraform_plan_control_reader" {
   lifecycle {
     prevent_destroy = true
   }
+}
+
+# Grants removed by hand in ADR-020 step 3f, which must stay gone (the pool's
+# step-3b removals in infra/terraform-pool/iam.tf work the same way). A
+# _member_remove resource removes its grant when created and stays in state
+# while the grant is absent. If the grant comes back, the next refresh drops it
+# from state, so the next plan shows it to add (drift), and applying a plan
+# made after that removes the grant again. Deleting one of these blocks only
+# stops that check; it never restores a grant.
+#
+# So re-granting roles/viewer is no fix for a plan that can't read something:
+# add the missing permission to controlTerraformReader by hand instead, and make
+# the PR that codifies it the next control merge (terraform-drift runbook).
+#
+# _member_remove rewrites the project policy without the provider's IAM lock or
+# its retry on a concurrent change, so each one waits for every other write to
+# the project policy here (enabling an API can add a service agent to it), and
+# for the removal before it. Add any new one (an IAM member or binding, an API)
+# to the first removal's depends_on.
+resource "google_project_iam_member_remove" "ci_terraform_plan_control_viewer" {
+  project = "runnerforge"
+  role    = "roles/viewer"
+  member  = "serviceAccount:${google_service_account.ci_terraform_plan.email}"
+
+  depends_on = [
+    google_project_service.enabled,
+    google_project_iam_member.orchestrator_instance_admin,
+    google_project_iam_member.orchestrator_image_user,
+    google_project_iam_member.orchestrator_log_write,
+    google_project_iam_member.orchestrator_cloud_trace_agent,
+    google_project_iam_member.orchestrator_log_viewer,
+    google_project_iam_member.orchestrator_firestore_user,
+    google_project_iam_member.ci_runner_image_build_instance_admin,
+    google_project_iam_member.ci_runner_image_manager,
+    google_project_iam_member.ci_runner_image_build_log_viewer,
+    google_project_iam_member.ci_vm_logger_writer,
+    google_project_iam_member.runnerforge_runner_vm_log_write,
+    google_project_iam_member.ci_terraform_plan_control_reader,
+    google_project_iam_member.ci_terraform_apply_iam_role_admin,
+    google_project_iam_member.ci_terraform_apply_firestore_database_creator,
+    google_project_iam_member.ci_terraform_apply_editor,
+    google_project_iam_member.ci_terraform_apply_iam_security_admin,
+    google_project_iam_member.ci_terraform_apply_secretmanager_admin,
+  ]
+}
+
+resource "google_project_iam_member_remove" "ci_terraform_plan_control_security_reviewer" {
+  project = "runnerforge"
+  role    = "roles/iam.securityReviewer"
+  member  = "serviceAccount:${google_service_account.ci_terraform_plan.email}"
+
+  depends_on = [google_project_iam_member_remove.ci_terraform_plan_control_viewer]
 }
 
 resource "google_storage_bucket_iam_member" "ci_terraform_plan_state_user" {

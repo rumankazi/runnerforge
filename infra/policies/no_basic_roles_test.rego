@@ -39,14 +39,14 @@ test_allows_non_iam_resources if {
 	count(br_messages([br_rc("google_compute_instance", "example", {"name": "test-instance"})])) == 0
 }
 
-# The control module's own basic-role grants (infra/terraform/terraform_ci.tf).
-# The plan account's Viewer stays until ADR-020 step 3f deletes it; a plan that
-# creates it again fails in control_reader.rego.
+# The control module's own basic-role grant (infra/terraform/terraform_ci.tf).
 test_allows_control_module_basic_role_grants if {
-	count(br_messages([
-		br_member("ci_terraform_apply_editor", "runnerforge", "roles/editor", br_apply),
-		object.union(br_member("ci_terraform_plan_viewer", "runnerforge", "roles/viewer", br_plan), {"change": {"actions": ["no-op"]}}),
-	])) == 0
+	count(br_messages([br_member("ci_terraform_apply_editor", "runnerforge", "roles/editor", br_apply)])) == 0
+}
+
+# ADR-020 step 3f removed the plan account's Viewer in the control project too.
+test_denies_plan_viewer_in_control if {
+	br_flags([br_member("ci_terraform_plan_viewer", "runnerforge", "roles/viewer", br_plan)], "google_project_iam_member.ci_terraform_plan_viewer", "roles/viewer")
 }
 
 test_allows_apply_editor_in_pool if {

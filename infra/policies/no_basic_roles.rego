@@ -19,13 +19,14 @@ basic_roles := {
 #     types TF manages, in the control project and the pool (ADR-020).
 #     Granular role enumeration would mean ongoing maintenance every time TF
 #     starts managing a new resource type.
-#   - ci-terraform-plan needs viewer-equivalent read in the control project.
-#     Not in the pool: roles/viewer lists instances there, and an instance's
-#     metadata holds its runner registration token. It reads the pool through
-#     poolTerraformReader (pool_reader.rego).
 # Per-SA WIF principal pinning + CODEOWNERS on /infra/terraform/ + this OPA
 # policy together are the layered defenses; the basic role grant is acceptable
 # given the surrounding constraints.
+#
+# ci-terraform-plan holds no basic role: roles/viewer lists instances, and an
+# instance's metadata holds its runner registration token. It reads each project
+# through a custom role instead (ADR-020 steps 3 and 3f; pool_reader.rego and
+# control_reader.rego).
 basic_role_allowlist := {
 	{
 		"member": "serviceAccount:ci-terraform-apply@runnerforge.iam.gserviceaccount.com",
@@ -36,11 +37,6 @@ basic_role_allowlist := {
 		"member": "serviceAccount:ci-terraform-apply@runnerforge.iam.gserviceaccount.com",
 		"role": "roles/editor",
 		"project": "runnerforge-pool",
-	},
-	{
-		"member": "serviceAccount:ci-terraform-plan@runnerforge.iam.gserviceaccount.com",
-		"role": "roles/viewer",
-		"project": "runnerforge",
 	},
 }
 

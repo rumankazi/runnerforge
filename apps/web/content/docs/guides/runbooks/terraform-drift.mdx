@@ -26,7 +26,7 @@ Open the issue's latest comment. The plan shows `~`, `+`, `-` markers for resour
 | `~ google_cloud_run_v2_service.orchestrator` with field-level changes | Someone changed Cloud Run via console (env vars, scaling, etc.) |
 | `+` on a resource the code declares | It was deleted out-of-band; the next apply would recreate it |
 | `-/+` (replace) | A changed field forces replacement; read the `# forces replacement` line before applying |
-| `+ google_project_iam_member_remove.*` (pool) | A grant removed in ADR-020 step 3b is back, made by hand. Remove it by hand now with `gcloud projects remove-iam-policy-binding runnerforge-pool --member=<member> --role=<role> --condition=None`, then find out who added it ([Pool audit alerts](/docs/guides/runbooks/pool-audit)). A pool apply removes it only if its PR was planned after the grant came back |
+| `+ google_project_iam_member_remove.*` | A grant removed in ADR-020 step 3b (pool) or 3f (control) is back, made by hand. Remove it by hand now with `gcloud projects remove-iam-policy-binding <project> --member=<member> --role=<role> --condition=None`, then find out who added it (in the pool, [Pool audit alerts](/docs/guides/runbooks/pool-audit); in the control project, its Admin Activity log for `SetIamPolicy`). An apply removes it only if its PR was planned after the grant came back |
 
 Runner VMs never show up here: the orchestrator creates them through the GCE API, and Terraform doesn't manage them.
 
@@ -52,7 +52,7 @@ If the change was unintended:
 
 ## Plan lacks a permission
 
-`ci-terraform-plan` reads each project through one custom role. In the pool that's been true since ADR-020 step 3. In the control project it also holds `roles/viewer` and `roles/iam.securityReviewer` until the owner removes them by hand (step 3f):
+`ci-terraform-plan` reads each project through one custom role only (ADR-020 steps 3 and 3f):
 
 | Target | Role | Codify in |
 |---|---|---|
@@ -69,9 +69,7 @@ Then open a PR adding it to the role, to the policy's permission list, and to th
 
 A pool plan that stalls for about 5 minutes on `google_monitoring_monitored_project.control_scope` and then fails with a 403 lacks a permission in the **control** project: the pool reads the control project's metrics scope with `resourcemanager.projects.get` from `controlTerraformReader`.
 
-**During step 3f,** between the hand removal and the PR that deletes the two grants' blocks, every PR that plans the control target fails conftest, because the plan would grant both again. Every PR that touches `infra/policies/` plans the control target too. This is on purpose, since it stops Renovate from re-granting them. The drift comment shows `+ create` for `ci_terraform_plan_viewer` and `ci_terraform_plan_iam_security` until then; don't re-grant them to clear it. A permission fix in that window still starts by hand. Then put its role and policy change into that PR, so its apply keeps the permission. If it can't wait, re-grant both by hand, merge the fix, and remove them again after 7 minutes.
-
-Never add `compute.instances.*`, `compute.disks.*`, log-entry, Firestore-document, secret-version or object reads; conftest rejects them. Don't re-grant `roles/viewer` or `roles/iam.securityReviewer` instead: both list VMs, whose metadata holds runner registration tokens. In the pool, `google_project_iam_member_remove.ci_terraform_plan_pool_viewer` removes Viewer again on the next pool apply; in the control project, conftest fails any plan that would grant either one.
+Never add `compute.instances.*`, `compute.disks.*`, log-entry, Firestore-document, secret-version or object reads; conftest rejects them. Don't re-grant `roles/viewer` or `roles/iam.securityReviewer` instead: both list VMs, whose metadata holds runner registration tokens. If one comes back, drift shows `+ google_project_iam_member_remove.*`, but only an apply whose PR was planned after the re-grant removes it, so remove it by hand at once (see the table above). Conftest fails any plan that would grant them.
 
 ## Default compute account enabled
 
