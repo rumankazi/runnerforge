@@ -2,12 +2,18 @@ import asyncio
 import logging
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from google.api_core.exceptions import AlreadyExists, GoogleAPIError, NotFound
-from google.auth.exceptions import DefaultCredentialsError
+from google.api_core.exceptions import (
+    AlreadyExists,
+    GoogleAPIError,
+    NotFound,
+    PreconditionFailed,
+)
+from google.auth.exceptions import DefaultCredentialsError, GoogleAuthError
 from google.cloud import compute_v1
 from google.cloud import logging as gcp_logging
 from opentelemetry import trace
@@ -18,7 +24,9 @@ from runnerforge.config import (
     GCP_PROJECT_ID,
     GCP_ZONE,
     RUNNER_IMAGE_PROJECT,
+    RUNNER_VM_PROJECT_ID,
     RUNNER_VM_SA_EMAIL,
+    RUNNER_VM_SUBNETWORK,
 )
 from runnerforge.job_store import get_job_store
 from runnerforge.models import RunnerForgeVmLabels, VmInfo
@@ -45,6 +53,27 @@ GITHUB_REPO_URL_PREFIX = "https://github.com/"
 MAX_VM_RUN_DURATION = timedelta(hours=6, minutes=15)
 # GCE instance naming rule (RFC 1035 label); no regex metacharacters.
 _GCE_INSTANCE_NAME_RE = re.compile(r"[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?")
+SERIAL_LOGGING_KEY = "serial-port-logging-enable"
+# Set on every VM, after the caller's metadata so it can't override them
+# (ADR-020). Serial logging is on for boot diagnostics and goes off when the
+# job starts (turn_off_serial_logging).
+SECURITY_METADATA = {
+    "enable-oslogin": "TRUE",
+    "block-project-ssh-keys": "TRUE",
+    SERIAL_LOGGING_KEY: "TRUE",
+}
+# The whole serial-off, retry included: it runs inside the in_progress
+# webhook, within GitHub's 10 s.
+SERIAL_OFF_TIMEOUT_SECONDS = 4.0
+SerialOffOutcome = Literal[
+    "submitted",
+    "already_off",
+    "vm_gone",
+    "not_running",
+    "not_owned",
+    "conflict",
+    "failed",
+]
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -186,7 +215,9 @@ def init_machine_types_cache(zone: str = GCP_ZONE) -> None:
     global _KNOWN_MACHINE_TYPES
     try:
         client = compute_v1.MachineTypesClient()
-        request = compute_v1.ListMachineTypesRequest(project=GCP_PROJECT_ID, zone=zone)
+        request = compute_v1.ListMachineTypesRequest(
+            project=RUNNER_VM_PROJECT_ID, zone=zone
+        )
         types = {t.name: t.guest_cpus for t in client.list(request=request)}
         client.transport.close()
     except (GoogleAPIError, DefaultCredentialsError) as e:
@@ -239,6 +270,10 @@ async def preemption_status(vm_name: str) -> bool | None:
     24h lookback covers any reasonable runner lifetime (sweep HARD_LIMIT=6h;
     GH job timeout ~24h). Filter is VM-name-scoped so it's specific even
     without a tighter timestamp bound.
+
+    The VM may be in the control project (created before VMs moved) or the
+    VM project, so each is asked on its own: a failed read of one can't hide
+    the other's answer.
     """
     if _logging_client is None:
         return None
@@ -246,11 +281,26 @@ async def preemption_status(vm_name: str) -> bool | None:
     # filter: anything that isn't a valid GCE instance name can't be ours.
     if not _GCE_INSTANCE_NAME_RE.fullmatch(vm_name):
         return False
-    client = _logging_client  # local binding so the lambda's closure type-narrows
+    answers = [
+        await _preempted_in(_logging_client, project, vm_name)
+        for project in dict.fromkeys((GCP_PROJECT_ID, RUNNER_VM_PROJECT_ID))
+    ]
+    if True in answers:
+        return True
+    if None in answers:
+        return None
+    return False
 
+
+async def _preempted_in(
+    client: gcp_logging.Client, project: str, vm_name: str
+) -> bool | None:
     since = datetime.now(UTC) - timedelta(hours=24)
     filter_str = (
-        f'protoPayload.methodName="compute.instances.preempted" '
+        # Only GCE writes this log: an entry a VM's own credentials wrote
+        # elsewhere can't pass for a preemption.
+        'LOG_ID("cloudaudit.googleapis.com/system_event") '
+        f'AND protoPayload.methodName="compute.instances.preempted" '
         # Anchored regex on the instance name, not `:` (case-insensitive
         # substring): runnerforge-1-2-1 must not match runnerforge-1-2-10.
         f'AND protoPayload.resourceName=~"/instances/{vm_name}$" '
@@ -259,12 +309,18 @@ async def preemption_status(vm_name: str) -> bool | None:
 
     try:
         entries = await asyncio.to_thread(
-            lambda: list(client.list_entries(filter_=filter_str, max_results=1))
+            lambda: list(
+                client.list_entries(
+                    resource_names=[f"projects/{project}"],
+                    filter_=filter_str,
+                    max_results=1,
+                )
+            )
         )
     except GoogleAPIError as e:
         logger.warning(
             "Failed to query audit log for preemption check",
-            extra={"vm_name": vm_name, "reason": str(e)},
+            extra={"vm_name": vm_name, "project_id": project, "reason": str(e)},
         )
         return None
 
@@ -310,9 +366,10 @@ async def create_vm(
     max_run_duration: timedelta = MAX_VM_RUN_DURATION,
     data_disk_size_gb: int = _DATA_DISK_SIZE_GB,
     zone: str = GCP_ZONE,
-    project_id: str = GCP_PROJECT_ID,
+    project_id: str | None = None,
 ) -> OperationHandle | None:
     """Submits a VM creation request. Returns the operation handle (does not wait for VM to boot)."""
+    project_id = project_id or RUNNER_VM_PROJECT_ID
     assert _compute_client is not None
     # GCE source_image requires either a project-qualified image path or a
     # family alias — a bare image name is rejected as a malformed URL. When
@@ -362,29 +419,32 @@ async def create_vm(
             ),
         ]
 
-        # network
+        # network. With only a subnetwork, GCE takes the network from it. No
+        # access config either way, so the VM gets no external IP.
         instance.network_interfaces = [
-            compute_v1.NetworkInterface(
-                network="global/networks/default",
-            )
+            compute_v1.NetworkInterface(subnetwork=RUNNER_VM_SUBNETWORK)
+            if RUNNER_VM_SUBNETWORK
+            else compute_v1.NetworkInterface(network="global/networks/default")
         ]
 
         # metadata
-        if metadata:
-            instance.metadata = compute_v1.Metadata(
-                items=[compute_v1.Items(key=k, value=v) for k, v in metadata.items()]
-            )
+        items = {**(metadata or {}), **SECURITY_METADATA}
+        instance.metadata = compute_v1.Metadata(
+            items=[compute_v1.Items(key=k, value=v) for k, v in items.items()]
+        )
         instance.name = instance_name
         instance.machine_type = f"zones/{zone}/machineTypes/{machine_type}"
         instance.labels = labels
 
-        # Service Accounts
-        instance.service_accounts = [
-            compute_v1.ServiceAccount(
-                email=RUNNER_VM_SA_EMAIL,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
-            )
-        ]
+        # Service Accounts. None configured means none attached (ADR-020):
+        # the job can't get a Google token from the metadata server.
+        if RUNNER_VM_SA_EMAIL:
+            instance.service_accounts = [
+                compute_v1.ServiceAccount(
+                    email=RUNNER_VM_SA_EMAIL,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
+            ]
 
         # Every VM gets a hard runtime cap enforced by GCE itself. DELETE (not
         # STOP): a stopped VM clears its termination timestamp and its disks
@@ -591,9 +651,10 @@ async def find_vms_by_job_id(
     run_id: str,
     run_attempt: str,
     zone: str = GCP_ZONE,
-    project_id: str = GCP_PROJECT_ID,
+    project_id: str | None = None,
 ) -> list[str]:
     """Returns instance names of VMs labeled with the given job_id."""
+    project_id = project_id or RUNNER_VM_PROJECT_ID
     assert _compute_client is not None
     client = _compute_client
     request = compute_v1.ListInstancesRequest()
@@ -620,26 +681,22 @@ async def find_vms_by_job_id(
     return result
 
 
-async def get_vm_labels_by_name(
+async def get_vm_by_name(
     instance_name: str,
     zone: str = GCP_ZONE,
-    project_id: str = GCP_PROJECT_ID,
-) -> dict[str, str] | None:
-    """Returns the raw labels of the named VM, or None if it doesn't exist.
-
-    Raw dict on purpose: callers use this to decide whether a VM is ours, so
-    a VM with foreign/missing labels must come back as data, not raise a
-    ValidationError like RunnerForgeVmLabels.model_validate would.
-    """
+    project_id: str | None = None,
+) -> compute_v1.Instance | None:
+    """Returns the named VM, or None if it doesn't exist."""
+    project_id = project_id or RUNNER_VM_PROJECT_ID
     assert _compute_client is not None
     # Callers pass runner names from payloads, chosen by whoever registered
     # the runner. GCE answers 400, not 404, for a name it can't hold.
     if not _GCE_INSTANCE_NAME_RE.fullmatch(instance_name):
         return None
-    with tracer.start_as_current_span("compute.get_vm_labels_by_name") as span:
+    with tracer.start_as_current_span("compute.get_vm_by_name") as span:
         span.set_attribute("instance_name", instance_name)
         try:
-            instance = await asyncio.to_thread(
+            return await asyncio.to_thread(
                 _compute_client.get,
                 project=project_id,
                 zone=zone,
@@ -647,7 +704,21 @@ async def get_vm_labels_by_name(
             )
         except NotFound:
             return None
-        return dict(instance.labels)
+
+
+async def get_vm_labels_by_name(
+    instance_name: str,
+    zone: str = GCP_ZONE,
+    project_id: str | None = None,
+) -> dict[str, str] | None:
+    """Returns the raw labels of the named VM, or None if it doesn't exist.
+
+    Raw dict on purpose: callers use this to decide whether a VM is ours, so
+    a VM with foreign/missing labels must come back as data, not raise a
+    ValidationError like RunnerForgeVmLabels.model_validate would.
+    """
+    instance = await get_vm_by_name(instance_name, zone=zone, project_id=project_id)
+    return None if instance is None else dict(instance.labels)
 
 
 async def get_vm_labels_by_job(
@@ -655,8 +726,9 @@ async def get_vm_labels_by_job(
     run_id: str,
     run_attempt: str,
     zone: str = GCP_ZONE,
-    project_id: str = GCP_PROJECT_ID,
+    project_id: str | None = None,
 ) -> dict[str, str] | None:
+    project_id = project_id or RUNNER_VM_PROJECT_ID
     assert _compute_client is not None
     with tracer.start_as_current_span("compute.get_vm_labels_by_job") as span:
         span.set_attribute("job_id", job_id)
@@ -705,9 +777,10 @@ async def delete_vm(
     instance_name: str,
     reason: Literal["webhook", "sweep", "reconcile", "cutoff"],
     zone: str = GCP_ZONE,
-    project_id: str = GCP_PROJECT_ID,
+    project_id: str | None = None,
 ) -> str | None:
     """Submits VM deletion. Returns operation ID. Does not wait for completion."""
+    project_id = project_id or RUNNER_VM_PROJECT_ID
     assert _compute_client is not None
     with tracer.start_as_current_span("compute.delete_vm") as span:
         span.set_attribute("instance_name", instance_name)
@@ -740,9 +813,10 @@ async def delete_vm(
 
 
 async def list_runnerforge_vms(
-    zone: str = GCP_ZONE, project_id: str = GCP_PROJECT_ID
+    zone: str = GCP_ZONE, project_id: str | None = None
 ) -> list[VmInfo]:
     """Returns all VMs labeled runner=runnerforge with their creation timestamp + labels."""
+    project_id = project_id or RUNNER_VM_PROJECT_ID
     assert _compute_client is not None
     with tracer.start_as_current_span("compute.list_runnerforge_vms") as span:
         span.set_attribute("project_id", project_id)
@@ -793,6 +867,7 @@ async def list_runnerforge_vms(
                         "repo_full_name": repo_full_name,
                         "runner_labels": runner_labels,
                         "status": i.status,
+                        "serial_logging": serial_logging_state(i),
                     }
                 )
             )
@@ -800,6 +875,7 @@ async def list_runnerforge_vms(
         logger.info(
             "VM list scan",
             extra={
+                "project_id": project_id,
                 "runnerforge_vm_count": len(valid_vms),
                 "skipped_malformed_count": skipped_malformed,
             },
@@ -820,10 +896,11 @@ ACTIVE_VMS_TIMEOUT_SECONDS = 2.0
 
 
 async def active_vm_names(
-    installation_id: int, zone: str = GCP_ZONE, project_id: str = GCP_PROJECT_ID
+    installation_id: int, zone: str = GCP_ZONE, project_id: str | None = None
 ) -> set[str]:
     """Names of the installation's RunnerForge VMs that count against its
     limit."""
+    project_id = project_id or RUNNER_VM_PROJECT_ID
     assert _compute_client is not None
     with tracer.start_as_current_span("compute.active_vm_names") as span:
         span.set_attribute("installation_id", installation_id)
@@ -842,3 +919,139 @@ async def active_vm_names(
         names = {i.name for i in instances if i.status in ACTIVE_STATUSES}
         span.set_attribute("result_count", len(names))
         return names
+
+
+# --- serial logging off at job start (ADR-020) ---
+
+
+def serial_logging_state(instance: compute_v1.Instance) -> bool | None:
+    """Whether GCE copies the VM's serial port to Cloud Logging. GCE's own
+    consolidated value when the response has it, else the VM's item; None
+    when unknown. A VM without the item can still inherit TRUE from its
+    project, so absent never means off."""
+    effective = instance.resource_status.effective_instance_metadata
+    if "serial_port_logging_enable_metadata_value" in effective:
+        return effective.serial_port_logging_enable_metadata_value
+    for item in instance.metadata.items:
+        if item.key == SERIAL_LOGGING_KEY:
+            value = item.value.strip().lower()
+            return value == "true" if value in ("true", "false") else None
+    return None
+
+
+async def turn_off_serial_logging(
+    vm_name: str,
+    trigger: Literal["in_progress", "reconcile"],
+    reason: Literal["webhook", "busy", "aged"],
+    *,
+    installation_id: int | None,
+    instance: compute_v1.Instance | None = None,
+    zone: str = GCP_ZONE,
+    project_id: str | None = None,
+) -> SerialOffOutcome:
+    """Set the VM's serial-port-logging-enable to FALSE, so the tenant's job
+    output stops reaching Cloud Logging. `instance` is a get the caller
+    already made; `installation_id`, when given, must match the VM's label.
+
+    Never raises for a GCE error and never waits for the operation: the
+    reconciler reads the state back on its next run. Its log line holds no
+    metadata values or error text, since the VM's metadata carries its
+    registration token."""
+    project_id = project_id or RUNNER_VM_PROJECT_ID
+    operation_id: str | None = None
+    error_class: str | None = None
+    outcome: SerialOffOutcome
+    if not _GCE_INSTANCE_NAME_RE.fullmatch(vm_name):
+        outcome = "not_owned"
+    else:
+        try:
+            async with asyncio.timeout(SERIAL_OFF_TIMEOUT_SECONDS):
+                outcome, operation_id = await _serial_off(
+                    vm_name, installation_id, instance, zone, project_id
+                )
+        except NotFound:
+            outcome = "vm_gone"
+        # RequestException: the REST transport's own connection errors.
+        # GoogleAuthError: a failed token refresh before the call.
+        except (GoogleAPIError, GoogleAuthError, RequestException, TimeoutError) as e:
+            outcome, error_class = "failed", type(e).__name__
+    logger.log(
+        logging.WARNING if outcome in ("failed", "conflict") else logging.INFO,
+        "Serial logging outcome",
+        extra={
+            "vm_name": vm_name,
+            "project_id": project_id,
+            "trigger": trigger,
+            "reason": reason,
+            "outcome": outcome,
+            "error_class": error_class,
+            "operation_id": operation_id,
+        },
+    )
+    return outcome
+
+
+async def _serial_off(
+    vm_name: str,
+    installation_id: int | None,
+    instance: compute_v1.Instance | None,
+    zone: str,
+    project_id: str,
+) -> tuple[SerialOffOutcome, str | None]:
+    assert _compute_client is not None
+    client = _compute_client
+    # setMetadata replaces every item, and the fingerprint makes it fail if
+    # the metadata changed since our get: then read once more and retry.
+    for _ in range(2):
+        if instance is None:
+            instance = await asyncio.to_thread(
+                client.get,
+                project=project_id,
+                zone=zone,
+                instance=vm_name,
+                # The client's default retry runs for up to 600 s, which
+                # would keep this thread long after our timeout gives up.
+                retry=None,
+                timeout=SERIAL_OFF_TIMEOUT_SECONDS,
+            )
+        # Whoever registers a runner chooses its name: change only a VM whose
+        # own labels say we made it (for this installation).
+        labels = instance.labels
+        if labels.get("runner") != "runnerforge" or (
+            installation_id is not None
+            and labels.get("installation_id") != str(installation_id)
+        ):
+            return "not_owned", None
+        if instance.status != "RUNNING":
+            return "not_running", None
+        if serial_logging_state(instance) is False:
+            return "already_off", None
+        items = [
+            compute_v1.Items(
+                key=item.key,
+                value="FALSE" if item.key == SERIAL_LOGGING_KEY else item.value,
+            )
+            for item in instance.metadata.items
+        ]
+        if all(item.key != SERIAL_LOGGING_KEY for item in items):
+            # Absent: it may come from the project, so say FALSE outright.
+            items.append(compute_v1.Items(key=SERIAL_LOGGING_KEY, value="FALSE"))
+        request = compute_v1.SetMetadataInstanceRequest(
+            project=project_id,
+            zone=zone,
+            instance=vm_name,
+            metadata_resource=compute_v1.Metadata(
+                fingerprint=instance.metadata.fingerprint, items=items
+            ),
+            # A new one per attempt: GCE ignores a repeated ID.
+            request_id=str(uuid.uuid4()),
+        )
+        try:
+            operation = await asyncio.to_thread(
+                client.set_metadata, request=request, timeout=SERIAL_OFF_TIMEOUT_SECONDS
+            )
+        except PreconditionFailed:
+            instance = None
+            continue
+        return "submitted", operation.name
+    return "conflict", None

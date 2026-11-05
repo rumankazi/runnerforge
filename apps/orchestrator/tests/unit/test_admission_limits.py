@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from google.cloud import compute_v1
 
 from runnerforge import admission, compute_client, handlers, main, registry
 from runnerforge.admission import ALLOWLISTED, decide_admission, exceeds_size
@@ -262,16 +263,18 @@ def _in_progress(runner_name: str | None) -> SimpleNamespace:
 async def test_runner_vm_without_a_runner_name_falls_back_to_the_job(monkeypatch):
     by_job = AsyncMock(return_value={"queued_received_at": "1"})
     monkeypatch.setattr(handlers, "get_vm_labels_by_job", by_job)
-    assert await handlers._runner_vm_labels(_in_progress(None)) == {
-        "queued_received_at": "1"
-    }
+    # Labels for readiness, but no VM: a guess by job is never changed.
+    assert await handlers._runner_vm(_in_progress(None)) == (
+        {"queued_received_at": "1"},
+        None,
+    )
     by_job.assert_awaited_once_with(job_id="2", run_id="1", run_attempt="1")
 
 
 async def test_runner_vm_of_a_foreign_runner_is_not_looked_up(monkeypatch):
     by_name = AsyncMock()
-    monkeypatch.setattr(handlers, "get_vm_labels_by_name", by_name)
-    assert await handlers._runner_vm_labels(_in_progress("my-own-runner")) is None
+    monkeypatch.setattr(handlers, "get_vm_by_name", by_name)
+    assert await handlers._runner_vm(_in_progress("my-own-runner")) == (None, None)
     by_name.assert_not_awaited()
 
 
@@ -289,10 +292,11 @@ async def test_runner_vm_of_a_foreign_runner_is_not_looked_up(monkeypatch):
     ids=["gone", "not-ours", "other-installation", "ours"],
 )
 async def test_runner_vm_is_trusted_only_by_its_labels(monkeypatch, labels, expected):
-    by_name = AsyncMock(return_value=labels)
-    monkeypatch.setattr(handlers, "get_vm_labels_by_name", by_name)
-    result = await handlers._runner_vm_labels(_in_progress("runnerforge-1-9-1"))
-    assert result == expected
+    vm = None if labels is None else compute_v1.Instance(labels=labels)
+    by_name = AsyncMock(return_value=vm)
+    monkeypatch.setattr(handlers, "get_vm_by_name", by_name)
+    result = await handlers._runner_vm(_in_progress("runnerforge-1-9-1"))
+    assert result == (expected, None if expected is None else vm)
     by_name.assert_awaited_once_with("runnerforge-1-9-1")
 
 

@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Any, Literal
 
+from google.cloud import compute_v1
 from opentelemetry import trace
 from opentelemetry.trace import (
     NonRecordingSpan,
@@ -22,9 +23,11 @@ from runnerforge.compute_client import (
     active_vm_names,
     create_vm,
     delete_vm,
+    get_vm_by_name,
     get_vm_labels_by_job,
     get_vm_labels_by_name,
     is_valid_machine_type,
+    turn_off_serial_logging,
 )
 from runnerforge.config import STARTUP_SCRIPT
 from runnerforge.github_client import get_installation_token, get_registration_token
@@ -366,31 +369,57 @@ async def handle_queued(
         return replace(operation, job_key=key, job_base=base)
 
 
-async def _runner_vm_labels(event: WorkflowJobEvent) -> dict[str, str] | None:
-    """Labels of the VM running the job. GitHub gives a queued job to any
-    idle runner with matching labels, so that can be the VM made for another
-    job; readiness then runs from that VM's admission, whichever job it was
-    made for (ADR-019), and neither a swap nor a deferral reads as slow
-    registration."""
+async def _runner_vm(
+    event: WorkflowJobEvent,
+) -> tuple[dict[str, str] | None, compute_v1.Instance | None]:
+    """Labels of the VM running the job, and the VM itself when the runner
+    named it. GitHub gives a queued job to any idle runner with matching
+    labels, so that can be the VM made for another job; readiness then runs
+    from that VM's admission, whichever job it was made for (ADR-019), and
+    neither a swap nor a deferral reads as slow registration."""
     runner_name = event.workflow_job.runner_name
     if not runner_name:
-        return await get_vm_labels_by_job(
+        # A guess by job: fine for readiness, not for changing the VM.
+        labels = await get_vm_labels_by_job(
             job_id=str(event.workflow_job.id),
             run_id=str(event.workflow_job.run_id),
             run_attempt=str(event.workflow_job.run_attempt),
         )
+        return labels, None
     if not runner_name.startswith("runnerforge-"):
-        return None
-    labels = await get_vm_labels_by_name(runner_name)
+        return None, None
+    vm = await get_vm_by_name(runner_name)
     # Whoever registers a runner chooses its name: trust the VM only if its
     # own labels say we made it for this installation.
+    labels = None if vm is None else dict(vm.labels)
     if (
         labels is None
         or labels.get("runner") != "runnerforge"
         or labels.get("installation_id") != str(event.installation.id)
     ):
-        return None
-    return labels
+        return None, None
+    return labels, vm
+
+
+async def _serial_logging_off(event: WorkflowJobEvent, vm: compute_v1.Instance):
+    """The job has started: its output is the tenant's, so it stops going to
+    Cloud Logging (ADR-020). Fails open: the reconciler retries a VM still
+    logging, and the webhook must answer GitHub either way."""
+    try:
+        await turn_off_serial_logging(
+            vm.name,
+            "in_progress",
+            "webhook",
+            installation_id=event.installation.id,
+            instance=vm,
+        )
+    # Deliberately broad. Only the class is logged: the VM's metadata holds
+    # its registration token, and an error's text could carry it.
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "Serial logging off failed",
+            extra={"vm_name": vm.name, "error_class": type(e).__name__},
+        )
 
 
 async def handle_in_progress(event: WorkflowJobEvent, received_at: float):
@@ -414,7 +443,7 @@ async def handle_in_progress(event: WorkflowJobEvent, received_at: float):
     """
     # Labels lookup BEFORE starting our own span so we can parent it under
     # the queued request when the VM exists.
-    vm_labels = await _runner_vm_labels(event)
+    vm_labels, vm = await _runner_vm(event)
     queued_ctx = (
         _webhook_span_context(
             vm_labels.get("webhook_trace_id", ""), vm_labels.get("webhook_span_id", "")
@@ -472,6 +501,9 @@ async def handle_in_progress(event: WorkflowJobEvent, received_at: float):
         # be clock skew, not real signal.
         if event.workflow_job.started_at and queued_received_at_str:
             _log_readiness(event, vm_labels or {}, received_at)
+
+        if vm is not None:
+            await _serial_logging_off(event, vm)
 
 
 def _log_readiness(

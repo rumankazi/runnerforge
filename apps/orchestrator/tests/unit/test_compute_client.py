@@ -79,7 +79,16 @@ def test_create_vm_builds_correct_instance(monkeypatch, caplog):
         "registration-token": "reg-token",
         "repo-url": "https://github.com/foo/bar",
         "runner-labels": "runnerforge, medium",
+        # ADR-020: every VM
+        "enable-oslogin": "TRUE",
+        "block-project-ssh-keys": "TRUE",
+        "serial-port-logging-enable": "TRUE",
     }
+    # Default network, no external IP.
+    [nic] = request.instance_resource.network_interfaces
+    assert nic.network == "global/networks/default"
+    assert not nic.subnetwork
+    assert not nic.access_configs
 
     # Observability contract: structured log on success
     log = next(

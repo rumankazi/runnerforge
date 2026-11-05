@@ -1,7 +1,7 @@
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -67,6 +67,17 @@ async def _shared_clients():
     yield
     await github_client.close_http_client()
     compute_client.close_compute_client()
+
+
+@pytest.fixture(autouse=True)
+def serial_off(monkeypatch) -> AsyncMock:
+    """Serial logging off (ADR-020), as the webhook and the reconciler call
+    it: a stub, so their tests don't reach the shared GCE mock. Its own
+    tests import it from compute_client."""
+    stub = AsyncMock(return_value="submitted")
+    monkeypatch.setattr("runnerforge.handlers.turn_off_serial_logging", stub)
+    monkeypatch.setattr("runnerforge.reconcile.turn_off_serial_logging", stub)
+    return stub
 
 
 @pytest.fixture(scope="session")

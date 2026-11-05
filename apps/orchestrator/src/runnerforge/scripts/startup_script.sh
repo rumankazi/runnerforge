@@ -85,17 +85,30 @@ log "Fetched metadata for repo $REPO_URL"
 # the runner exits (--ephemeral means after one job).
 RUNNER_DIR=/home/runner/actions-runner
 
+# The token never goes on sudo's command line: sudo logs that line to the
+# journal, which reaches Cloud Logging (ADR-020). config.sh reads it from a
+# file only root and the runner user can read, removed once it's used.
+# printf is a shell builtin, so the token isn't in any process's arguments.
+TOKEN_FILE=/run/runnerforge-registration-token
+trap 'rm -f "$TOKEN_FILE"' EXIT
+install --mode=0600 --owner=runner --group=runner /dev/null "$TOKEN_FILE"
+printf '%s' "$REGISTRATION_TOKEN" > "$TOKEN_FILE"
+unset REGISTRATION_TOKEN
+
 log "Configuring runner"
+# \$(cat ...) is escaped, so this shell passes it through unexpanded and the
+# runner user's shell reads the file.
 sudo --user=runner bash -c "
     cd $RUNNER_DIR && \
     ./config.sh \
         --url '$REPO_URL' \
-        --token '$REGISTRATION_TOKEN' \
+        --token \"\$(cat $TOKEN_FILE)\" \
         --name '$INSTANCE_NAME' \
         --labels '$RUNNER_LABELS' \
         --ephemeral \
         --unattended
 "
+rm -f "$TOKEN_FILE"
 
 log "Starting runner"
 sudo --user=runner bash -c "cd $RUNNER_DIR && ./run.sh"
