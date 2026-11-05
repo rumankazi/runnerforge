@@ -10,6 +10,7 @@ import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
+from google.cloud import compute_v1
 
 from runnerforge.main import app
 
@@ -1472,3 +1473,88 @@ def test_webhook_queued_logs_no_outcome_when_handler_fails(fixtures_dir, caplog)
     assert response.status_code == 500
     assert any("Webhook event received" in r.message for r in caplog.records)
     assert _queued_outcomes(caplog) == []
+
+
+# --- serial logging off when the job starts (ADR-020) ---
+
+
+def _started(fixtures_dir, runner_name: str | None) -> bytes:
+    payload = json.loads((fixtures_dir / "queued_job_payload.json").read_text())
+    payload["action"] = "in_progress"
+    payload["workflow_job"]["runner_name"] = runner_name
+    return json.dumps(payload).encode()
+
+
+def _our_vm(**labels) -> compute_v1.Instance:
+    return compute_v1.Instance(
+        name="runnerforge-1-9-1",
+        labels={"runner": "runnerforge", "installation_id": "135399152", **labels},
+    )
+
+
+def test_webhook_in_progress_turns_serial_logging_off(
+    fixtures_dir, monkeypatch, serial_off
+):
+    vm = _our_vm()
+    by_name = AsyncMock(return_value=vm)
+    monkeypatch.setattr("runnerforge.handlers.get_vm_by_name", by_name)
+    body = _started(fixtures_dir, "runnerforge-1-9-1")
+
+    response = client.post("/webhook", content=body, headers=_headers(body))
+
+    assert response.status_code == 200
+    # The ownership get's VM, so the helper needn't read it again.
+    serial_off.assert_awaited_once_with(
+        "runnerforge-1-9-1",
+        "in_progress",
+        "webhook",
+        installation_id=135399152,
+        instance=vm,
+    )
+
+
+@pytest.mark.parametrize(
+    ("runner_name", "vm"),
+    [
+        (None, None),
+        ("my-own-runner", None),
+        ("runnerforge-1-9-1", None),
+        ("runnerforge-1-9-1", _our_vm(runner="other")),
+        ("runnerforge-1-9-1", _our_vm(installation_id="1")),
+    ],
+    ids=["no-runner", "not-runnerforge", "vm-gone", "not-ours", "other-installation"],
+)
+def test_webhook_in_progress_leaves_other_vms_alone(
+    fixtures_dir, monkeypatch, serial_off, runner_name, vm
+):
+    monkeypatch.setattr(
+        "runnerforge.handlers.get_vm_by_name", AsyncMock(return_value=vm)
+    )
+    monkeypatch.setattr(
+        "runnerforge.handlers.get_vm_labels_by_job", AsyncMock(return_value=None)
+    )
+    body = _started(fixtures_dir, runner_name)
+
+    response = client.post("/webhook", content=body, headers=_headers(body))
+
+    assert response.status_code == 200
+    serial_off.assert_not_awaited()
+
+
+def test_webhook_in_progress_answers_when_serial_off_fails(
+    fixtures_dir, monkeypatch, serial_off, caplog
+):
+    monkeypatch.setattr(
+        "runnerforge.handlers.get_vm_by_name", AsyncMock(return_value=_our_vm())
+    )
+    serial_off.side_effect = RuntimeError("token AABBCC in the message")
+    body = _started(fixtures_dir, "runnerforge-1-9-1")
+
+    with caplog.at_level(logging.INFO):
+        response = client.post("/webhook", content=body, headers=_headers(body))
+
+    assert response.status_code == 200
+    [failed] = [r for r in caplog.records if r.message == "Serial logging off failed"]
+    assert failed.error_class == "RuntimeError"
+    assert failed.exc_info is None
+    assert "AABBCC" not in caplog.text

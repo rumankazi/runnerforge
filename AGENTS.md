@@ -64,9 +64,11 @@ database `runnerforge` (ADR-018), written only when `JOB_STORE=firestore`.
 
 Orchestrator env vars (names only; tests set throwaway defaults in `tests/conftest.py`, so none are needed
 to run tests): `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_PRIVATE_KEY_PATH`, `GITHUB_APP_ID`, `GCP_PROJECT_ID`,
-`GCP_ZONE` (default `europe-west4-a`), `RUNNER_VM_SA_EMAIL`, `EXPECTED_SCHEDULER_SA_EMAIL`, `EXPECTED_AUDIENCE`;
-optional `JOB_STORE` (`none` default | `firestore`), `FIRESTORE_DATABASE` (default `runnerforge`) and
-`ADMISSION` (`allowlist` default | `registry`, ADR-019).
+`GCP_ZONE` (default `europe-west4-a`), `EXPECTED_SCHEDULER_SA_EMAIL`, `EXPECTED_AUDIENCE`;
+optional `JOB_STORE` (`none` default | `firestore`), `FIRESTORE_DATABASE` (default `runnerforge`),
+`ADMISSION` (`allowlist` default | `registry`, ADR-019), and (ADR-020) `RUNNER_VM_PROJECT_ID` (default
+`GCP_PROJECT_ID`), `RUNNER_VM_SUBNETWORK` (empty = the `default` network) and `RUNNER_VM_SA_EMAIL` (empty = no
+service account; must be empty when the VM project differs from `GCP_PROJECT_ID`).
 All are listed in `apps/orchestrator/.env.example`. Never read `.env` or key files.
 
 Toolchains: `mise.toml` (root + per-app) and `aqua.yaml` pin terraform 1.15.5, tflint 0.62.1, trivy 0.71.0,

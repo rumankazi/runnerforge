@@ -25,7 +25,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -45,6 +45,7 @@ from runnerforge.compute_client import (
     delete_vm,
     list_runnerforge_vms,
     preemption_status,
+    turn_off_serial_logging,
 )
 from runnerforge.config import ADMISSION, ALLOWED_INSTALLATION_IDS
 from runnerforge.github_client import (
@@ -149,6 +150,17 @@ CUTOFF_PAUSE = timedelta(minutes=15)
 # Job records deleted per uninstalled installation per run.
 PURGE_LIMIT = 200
 
+# Serial logging backstop (ADR-020): VMs the in_progress webhook didn't turn
+# off. Its own slice of the run budget, after the orphan cleanup.
+SERIAL_BUDGET_SECONDS = 15.0
+MAX_SERIAL_OFFS = 10
+# The webhook turns it off within seconds of writing the in_progress fact; a
+# younger fact may still have that webhook in flight.
+SERIAL_BUSY_GRACE = timedelta(minutes=2)
+# Past boot and registration. A VM that never gets a job (a spare, a
+# cancelled job's) gets no in_progress, but stops logging too.
+SERIAL_BOOT_WINDOW = timedelta(minutes=10)
+
 
 class _InstallationGone(Exception):
     """The App installation is gone (token request returned 404)."""
@@ -243,6 +255,7 @@ async def run_reconcile(
         rows,
     )
     vms = [vm for vm in vms if vm.name not in deleted]
+    await _serial_logging_pass(now, vms, open_records, errors)
     # Before the batch, so a slow batch can't starve it.
     managed: set[int] = set()
     started_keys: set[str] = set()
@@ -1098,6 +1111,61 @@ def _may_take_waiting_job(
         if not offered or wanted <= offered | _DEFAULT_RUNNER_LABELS:
             return True
     return False
+
+
+async def _serial_logging_pass(
+    now: datetime,
+    vms: list[VmInfo],
+    open_records: list[tuple[str, dict[str, Any]]],
+    errors: list[str],
+) -> None:
+    """Turn serial logging off on running VMs that still log it: those on a
+    job whose in_progress webhook didn't (`busy`), and those past boot
+    (`aged`). Fails open, like the webhook: a VM that keeps logging is
+    alerted on, not deleted."""
+    # When each VM's job started, keyed by VM and installation: a record of
+    # another installation can't say a VM is busy.
+    started_at: dict[tuple[str, int | None], Any] = {}
+    for _, rec in open_records:
+        fact = rec.get("in_progress")
+        if isinstance(fact, dict) and fact.get("runner_name"):
+            started_at[(fact["runner_name"], _record_installation(rec))] = fact.get(
+                "at"
+            )
+    candidates: list[tuple[VmInfo, Literal["busy", "aged"]]] = []
+    for vm in vms:
+        if vm.status != "RUNNING" or vm.serial_logging is False:
+            continue
+        key = (vm.name, _installation(vm))
+        if key in started_at:
+            at = started_at[key]
+            # A fact without a time can't be the webhook's in-flight one.
+            if not isinstance(at, datetime) or now - at > SERIAL_BUSY_GRACE:
+                candidates.append((vm, "busy"))
+        elif now - vm.creation_timestamp > SERIAL_BOOT_WINDOW:
+            candidates.append((vm, "aged"))
+    deadline = time.monotonic() + SERIAL_BUDGET_SECONDS
+    for done, (vm, reason) in enumerate(candidates):
+        if done >= MAX_SERIAL_OFFS or time.monotonic() > deadline:
+            logger.warning(
+                "Serial logging pass incomplete",
+                extra={"unchecked": len(candidates) - done},
+            )
+            break
+        try:
+            outcome = await turn_off_serial_logging(
+                vm.name, "reconcile", reason, installation_id=_installation(vm)
+            )
+        # Deliberately broad: one VM must not stop the pass. Only the class is
+        # logged, since the VM's metadata holds its registration token.
+        except Exception as e:  # noqa: BLE001
+            outcome = type(e).__name__
+            logger.error(
+                "Serial logging off failed",
+                extra={"vm_name": vm.name, "error_class": outcome},
+            )
+        if outcome not in ("submitted", "already_off", "vm_gone", "not_running"):
+            errors.append(f"{vm.name}: serial logging {outcome}")
 
 
 def _on_github_runner(rec: dict[str, Any]) -> bool:

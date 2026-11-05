@@ -12,6 +12,7 @@ import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
+from google.cloud import compute_v1
 
 from runnerforge import admission, registry
 from runnerforge.compute_client import MAX_VM_RUN_DURATION, OperationHandle
@@ -381,9 +382,13 @@ def _in_progress(fixtures_dir, created_at: int, started_at: int):
 
 
 def _runner_vm(monkeypatch, labels: dict[str, str] | None) -> AsyncMock:
-    by_name = AsyncMock(return_value=labels)
+    by_name = AsyncMock(
+        return_value=None
+        if labels is None
+        else compute_v1.Instance(name="runnerforge-1-9-1", labels=labels)
+    )
     by_job = AsyncMock(return_value=None)
-    monkeypatch.setattr("runnerforge.handlers.get_vm_labels_by_name", by_name)
+    monkeypatch.setattr("runnerforge.handlers.get_vm_by_name", by_name)
     monkeypatch.setattr("runnerforge.handlers.get_vm_labels_by_job", by_job)
     return by_job
 

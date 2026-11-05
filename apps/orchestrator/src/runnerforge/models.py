@@ -142,6 +142,8 @@ class VmInfo(BaseModel):
     runner_labels: list[str] = Field(default_factory=list)
     # GCE status (PROVISIONING, STAGING, RUNNING, STOPPING, TERMINATED, ...).
     status: str = ""
+    # Whether its serial port goes to Cloud Logging; None when unknown.
+    serial_logging: bool | None = None
 
 
 class SweepResult(BaseModel):
