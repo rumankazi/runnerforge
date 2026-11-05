@@ -31,6 +31,9 @@ protected_resources := {
 	"google_firestore_database.runnerforge",
 	# The apply account's only WIF binding (ADR-020 step 3).
 	"google_service_account_iam_member.ci_terraform_apply_wif_env",
+	# The plan account's control reader role and its grant (ADR-020 step 3f).
+	"google_project_iam_custom_role.control_terraform_reader",
+	"google_project_iam_member.ci_terraform_plan_control_reader",
 	# Pool root module (infra/terraform-pool, ADR-020). Addresses are per state,
 	# so a control resource with the same address is protected too.
 	"google_project_iam_member.ci_terraform_apply_pool_editor",

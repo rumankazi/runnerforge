@@ -111,10 +111,17 @@ test_reader_control_target_is_unaffected if {
 		rd_config("managed", "google_cloud_run_v2_service", "orchestrator"),
 		rd_config("managed", "google_firestore_database", "runnerforge"),
 	]
-	count(deny) == 0 with input as {
+	i := {
 		"variables": {"project_id": {"value": "runnerforge"}},
 		"configuration": {"root_module": {"resources": config, "module_calls": {"x": {}}}},
 		"resource_changes": [],
+	}
+
+	# control_reader.rego checks this plan; none of the pool reader's rules may.
+	msgs := deny with input as i
+	every msg in msgs {
+		not contains(msg, "pool module")
+		not contains(msg, "poolTerraformReader")
 	}
 }
 
@@ -166,6 +173,6 @@ test_plan_sa_token_creator_on_pool_sa_from_control_fails if {
 }
 
 test_plan_sa_in_control_project_is_ignored if {
-	m := object.union(rd_plan_member("ci_terraform_plan_iam_security", "roles/iam.securityReviewer"), {"change": {"after": {"project": "runnerforge"}}})
+	m := object.union(rd_plan_member("ci_terraform_plan_control_reader", "projects/runnerforge/roles/controlTerraformReader"), {"change": {"after": {"project": "runnerforge"}}})
 	count(rd_plan_messages([m])) == 0
 }

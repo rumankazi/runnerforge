@@ -40,10 +40,12 @@ test_allows_non_iam_resources if {
 }
 
 # The control module's own basic-role grants (infra/terraform/terraform_ci.tf).
+# The plan account's Viewer stays until ADR-020 step 3f deletes it; a plan that
+# creates it again fails in control_reader.rego.
 test_allows_control_module_basic_role_grants if {
 	count(br_messages([
 		br_member("ci_terraform_apply_editor", "runnerforge", "roles/editor", br_apply),
-		br_member("ci_terraform_plan_viewer", "runnerforge", "roles/viewer", br_plan),
+		object.union(br_member("ci_terraform_plan_viewer", "runnerforge", "roles/viewer", br_plan), {"change": {"actions": ["no-op"]}}),
 	])) == 0
 }
 
