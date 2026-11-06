@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.28.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.27.0...orchestrator-v0.28.0) (2026-11-06)
+
+
+### Features
+
+* **orchestrator:** run VMs in a configurable project and turn serial logging off when a job starts ([110591d](https://github.com/rumankazi/runnerforge/commit/110591de419ca49a7c848d118b8a251da886607b))
+
+
+### Bug Fixes
+
+* **deps:** update uv to v0.13.7 ([#381](https://github.com/rumankazi/runnerforge/issues/381)) ([fc0ed69](https://github.com/rumankazi/runnerforge/commit/fc0ed694b70593fd77f63803ed3d17bb01fb00f9))
+
 ## [0.27.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.26.1...orchestrator-v0.27.0) (2026-11-02)
 
 
