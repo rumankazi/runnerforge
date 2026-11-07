@@ -51,7 +51,7 @@ class Account:
 @dataclass(frozen=True, slots=True)
 class Limits:
     """An installation's limits, stored as `{"unlimited": true}` or as the
-    five limit fields. Invalid values raise ValueError, both when the owner
+    limit fields. Invalid values raise ValueError, both when the owner
     writes them and when a stored row is read."""
 
     max_concurrent_vms: int = 2
@@ -95,20 +95,56 @@ class Limits:
 
     @classmethod
     def from_dict(cls, data: Any) -> Limits:
-        # `is True`: dict equality would also take 1 or 1.0 as unlimited.
-        if isinstance(data, dict) and set(data) == {"unlimited"}:
+        """Parse a stored row, including one written by another version.
+
+        A field this version doesn't know is ignored (`unknown_limit_fields`
+        names them), and a field added after the first five takes its
+        default when missing. So a new field must ship in this order: first
+        a release that reads it, with a default that keeps the old
+        behaviour; then, once no revision that ignores it can serve,
+        rows that set it. Otherwise a canary or rollback revision runs the
+        tenant looser than the owner set.
+        """
+        if not isinstance(data, dict) or not data:
+            raise ValueError("limits must be {unlimited: true} or the limit fields")
+        if "unlimited" in data:
+            # Nothing qualifies unlimited, not even a field from a newer
+            # version. `is True`: 1 or 1.0 would compare equal.
+            if set(data) != {"unlimited"}:
+                raise ValueError("unlimited can't be combined with other limits")
             if data["unlimited"] is True:
                 return UNLIMITED
             raise ValueError("unlimited must be true")
-        if not isinstance(data, dict) or set(data) != _LIMIT_FIELDS:
-            raise ValueError(
-                "limits must be {unlimited: true} or exactly "
-                + ", ".join(sorted(_LIMIT_FIELDS))
-            )
-        return cls(**data)
+        known = {name: value for name, value in data.items() if name in _LIMIT_FIELDS}
+        missing = _REQUIRED_LIMIT_FIELDS - set(known)
+        if missing:
+            raise ValueError(f"limits are missing {', '.join(sorted(missing))}")
+        return cls(**known)
 
 
 _LIMIT_FIELDS = frozenset(Limits().to_dict())
+# The fields every row has had since ADR-019. A literal, so that a field added
+# later is optional: rows written before it existed still parse.
+_REQUIRED_LIMIT_FIELDS = frozenset(
+    {
+        "max_concurrent_vms",
+        "max_size",
+        "spot_only",
+        "max_runtime_minutes",
+        "literal_machine_types",
+    }
+)
+
+
+def unknown_limit_fields(data: Any) -> list[str]:
+    """The fields of stored limits this version doesn't know, sorted."""
+    if not isinstance(data, dict):
+        return []
+    return sorted(
+        str(name) for name in data if name not in _LIMIT_FIELDS | {"unlimited"}
+    )
+
+
 # ADR-019's beta defaults, written by `approve` when a row has no limits.
 BETA_DEFAULTS = Limits()
 UNLIMITED = Limits(unlimited=True)

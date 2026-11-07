@@ -467,6 +467,15 @@ def test_limits_defaults_are_the_beta_defaults():
     assert registry.UNLIMITED.to_dict() == {"unlimited": True}
 
 
+LIMITED_DICT = {
+    "max_concurrent_vms": 30,
+    "max_size": "xlarge",
+    "spot_only": False,
+    "max_runtime_minutes": 360,
+    "literal_machine_types": True,
+}
+
+
 @pytest.mark.parametrize(
     "limits",
     [
@@ -484,10 +493,12 @@ def test_limits_round_trip(limits):
     [
         None,
         "unlimited",
+        {},
         {"unlimited": False},
         {"unlimited": True, "max_size": "small"},
+        # Nothing qualifies unlimited, not even a newer version's field.
+        {"unlimited": True, "max_vcpus": 8},
         {"max_size": "small"},
-        {**registry.BETA_DEFAULTS.to_dict(), "extra": 1},
         {**registry.BETA_DEFAULTS.to_dict(), "max_concurrent_vms": True},
         {**registry.BETA_DEFAULTS.to_dict(), "max_concurrent_vms": 2.0},
         {**registry.BETA_DEFAULTS.to_dict(), "max_concurrent_vms": 0},
@@ -506,6 +517,67 @@ def test_limits_round_trip(limits):
 def test_limits_reject_invalid_data(data):
     with pytest.raises(ValueError):
         registry.Limits.from_dict(data)
+
+
+def test_limits_name_the_missing_fields():
+    with pytest.raises(ValueError, match="missing max_concurrent_vms, spot_only"):
+        registry.Limits.from_dict(
+            {
+                "max_size": "small",
+                "max_runtime_minutes": 60,
+                "literal_machine_types": False,
+            }
+        )
+
+
+def test_limits_ignore_fields_of_a_newer_version():
+    stored = {**LIMITED_DICT, "max_vcpus": 8, "allow_public": False}
+    assert registry.Limits.from_dict(stored) == registry.Limits.from_dict(LIMITED_DICT)
+    assert registry.unknown_limit_fields(stored) == ["allow_public", "max_vcpus"]
+
+
+def test_limits_fill_a_field_added_after_the_row_was_written(monkeypatch):
+    # Every field is required today, so pretend the last one came later: a
+    # row written before it existed takes its default.
+    monkeypatch.setattr(
+        registry,
+        "_REQUIRED_LIMIT_FIELDS",
+        registry._REQUIRED_LIMIT_FIELDS - {"literal_machine_types"},
+    )
+    stored = {
+        name: value
+        for name, value in LIMITED_DICT.items()
+        if name != "literal_machine_types"
+    }
+    limits = registry.Limits.from_dict(stored)
+    assert limits.max_concurrent_vms == 30
+    assert limits.literal_machine_types is False
+
+
+def test_required_limit_fields_are_the_first_five():
+    # A literal, not derived from Limits: a field added later stays optional.
+    assert registry._REQUIRED_LIMIT_FIELDS == {
+        "max_concurrent_vms",
+        "max_size",
+        "spot_only",
+        "max_runtime_minutes",
+        "literal_machine_types",
+    }
+    assert registry._REQUIRED_LIMIT_FIELDS <= registry._LIMIT_FIELDS
+
+
+@pytest.mark.parametrize(
+    ("data", "unknown"),
+    [
+        (None, []),
+        ("unlimited", []),
+        ({"unlimited": True}, []),
+        ({"unlimited": True, "max_vcpus": 8}, ["max_vcpus"]),
+        ({**registry.BETA_DEFAULTS.to_dict()}, []),
+    ],
+)
+def test_unknown_limit_fields(data, unknown):
+    assert registry.unknown_limit_fields(data) == unknown
 
 
 def test_limits_reject_non_bool_unlimited():

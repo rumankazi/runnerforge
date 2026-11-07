@@ -38,13 +38,18 @@ needs read and write access to that Firestore database; the project owner role h
 | Command | Does |
 |---|---|
 | `list [--state pending]` | Every row: account, `state`, GitHub's status, first approval, limits |
-| `approve <id> [--unlimited]` | `state: approved`. A row with no limits gets the beta defaults; one with limits keeps them |
+| `approve <id> [--unlimited] [--pool-cap N]` | `state: approved`. A row with no limits gets the beta defaults; one with limits keeps them |
 | `suspend <id>` | `state: suspended`: no new VMs, and its deferred jobs are rejected instead of started. Running VMs end with their job or runtime cap; idle ones are deleted by the reconciler's orphan cleanup |
-| `set-limits <id> …` | Change limits. Ones not named stay as they are; `--unlimited` or `--defaults` replace all of them |
+| `set-limits <id> … [--pool-cap N]` | Change limits. Ones not named stay as they are; `--unlimited` or `--defaults` replace all of them |
 
 `set-limits` options: `--max-concurrent-vms N` (1–30), `--max-size small|medium|large|xlarge`,
 `--spot-only`/`--no-spot-only`, `--max-runtime-minutes N` (1–360),
 `--literal-machine-types`/`--no-literal-machine-types`.
+
+`approve` and `set-limits` warn, without refusing, when a limit is more than the shared pool holds: `--pool-cap`,
+10 VMs by default ([ADR-020](/docs/design/decisions#hosted-isolation-a-pool-project-for-tenant-vms)). They check the
+row's own `max_concurrent_vms` and, when the row is approved after the write, the sum over every approved row that
+isn't uninstalled. Unlimited rows aren't counted, and a row with no or invalid limits counts as the beta default of 2.
 
 Every write shows the account and the change, then asks before writing; `--yes` skips the question. The
 orchestrator picks a change up within a minute (its registry cache).
@@ -55,6 +60,10 @@ The command refuses:
 - approving or limiting an uninstalled installation (`github_status: deleted`). A reinstall gets a new
   installation ID and registers as `pending`;
 - approving a row whose stored limits are invalid, until `set-limits --defaults` or `--unlimited` replaces them;
+- approving or limiting a row whose limits have fields this checkout doesn't know, when the command would keep its
+  other limits: a newer version (or a hand edit) wrote them, and writing from here would drop them. Update your
+  checkout, or replace every limit with `--defaults` or `--unlimited`, which drops them with a warning. `list`
+  shows those fields;
 - a write when the row changed after it was read (for example, a webhook landed while you were answering). Run
   the command again.
 

@@ -24,6 +24,7 @@ from runnerforge.registry import (
     RegistryUnavailable,
     get_cached_registry,
     get_registry,
+    unknown_limit_fields,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,12 @@ def _row_limits(installation_id: int, raw: object) -> Limits | None:
             extra={"installation_id": installation_id},
         )
         return BETA_DEFAULTS
+    if unknown := unknown_limit_fields(raw):
+        # Written by a newer version; see `Limits.from_dict`.
+        logger.warning(
+            "Limits fields unknown, ignored",
+            extra={"installation_id": installation_id, "fields": unknown},
+        )
     return None if limits.unlimited else limits
 
 

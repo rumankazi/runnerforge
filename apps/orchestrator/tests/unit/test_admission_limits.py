@@ -142,8 +142,9 @@ LIMITED = Limits(4, "large", False, 120, True)
         (LIMITED.to_dict(), LIMITED),
         (None, BETA_DEFAULTS),
         ({"max_size": "small"}, BETA_DEFAULTS),
+        ({**LIMITED.to_dict(), "max_vcpus": 8}, LIMITED),
     ],
-    ids=["unlimited", "limited", "no-limits", "invalid"],
+    ids=["unlimited", "limited", "no-limits", "invalid", "newer"],
 )
 async def test_approved_rows_carry_their_limits(fake_registry, caplog, stored, limits):
     fake_registry.rows = {
@@ -159,6 +160,12 @@ async def test_approved_rows_carry_their_limits(fake_registry, caplog, stored, l
     assert decision.limits == limits
     invalid = [r for r in caplog.records if "limits invalid" in r.message]
     assert len(invalid) == (1 if stored == {"max_size": "small"} else 0)
+    unknown = [
+        r for r in caplog.records if r.message == "Limits fields unknown, ignored"
+    ]
+    assert [(r.installation_id, r.fields) for r in unknown] == (
+        [(7, ["max_vcpus"])] if stored and "max_vcpus" in stored else []
+    )
 
 
 # --- exceeds_size ---

@@ -65,6 +65,7 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Ignoring installation action` | INFO | `admission.py` | `action` (e.g. `new_permissions_accepted`) | |
 | `Admission shadow decision` | INFO | `admission.py` | `would_admit`, `reason` (`allowlisted`, `approved`, `not_registered`, `pending`, `suspended`, `github_inactive`, `registry_unavailable`), `allowlist_admits`, `agrees` (`ADMISSION=allowlist` only, with a registry) | |
 | `Registry limits invalid, using the beta defaults` | WARNING | `admission.py` | `installation_id` | |
+| `Limits fields unknown, ignored` | WARNING | `admission.py` | `installation_id`, `fields` (names only) | A row written by a newer version; the fields this revision knows still apply |
 | `Registry read failed`, `Registry write failed` | WARNING | `registry.py` | `operation`, `installation_id`, `error_class`. A failed `get` with no cached row rejects the job as `registry_unavailable` | |
 | `Registry backfill skipped` | WARNING | `admission.py` | `reason` (`list_failed`, `read_failed`), `error_class` (`list_failed`) | |
 | `Registry backfill could not confirm installation` | WARNING | `admission.py` | `installation_id`, `error_class` | |
