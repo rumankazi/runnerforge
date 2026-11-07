@@ -1,7 +1,7 @@
 """`runnerforge-admin`: the owner's command for the tenant registry (ADR-019).
 
     uv run runnerforge-admin list [--state pending]
-    uv run runnerforge-admin approve <id> [--unlimited]
+    uv run runnerforge-admin approve <id> [--unlimited] [--pool-cap N]
     uv run runnerforge-admin suspend <id>
     uv run runnerforge-admin set-limits <id> [--max-concurrent-vms N] ...
 
@@ -35,6 +35,7 @@ from runnerforge.registry import (
     UNLIMITED,
     Limits,
     entry_from_doc,
+    unknown_limit_fields,
 )
 
 DEFAULT_PROJECT = "runnerforge"
@@ -43,6 +44,9 @@ CALL_TIMEOUT_SECONDS = 10.0
 # Decisions kept on each row, newest last. The array expires with the row; a
 # subcollection wouldn't, because TTL doesn't delete documents under a row.
 HISTORY_LIMIT = 20
+# VMs the shared pool holds at once (ADR-020). This command can't read the
+# service's env, so `--pool-cap` overrides it; it only drives warnings.
+DEFAULT_POOL_CAP = 10
 
 
 class AdminError(Exception):
@@ -62,10 +66,12 @@ def make_client(project: str, database: str) -> firestore.Client:
 def describe_limits(raw: Any) -> str:
     if raw is None:
         return "none"
+    unknown = unknown_limit_fields(raw)
+    extra = f" (and {', '.join(unknown)}, unknown here)" if unknown else ""
     try:
         limits = Limits.from_dict(raw)
     except ValueError:
-        return "invalid"
+        return "invalid" + extra
     if limits.unlimited:
         return "unlimited"
     return (
@@ -73,7 +79,64 @@ def describe_limits(raw: Any) -> str:
         f"{'spot only' if limits.spot_only else 'spot or standard'}, "
         f"{limits.max_runtime_minutes} min, "
         f"{'literal types' if limits.literal_machine_types else 'no literal types'}"
+        + extra
     )
+
+
+def _vm_limit(raw: Any) -> int | None:
+    """The VMs a row's limits allow at once, as admission reads them;
+    None when unlimited."""
+    try:
+        limits = BETA_DEFAULTS if raw is None else Limits.from_dict(raw)
+    except ValueError:
+        return BETA_DEFAULTS.max_concurrent_vms
+    return None if limits.unlimited else limits.max_concurrent_vms
+
+
+def _refuse_unknown_fields(raw: Any) -> None:
+    # A write from here would drop fields a newer version stored.
+    if unknown := unknown_limit_fields(raw):
+        raise AdminError(
+            "This row has limit fields this version doesn't know: "
+            f"{', '.join(unknown)}. Use a newer checkout."
+        )
+
+
+def _warn_over_pool_cap(
+    client: firestore.Client,
+    installation_id: int,
+    *,
+    state: str,
+    limits: Any,
+    pool_cap: int,
+) -> None:
+    """Warn when the row's limit, or the sum of every approved row's after
+    this write, is more than the pool holds. Unlimited rows aren't counted."""
+    own = _vm_limit(limits)
+    if own is not None and own > pool_cap:
+        print(
+            f"warning: a limit of {own} VMs is more than the pool cap of "
+            f"{pool_cap} VMs.",
+            file=sys.stderr,
+        )
+    if state != "approved":
+        return
+    total = own or 0
+    for snapshot in client.collection(INSTALLATIONS_COLLECTION).stream(
+        timeout=CALL_TIMEOUT_SECONDS
+    ):
+        if int(snapshot.id) == installation_id:
+            continue
+        data = snapshot.to_dict() or {}
+        entry = entry_from_doc(int(snapshot.id), data)
+        if entry.state == "approved" and entry.github_status != "deleted":
+            total += _vm_limit(data.get("limits")) or 0
+    if total > pool_cap:
+        print(
+            f"warning: approved limits add up to {total} VMs, more than the "
+            f"pool cap of {pool_cap} VMs.",
+            file=sys.stderr,
+        )
 
 
 def _read(client: firestore.Client, installation_id: int):
@@ -208,12 +271,18 @@ def list_installations(client: firestore.Client, state: str | None) -> int:
 
 
 def approve(
-    client: firestore.Client, installation_id: int, *, unlimited: bool, assume_yes: bool
+    client: firestore.Client,
+    installation_id: int,
+    *,
+    unlimited: bool,
+    assume_yes: bool,
+    pool_cap: int = DEFAULT_POOL_CAP,
 ) -> int:
     snapshot = _read(client, installation_id)
     data = snapshot.to_dict() or {}
     entry = entry_from_doc(installation_id, data)
     _refuse_deleted(installation_id, entry.github_status)
+    _refuse_unknown_fields(data.get("limits"))
     if entry.github_status == "suspended":
         print(
             "warning: GitHub has suspended this installation. It is admitted "
@@ -233,6 +302,13 @@ def approve(
                 "This row's limits are invalid. Replace them first with "
                 "`set-limits --defaults` or `--unlimited`."
             ) from exc
+    _warn_over_pool_cap(
+        client,
+        installation_id,
+        state="approved",
+        limits=data.get("limits") if limits is None else limits.to_dict(),
+        pool_cap=pool_cap,
+    )
     return _apply(
         client,
         snapshot,
@@ -264,11 +340,13 @@ def set_limits(
     unlimited: bool,
     defaults: bool,
     assume_yes: bool,
+    pool_cap: int = DEFAULT_POOL_CAP,
 ) -> int:
     snapshot = _read(client, installation_id)
     data = snapshot.to_dict() or {}
     entry = entry_from_doc(installation_id, data)
     _refuse_deleted(installation_id, entry.github_status)
+    _refuse_unknown_fields(data.get("limits"))
     if unlimited:
         limits = UNLIMITED
     elif defaults:
@@ -293,6 +371,13 @@ def set_limits(
             limits = replace(base, **changes)
         except ValueError as exc:
             raise AdminError(str(exc)) from exc
+    _warn_over_pool_cap(
+        client,
+        installation_id,
+        state=entry.state,
+        limits=limits.to_dict(),
+        pool_cap=pool_cap,
+    )
     return _apply(
         client,
         snapshot,
@@ -327,10 +412,17 @@ def _parser() -> argparse.ArgumentParser:
 
     yes = argparse.ArgumentParser(add_help=False)
     yes.add_argument("--yes", action="store_true", help="don't ask before writing")
+    capped = argparse.ArgumentParser(add_help=False)
+    capped.add_argument(
+        "--pool-cap",
+        type=int,
+        default=DEFAULT_POOL_CAP,
+        help=f"VMs the shared pool holds, for warnings (default {DEFAULT_POOL_CAP})",
+    )
 
     approving = commands.add_parser(
         "approve",
-        parents=[yes],
+        parents=[yes, capped],
         help="approve an installation (beta defaults unless it has limits)",
     )
     approving.add_argument("installation_id", type=int)
@@ -343,7 +435,7 @@ def _parser() -> argparse.ArgumentParser:
 
     limiting = commands.add_parser(
         "set-limits",
-        parents=[yes],
+        parents=[yes, capped],
         help="change limits; ones not named stay as they are",
     )
     limiting.add_argument("installation_id", type=int)
@@ -369,6 +461,7 @@ def _run(client: firestore.Client, args: argparse.Namespace) -> int:
             args.installation_id,
             unlimited=args.unlimited,
             assume_yes=args.yes,
+            pool_cap=args.pool_cap,
         )
     if args.command == "suspend":
         return suspend(client, args.installation_id, assume_yes=args.yes)
@@ -384,12 +477,15 @@ def _run(client: firestore.Client, args: argparse.Namespace) -> int:
         unlimited=args.unlimited,
         defaults=args.defaults,
         assume_yes=args.yes,
+        pool_cap=args.pool_cap,
     )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
+    if getattr(args, "pool_cap", 1) < 1:
+        parser.error("--pool-cap must be at least 1")
     if args.command == "set-limits":
         named = any(getattr(args, name) is not None for name in _LIMIT_OPTIONS)
         if named and (args.unlimited or args.defaults):
