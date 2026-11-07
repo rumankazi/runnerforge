@@ -117,6 +117,45 @@ resource "google_firestore_index" "jobs_open_by_installation" {
   depends_on = [google_firestore_field.installations_expire_at]
 }
 
+# Slot ledger (ADR-020 step 5): `capacity/pool` and one `capacity/inst-<id>` per
+# installation, read by ID inside transactions and never queried. Their map
+# fields change on every acquire and release, and each subfield would otherwise
+# get its own index entries; subfields inherit a map's exemption. `holders` is
+# keyed by VM name, `released` holds recently released names, and `waiters` the
+# jobs deferred because the pool is full. Chained for the same 409 reason.
+resource "google_firestore_field" "capacity_holders" {
+  project    = data.google_project.current.project_id
+  database   = google_firestore_database.runnerforge.name
+  collection = "capacity"
+  field      = "holders"
+
+  index_config {}
+
+  depends_on = [google_firestore_index.jobs_open_by_installation]
+}
+
+resource "google_firestore_field" "capacity_released" {
+  project    = data.google_project.current.project_id
+  database   = google_firestore_database.runnerforge.name
+  collection = "capacity"
+  field      = "released"
+
+  index_config {}
+
+  depends_on = [google_firestore_field.capacity_holders]
+}
+
+resource "google_firestore_field" "capacity_waiters" {
+  project    = data.google_project.current.project_id
+  database   = google_firestore_database.runnerforge.name
+  collection = "capacity"
+  field      = "waiters"
+
+  index_config {}
+
+  depends_on = [google_firestore_field.capacity_released]
+}
+
 # Read/write on documents in this database only. Firestore has no
 # database-level IAM resource, so this is a conditional project binding, in the
 # form Firestore's per-database access docs give. Project-level calls (listing
