@@ -91,6 +91,7 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Serial logging outcome` | INFO / WARNING | `compute_client.py` | `vm_name`, `project_id`, `trigger` (`in_progress`, `reconcile`), `reason` (`webhook`, `busy`, `aged`), `outcome` (`submitted`, `already_off`, `vm_gone`, `not_running`, `not_owned`, `conflict`, `failed`; WARNING for the last two), `error_class`, `operation_id`. Never metadata values or error text: the VM's metadata holds its registration token | `serial_logging_outcome_count` |
 | `Serial logging off failed` | ERROR | `handlers.py`, `reconcile.py` | `vm_name`, `error_class` (an unexpected exception around the call) | |
 | `Serial logging pass incomplete` | WARNING | `reconcile.py` | `unchecked` (10-VM cap or 15 s budget reached) | |
+| `Serial logging runner check failed` | WARNING | `reconcile.py` | `vm_name`, `error_class` (asking GitHub whether a VM with no recorded job start is busy; the VM is still turned off, as `aged`) | |
 | `Sweep decision` | INFO / WARNING | `sweep.py` | `decision`, `reason`, `vm_name`, `age_minutes` | |
 | `Sweep failed for VM` | ERROR | `sweep.py` | `vm_name`, `error` | |
 | `Sweep completed` | INFO | `main.py` | `checked`, `deleted`, `skipped`, `error_count` | `sweep_*` |
@@ -147,7 +148,8 @@ under `resource.type="gce_instance"`, not under the orchestrator's Cloud Run res
 
 Every VM also starts with `serial-port-logging-enable=TRUE`, so its serial port output reaches Cloud Logging from
 boot, and the orchestrator turns it off when the VM's job starts: on the `in_progress` webhook, or from the
-reconciler for a VM the webhook missed (`reason: busy`) or a VM past its 10-minute boot window with no recorded job start, usually a spare (`reason: aged`).
+reconciler for a VM the webhook missed (`reason: busy`) or a VM past its 10-minute boot window with no recorded job start (`reason: aged`, usually a spare; `busy` when
+GitHub says its runner is on a job).
 The job's output is the tenant's, so it shouldn't land in Cloud Logging
 ([ADR-020](/docs/design/decisions#hosted-isolation-a-pool-project-for-tenant-vms)). The
 "Serial logging not turned off" alert covers the misses.

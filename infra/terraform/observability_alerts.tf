@@ -363,10 +363,10 @@ resource "google_monitoring_alert_policy" "registry_unavailable" {
 # step 4): the job's output is the tenant's once it starts. Two ways it shows:
 # a GCE call that failed (`failed`, from the webhook or the reconciler), or
 # the reconciler finding a busy VM still logging and turning it off itself,
-# which means the in_progress webhook didn't. `aged` (past boot with no
-# recorded job start, usually a spare) doesn't count, so a lost webhook the
-# reconciler hasn't recorded yet is missed. Rare and each one matters: any in
-# 15 minutes.
+# which means the in_progress webhook didn't. That includes a VM with no
+# recorded job start that GitHub reports busy. `aged` (past boot, no recorded
+# start, not busy on GitHub: usually a spare) doesn't count. Rare and each one
+# matters: any in 15 minutes.
 resource "google_monitoring_alert_policy" "serial_logging_not_off" {
   display_name = "Serial logging not turned off (15m)"
   combiner     = "OR"

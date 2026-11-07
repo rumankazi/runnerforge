@@ -160,6 +160,10 @@ SERIAL_BUSY_GRACE = timedelta(minutes=2)
 # Past boot and registration. A VM that never gets a job (a spare, a
 # cancelled job's) gets no in_progress, but stops logging too.
 SERIAL_BOOT_WINDOW = timedelta(minutes=10)
+# Asking GitHub whether such a VM's runner is on a job after all: its
+# in_progress webhook was lost before a record check wrote the fact, or the
+# open records couldn't all be read.
+SERIAL_RUNNER_CHECK_TIMEOUT_SECONDS = 5.0
 
 
 class _InstallationGone(Exception):
@@ -255,7 +259,7 @@ async def run_reconcile(
         rows,
     )
     vms = [vm for vm in vms if vm.name not in deleted]
-    await _serial_logging_pass(now, vms, open_records, errors)
+    await _serial_logging_pass(now, vms, open_records, tokens, errors)
     # Before the batch, so a slow batch can't starve it.
     managed: set[int] = set()
     started_keys: set[str] = set()
@@ -1117,12 +1121,14 @@ async def _serial_logging_pass(
     now: datetime,
     vms: list[VmInfo],
     open_records: list[tuple[str, dict[str, Any]]],
+    tokens: dict[int, str | Exception],
     errors: list[str],
 ) -> None:
     """Turn serial logging off on running VMs that still log it: those on a
     job whose in_progress webhook didn't (`busy`), and those past boot
-    (`aged`). Fails open, like the webhook: a VM that keeps logging is
-    alerted on, not deleted."""
+    (`aged`, unless GitHub says the runner is on a job: then `busy`). Fails
+    open, like the webhook: a VM that keeps logging is alerted on, not
+    deleted."""
     # When each VM's job started, keyed by VM and installation: a record of
     # another installation can't say a VM is busy.
     started_at: dict[tuple[str, int | None], Any] = {}
@@ -1144,6 +1150,8 @@ async def _serial_logging_pass(
                 candidates.append((vm, "busy"))
         elif now - vm.creation_timestamp > SERIAL_BOOT_WINDOW:
             candidates.append((vm, "aged"))
+    # Known jobs first: an aged VM costs a GitHub call, and is usually a spare.
+    candidates.sort(key=lambda c: c[1] != "busy")
     deadline = time.monotonic() + SERIAL_BUDGET_SECONDS
     for done, (vm, reason) in enumerate(candidates):
         if done >= MAX_SERIAL_OFFS or time.monotonic() > deadline:
@@ -1152,6 +1160,8 @@ async def _serial_logging_pass(
                 extra={"unchecked": len(candidates) - done},
             )
             break
+        if reason == "aged" and await _runner_busy(vm, tokens):
+            reason = "busy"
         try:
             outcome = await turn_off_serial_logging(
                 vm.name, "reconcile", reason, installation_id=_installation(vm)
@@ -1166,6 +1176,29 @@ async def _serial_logging_pass(
             )
         if outcome not in ("submitted", "already_off", "vm_gone", "not_running"):
             errors.append(f"{vm.name}: serial logging {outcome}")
+
+
+async def _runner_busy(vm: VmInfo, tokens: dict[int, str | Exception]) -> bool:
+    """Does GitHub say the VM's runner is on a job? Only a yes counts: its
+    busy flag can read false mid-job, and a failed check leaves the VM
+    `aged`, which is still turned off."""
+    iid = _installation(vm)
+    if iid is None or vm.repo_full_name is None:
+        return False
+    try:
+        async with asyncio.timeout(SERIAL_RUNNER_CHECK_TIMEOUT_SECONDS):
+            # VM name == runner name.
+            runner = await get_runner(
+                await _token(iid, tokens), vm.repo_full_name, vm.name
+            )
+    # Deliberately broad: the check only refines the reason.
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "Serial logging runner check failed",
+            extra={"vm_name": vm.name, "error_class": type(e).__name__},
+        )
+        return False
+    return runner is not None and runner.busy
 
 
 def _on_github_runner(rec: dict[str, Any]) -> bool:
