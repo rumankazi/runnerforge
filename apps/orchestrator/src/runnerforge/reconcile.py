@@ -1152,35 +1152,47 @@ async def _serial_logging_pass(
             candidates.append((vm, "aged"))
     # Known jobs first: aged VMs are usually spares.
     candidates.sort(key=lambda c: c[1] != "busy")
-    deadline = time.monotonic() + SERIAL_BUDGET_SECONDS
-    busy_on_github = await _runners_busy(
-        [vm for vm, reason in candidates[:MAX_SERIAL_OFFS] if reason == "aged"], tokens
+    # GitHub's answers only relabel aged VMs, so they're fetched while the
+    # busy ones are turned off, and waiting for them doesn't use the budget.
+    check = asyncio.ensure_future(
+        _runners_busy(
+            [vm for vm, why in candidates[:MAX_SERIAL_OFFS] if why == "aged"], tokens
+        )
     )
-    candidates = [
-        (vm, "runner_busy" if vm.name in busy_on_github else reason)
-        for vm, reason in candidates
-    ]
-    for done, (vm, reason) in enumerate(candidates):
-        if done >= MAX_SERIAL_OFFS or time.monotonic() > deadline:
-            logger.warning(
-                "Serial logging pass incomplete",
-                extra={"unchecked": len(candidates) - done},
-            )
-            break
-        try:
-            outcome = await turn_off_serial_logging(
-                vm.name, "reconcile", reason, installation_id=_installation(vm)
-            )
-        # Deliberately broad: one VM must not stop the pass. Only the class is
-        # logged, since the VM's metadata holds its registration token.
-        except Exception as e:  # noqa: BLE001
-            outcome = type(e).__name__
-            logger.error(
-                "Serial logging off failed",
-                extra={"vm_name": vm.name, "error_class": outcome},
-            )
-        if outcome not in ("submitted", "already_off", "vm_gone", "not_running"):
-            errors.append(f"{vm.name}: serial logging {outcome}")
+    busy_on_github: set[str] | None = None
+    deadline = time.monotonic() + SERIAL_BUDGET_SECONDS
+    try:
+        for done, (vm, reason) in enumerate(candidates):
+            if done >= MAX_SERIAL_OFFS or time.monotonic() > deadline:
+                logger.warning(
+                    "Serial logging pass incomplete",
+                    extra={"unchecked": len(candidates) - done},
+                )
+                break
+            if reason == "aged":
+                if busy_on_github is None:
+                    waited = time.monotonic()
+                    busy_on_github = await check
+                    deadline += time.monotonic() - waited
+                if vm.name in busy_on_github:
+                    reason = "runner_busy"
+            try:
+                outcome = await turn_off_serial_logging(
+                    vm.name, "reconcile", reason, installation_id=_installation(vm)
+                )
+            # Deliberately broad: one VM must not stop the pass. Only the class
+            # is logged, since the VM's metadata holds its registration token.
+            except Exception as e:  # noqa: BLE001
+                outcome = type(e).__name__
+                logger.error(
+                    "Serial logging off failed",
+                    extra={"vm_name": vm.name, "error_class": outcome},
+                )
+            if outcome not in ("submitted", "already_off", "vm_gone", "not_running"):
+                errors.append(f"{vm.name}: serial logging {outcome}")
+    finally:
+        check.cancel()  # a no-op once it's done
+        await asyncio.gather(check, return_exceptions=True)
 
 
 async def _runners_busy(
@@ -1188,8 +1200,7 @@ async def _runners_busy(
 ) -> set[str]:
     """The VMs whose runner GitHub says is on a job. Only a yes counts: its
     busy flag can read false mid-job, and a VM without one stays `aged`,
-    which is still turned off. Every check runs at once under one timeout,
-    so a slow GitHub can't eat the pass's turn-offs."""
+    which is still turned off. Every check runs at once under one timeout."""
     by_installation: dict[int, list[VmInfo]] = {}
     for vm in vms:
         iid = _installation(vm)
@@ -1201,12 +1212,15 @@ async def _runners_busy(
         asyncio.ensure_future(_installation_runners_busy(iid, its, tokens)): its
         for iid, its in by_installation.items()
     }
-    done, pending = await asyncio.wait(
-        checks, timeout=SERIAL_RUNNER_CHECK_TIMEOUT_SECONDS
-    )
-    for task in pending:
-        task.cancel()
-    await asyncio.gather(*pending, return_exceptions=True)
+    try:
+        done, _ = await asyncio.wait(
+            checks, timeout=SERIAL_RUNNER_CHECK_TIMEOUT_SECONDS
+        )
+    finally:
+        # Also when this is cancelled: none may outlive the pass.
+        for task in checks:
+            task.cancel()
+        await asyncio.gather(*checks, return_exceptions=True)
     busy: set[str] = set()
     for task, its in checks.items():
         if task in done and task.exception() is None:

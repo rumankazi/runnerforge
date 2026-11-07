@@ -800,7 +800,8 @@ resource "google_logging_metric" "job_store_write_failure_count" {
 
 # One per attempt to turn a VM's serial-port-logging-enable off: the
 # in_progress webhook (`trigger` in_progress, `reason` webhook) and the
-# reconciler's catch-up (`trigger` reconcile, `reason` busy or aged).
+# reconciler's catch-up (`trigger` reconcile, `reason` busy, aged or
+# runner_busy).
 # `project_id` tells the control and pool projects apart after the step 6
 # cutover. Labels are set now because adding one later recreates the metric.
 resource "google_logging_metric" "serial_logging_outcome_count" {

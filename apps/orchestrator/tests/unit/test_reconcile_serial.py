@@ -279,7 +279,7 @@ async def test_a_slow_github_times_out_and_every_vm_is_still_turned_off(
     serial_off, github, monkeypatch, caplog
 ):
     """The checks share one timeout, so a slow GitHub costs one timeout,
-    not one per VM, and can't run the pass out of budget."""
+    not one per VM."""
     monkeypatch.setattr(reconcile, "SERIAL_RUNNER_CHECK_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr(reconcile, "SERIAL_BUDGET_SECONDS", 0.5)
 
@@ -379,3 +379,68 @@ async def test_the_run_shares_its_tokens_with_the_pass(
     await reconcile.run_reconcile(now=NOW)
     token.assert_not_awaited()
     assert asked == ["runnerforge-1-1-1"]
+
+
+async def test_a_hanging_github_doesnt_hold_back_known_jobs(
+    serial_off, github, monkeypatch
+):
+    """Busy VMs are turned off while GitHub is asked, and the wait for its
+    answers doesn't use the budget: a slow GitHub costs no turn-off."""
+    monkeypatch.setattr(reconcile, "SERIAL_RUNNER_CHECK_TIMEOUT_SECONDS", 0.4)
+    monkeypatch.setattr(reconcile, "SERIAL_BUDGET_SECONDS", 0.5)
+    started: list[tuple[str, float]] = []
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+
+    async def slow_off(name, trigger, reason, **kwargs):
+        started.append((name, loop.time() - t0))
+        await asyncio.sleep(0.15)
+        return "submitted"
+
+    serial_off.side_effect = slow_off
+
+    async def hang(token, repo, name):
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(reconcile, "get_runner", hang)
+    vms = [_aged(f"runnerforge-{i}-1-1") for i in range(3)]
+    # One busy VM (0 to 0.15 s), then the aged ones once GitHub times out
+    # (0.4 s): the last starts at about 0.55 s, past the unextended 0.5 s.
+    await _pass(vms, [_busy("runnerforge-0-1-1", timedelta(minutes=3))])
+    assert _offs(serial_off) == [
+        ("runnerforge-0-1-1", "busy"),
+        ("runnerforge-1-1-1", "aged"),
+        ("runnerforge-2-1-1", "aged"),
+    ]
+    # The busy VM didn't wait for GitHub.
+    assert started[0][1] < 0.1
+
+
+async def test_a_cancelled_pass_leaves_no_check_running(
+    serial_off, github, monkeypatch
+):
+    async def hang(token, repo, name):
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(reconcile, "get_runner", hang)
+    running = asyncio.ensure_future(_pass([_aged()]))
+    await asyncio.sleep(0.05)
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    others = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    assert all(t.done() for t in others)
+
+
+async def test_a_pass_out_of_budget_cancels_its_check(serial_off, github, monkeypatch):
+    """It doesn't wait for GitHub's answers it no longer needs."""
+    monkeypatch.setattr(reconcile, "SERIAL_BUDGET_SECONDS", -1.0)
+
+    async def hang(token, repo, name):
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(reconcile, "get_runner", hang)
+    await asyncio.wait_for(_pass([_aged()]), timeout=1)
+    serial_off.assert_not_awaited()
+    others = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    assert all(t.done() for t in others)

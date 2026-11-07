@@ -22,7 +22,7 @@ window, and closes 30 minutes after they stop:
 | **Runners busy on GitHub with no recorded start** | 2 or more with `trigger: reconcile`, `reason: runner_busy`, `outcome: submitted` | No open record shows the VM's job as started, but GitHub says its runner is on one: the webhook was lost before a record check wrote the start, or the open records couldn't all be read. One alone doesn't fire it: GitHub marks a runner busy before its webhook arrives, so a single line can be a webhook still on its way. |
 
 `reason: aged` lines don't count: those are VMs past their 10-minute boot window that no open job record shows as
-started and that GitHub doesn't report busy. Usually that's a spare VM, or the VM of a job cancelled before it
+started and that GitHub didn't report busy (or that couldn't be checked). Usually that's a spare VM, or the VM of a job cancelled before it
 started, but not always (see below).
 
 ## Impact
@@ -41,7 +41,8 @@ Not covered by the alert:
   step 1.
 - A single `runner_busy` line in 15 minutes (see the table).
 - A running job's VM turned off as `aged`. When no open record shows the VM's job as started, the reconciler asks
-  GitHub whether the VM's runner is busy (all of a run's checks at once, within 5 s), and a yes makes it
+  GitHub whether the VM's runner is busy (all of a run's checks at once, within 5 s, while the known-busy VMs are
+  turned off), and a yes makes it
   `runner_busy`. GitHub's flag can read false mid-job, and the check can fail or time out (`Serial logging runner
   check failed`); either way the VM is still turned off, as `aged`, but without an alert.
 - Without a job store (`JOB_STORE=none`) the reconciler doesn't run its passes, so a lost webhook isn't caught.
