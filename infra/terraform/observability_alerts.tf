@@ -363,10 +363,12 @@ resource "google_monitoring_alert_policy" "registry_unavailable" {
 # step 4): the job's output is the tenant's once it starts. Two ways it shows:
 # a GCE call that failed (`failed`, from the webhook or the reconciler), or
 # the reconciler finding a busy VM still logging and turning it off itself,
-# which means the in_progress webhook didn't. `aged` (past boot with no
-# recorded job start, usually a spare) doesn't count, so a lost webhook the
-# reconciler hasn't recorded yet is missed. Rare and each one matters: any in
-# 15 minutes.
+# which means the in_progress webhook didn't. Rare and each one matters: any
+# in 15 minutes. `runner_busy` (no recorded start, but GitHub says the runner
+# is on a job) is the same miss when the webhook was lost, but GitHub marks a
+# runner busy before its webhook arrives, so one can be a webhook still on its
+# way: it takes two. `aged` (no recorded start, not busy on GitHub: usually a
+# spare) doesn't count.
 resource "google_monitoring_alert_policy" "serial_logging_not_off" {
   display_name = "Serial logging not turned off (15m)"
   combiner     = "OR"
@@ -396,6 +398,22 @@ resource "google_monitoring_alert_policy" "serial_logging_not_off" {
       filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.serial_logging_outcome_count.name}\" resource.type=\"cloud_run_revision\" metric.label.trigger=\"reconcile\" metric.label.reason=\"busy\" metric.label.outcome=\"submitted\""
       comparison      = "COMPARISON_GT"
       threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period     = "900s"
+        per_series_aligner   = "ALIGN_DELTA"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  conditions {
+    display_name = "Runners busy on GitHub with no recorded start, turned off by the reconciler"
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.serial_logging_outcome_count.name}\" resource.type=\"cloud_run_revision\" metric.label.trigger=\"reconcile\" metric.label.reason=\"runner_busy\" metric.label.outcome=\"submitted\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 1
       duration        = "0s"
 
       aggregations {

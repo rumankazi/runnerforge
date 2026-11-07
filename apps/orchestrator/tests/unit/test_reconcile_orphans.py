@@ -450,7 +450,10 @@ async def test_check_order_changes_between_runs(world, monkeypatch):
     """VMs kept every run (long jobs) can't always take the checks."""
     monkeypatch.setattr(reconcile, "MAX_ORPHAN_CHECKS", 1)
     names = [f"runnerforge-100-{i}-1" for i in range(5)]
-    world.vms = [_vm(name) for name in names]
+    # Serial logging off, so only the orphan checks ask GitHub.
+    world.vms = [
+        _vm(name).model_copy(update={"serial_logging": False}) for name in names
+    ]
     world.runners = {name: _runner(name, busy=True) for name in names}
     checked: list[str] = []
 

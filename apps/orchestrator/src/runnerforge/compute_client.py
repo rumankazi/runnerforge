@@ -942,7 +942,7 @@ def serial_logging_state(instance: compute_v1.Instance) -> bool | None:
 async def turn_off_serial_logging(
     vm_name: str,
     trigger: Literal["in_progress", "reconcile"],
-    reason: Literal["webhook", "busy", "aged"],
+    reason: Literal["webhook", "busy", "aged", "runner_busy"],
     *,
     installation_id: int | None,
     instance: compute_v1.Instance | None = None,
