@@ -162,7 +162,7 @@ SERIAL_BUSY_GRACE = timedelta(minutes=2)
 SERIAL_BOOT_WINDOW = timedelta(minutes=10)
 # Asking GitHub whether such a VM's runner is on a job after all: its
 # in_progress webhook was lost before a record check wrote the fact, or the
-# open records couldn't all be read.
+# open records couldn't all be read. One timeout for all of a run's checks.
 SERIAL_RUNNER_CHECK_TIMEOUT_SECONDS = 5.0
 
 
@@ -1126,9 +1126,9 @@ async def _serial_logging_pass(
 ) -> None:
     """Turn serial logging off on running VMs that still log it: those on a
     job whose in_progress webhook didn't (`busy`), and those past boot
-    (`aged`, unless GitHub says the runner is on a job: then `busy`). Fails
-    open, like the webhook: a VM that keeps logging is alerted on, not
-    deleted."""
+    (`aged`, or `runner_busy` when GitHub says the runner is on a job no
+    record shows). Fails open, like the webhook: a VM that keeps logging is
+    alerted on, not deleted."""
     # When each VM's job started, keyed by VM and installation: a record of
     # another installation can't say a VM is busy.
     started_at: dict[tuple[str, int | None], Any] = {}
@@ -1138,7 +1138,7 @@ async def _serial_logging_pass(
             started_at[(fact["runner_name"], _record_installation(rec))] = fact.get(
                 "at"
             )
-    candidates: list[tuple[VmInfo, Literal["busy", "aged"]]] = []
+    candidates: list[tuple[VmInfo, Literal["busy", "aged", "runner_busy"]]] = []
     for vm in vms:
         if vm.status != "RUNNING" or vm.serial_logging is False:
             continue
@@ -1150,9 +1150,16 @@ async def _serial_logging_pass(
                 candidates.append((vm, "busy"))
         elif now - vm.creation_timestamp > SERIAL_BOOT_WINDOW:
             candidates.append((vm, "aged"))
-    # Known jobs first: an aged VM costs a GitHub call, and is usually a spare.
+    # Known jobs first: aged VMs are usually spares.
     candidates.sort(key=lambda c: c[1] != "busy")
     deadline = time.monotonic() + SERIAL_BUDGET_SECONDS
+    busy_on_github = await _runners_busy(
+        [vm for vm, reason in candidates[:MAX_SERIAL_OFFS] if reason == "aged"], tokens
+    )
+    candidates = [
+        (vm, "runner_busy" if vm.name in busy_on_github else reason)
+        for vm, reason in candidates
+    ]
     for done, (vm, reason) in enumerate(candidates):
         if done >= MAX_SERIAL_OFFS or time.monotonic() > deadline:
             logger.warning(
@@ -1160,8 +1167,6 @@ async def _serial_logging_pass(
                 extra={"unchecked": len(candidates) - done},
             )
             break
-        if reason == "aged" and await _runner_busy(vm, tokens):
-            reason = "busy"
         try:
             outcome = await turn_off_serial_logging(
                 vm.name, "reconcile", reason, installation_id=_installation(vm)
@@ -1178,27 +1183,67 @@ async def _serial_logging_pass(
             errors.append(f"{vm.name}: serial logging {outcome}")
 
 
-async def _runner_busy(vm: VmInfo, tokens: dict[int, str | Exception]) -> bool:
-    """Does GitHub say the VM's runner is on a job? Only a yes counts: its
-    busy flag can read false mid-job, and a failed check leaves the VM
-    `aged`, which is still turned off."""
-    iid = _installation(vm)
-    if iid is None or vm.repo_full_name is None:
-        return False
-    try:
-        async with asyncio.timeout(SERIAL_RUNNER_CHECK_TIMEOUT_SECONDS):
-            # VM name == runner name.
-            runner = await get_runner(
-                await _token(iid, tokens), vm.repo_full_name, vm.name
-            )
-    # Deliberately broad: the check only refines the reason.
-    except Exception as e:  # noqa: BLE001
-        logger.warning(
-            "Serial logging runner check failed",
-            extra={"vm_name": vm.name, "error_class": type(e).__name__},
+async def _runners_busy(
+    vms: list[VmInfo], tokens: dict[int, str | Exception]
+) -> set[str]:
+    """The VMs whose runner GitHub says is on a job. Only a yes counts: its
+    busy flag can read false mid-job, and a VM without one stays `aged`,
+    which is still turned off. Every check runs at once under one timeout,
+    so a slow GitHub can't eat the pass's turn-offs."""
+    by_installation: dict[int, list[VmInfo]] = {}
+    for vm in vms:
+        iid = _installation(vm)
+        if iid is not None and vm.repo_full_name is not None:
+            by_installation.setdefault(iid, []).append(vm)
+    if not by_installation:
+        return set()
+    checks = {
+        asyncio.ensure_future(_installation_runners_busy(iid, its, tokens)): its
+        for iid, its in by_installation.items()
+    }
+    done, pending = await asyncio.wait(
+        checks, timeout=SERIAL_RUNNER_CHECK_TIMEOUT_SECONDS
+    )
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    busy: set[str] = set()
+    for task, its in checks.items():
+        if task in done and task.exception() is None:
+            busy |= task.result()
+            continue
+        error_class = (
+            type(task.exception()).__name__ if task in done else "TimeoutError"
         )
-        return False
-    return runner is not None and runner.busy
+        for vm in its:
+            _log_runner_check_failed(vm, error_class)
+    return busy
+
+
+async def _installation_runners_busy(
+    iid: int, vms: list[VmInfo], tokens: dict[int, str | Exception]
+) -> set[str]:
+    """One installation's share: one token, then its VMs' runners at once."""
+    token = await _token(iid, tokens)
+    # VM name == runner name.
+    answers = await asyncio.gather(
+        *(get_runner(token, str(vm.repo_full_name), vm.name) for vm in vms),
+        return_exceptions=True,
+    )
+    busy: set[str] = set()
+    for vm, answer in zip(vms, answers, strict=True):
+        if isinstance(answer, BaseException):
+            _log_runner_check_failed(vm, type(answer).__name__)
+        elif answer is not None and answer.busy:
+            busy.add(vm.name)
+    return busy
+
+
+def _log_runner_check_failed(vm: VmInfo, error_class: str) -> None:
+    logger.warning(
+        "Serial logging runner check failed",
+        extra={"vm_name": vm.name, "error_class": error_class},
+    )
 
 
 def _on_github_runner(rec: dict[str, Any]) -> bool:

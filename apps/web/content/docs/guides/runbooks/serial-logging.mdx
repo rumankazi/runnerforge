@@ -18,7 +18,8 @@ window, and closes 30 minutes after they stop:
 | Condition | Lines | Means |
 |---|---|---|
 | **Serial logging off failed** | `outcome: failed` | A GCE call failed or took longer than 4 s, from the `in_progress` webhook (`trigger: in_progress`) or the reconciler (`trigger: reconcile`). |
-| **Busy VM turned off by the reconciler** | `trigger: reconcile`, `reason: busy`, `outcome: submitted` | A VM whose job start was recorded more than 2 minutes ago, or that GitHub reports busy with no recorded start, was still logging, so the webhook didn't turn it off: the webhook was lost, its call failed, or its operation didn't take effect. |
+| **Busy VM turned off by the reconciler** | `trigger: reconcile`, `reason: busy`, `outcome: submitted` | A VM whose job start was recorded more than 2 minutes ago was still logging, so the webhook didn't turn it off: the webhook was lost, its call failed, or its operation didn't take effect. |
+| **Runners busy on GitHub with no recorded start** | 2 or more with `trigger: reconcile`, `reason: runner_busy`, `outcome: submitted` | No open record shows the VM's job as started, but GitHub says its runner is on one: the webhook was lost before a record check wrote the start, or the open records couldn't all be read. One alone doesn't fire it: GitHub marks a runner busy before its webhook arrives, so a single line can be a webhook still on its way. |
 
 `reason: aged` lines don't count: those are VMs past their 10-minute boot window that no open job record shows as
 started and that GitHub doesn't report busy. Usually that's a spare VM, or the VM of a job cancelled before it
@@ -38,11 +39,11 @@ Not covered by the alert:
   retries the VM, and a busy VM it turns off then fires the second condition.
 - `Serial logging off failed` (ERROR): an unexpected exception around the call, which is a bug. Search for it in
   step 1.
-- A running job's VM turned off as `aged`. When no open record shows the VM's job as started (its `in_progress`
-  webhook was lost before a record check wrote the start, or the open records couldn't all be read), the reconciler
-  asks GitHub whether the VM's runner is busy, and a yes makes it `busy`. GitHub's flag can read false mid-job, and
-  the check can fail (`Serial logging runner check failed`); either way the VM is still turned off, as `aged`, but
-  without an alert.
+- A single `runner_busy` line in 15 minutes (see the table).
+- A running job's VM turned off as `aged`. When no open record shows the VM's job as started, the reconciler asks
+  GitHub whether the VM's runner is busy (all of a run's checks at once, within 5 s), and a yes makes it
+  `runner_busy`. GitHub's flag can read false mid-job, and the check can fail or time out (`Serial logging runner
+  check failed`); either way the VM is still turned off, as `aged`, but without an alert.
 - Without a job store (`JOB_STORE=none`) the reconciler doesn't run its passes, so a lost webhook isn't caught.
 
 ## Diagnose
@@ -62,8 +63,9 @@ gcloud logging read '
   resource.labels.service_name="runnerforge-orchestrator"
   (
     (jsonPayload.message="Serial logging outcome" AND NOT jsonPayload.outcome=("submitted" OR "already_off" OR "vm_gone" OR "not_running"))
-    OR (jsonPayload.message="Serial logging outcome" AND jsonPayload.reason="busy")
+    OR (jsonPayload.message="Serial logging outcome" AND jsonPayload.reason=("busy" OR "runner_busy"))
     OR jsonPayload.message="Serial logging off failed"
+    OR jsonPayload.message="Serial logging runner check failed"
     OR jsonPayload.message="Serial logging pass incomplete"
   )
 ' --project=runnerforge --freshness=1h --limit=50 \
@@ -77,7 +79,7 @@ gcloud logging read '
 | `RefreshError`, `TransportError` | The orchestrator couldn't get an access token from the metadata server: a platform problem. |
 | `ServiceUnavailable`, `InternalServerError`, `ConnectionError` | GCE is degraded. Check the [Google Cloud status page](https://status.cloud.google.com/) for Compute Engine in `europe-west4`. |
 
-**2. For a busy VM, find out why the webhook didn't turn it off.** Look for the webhook's own line for that VM:
+**2. For a `busy` or `runner_busy` VM, find out why the webhook didn't turn it off.** Look for the webhook's own line for that VM:
 
 ```bash
 gcloud logging read '
@@ -89,8 +91,8 @@ gcloud logging read '
   --format='table(timestamp, jsonPayload.trigger, jsonPayload.reason, jsonPayload.outcome, jsonPayload.error_class, jsonPayload.operation_id)'
 ```
 
-- No `in_progress` line: the webhook didn't reach this code, or hadn't yet. A `busy` line from GitHub's flag can
-  come seconds before a late webhook, which then logs `already_off`; that's GitHub's delivery delay, not a miss. Check that `Webhook event received` with
+- No `in_progress` line: the webhook didn't reach this code, or hadn't yet. A `runner_busy` line can come seconds
+  before a late webhook, which then logs `already_off`; that's GitHub's delivery delay, not a miss. Check that `Webhook event received` with
   `event_type: in_progress` arrived for the job, and whether `handle_in_progress` found the VM.
 - An `in_progress` line with `submitted`: the call was accepted but the VM still reads as logging. Look the
   operation up (step 3).
