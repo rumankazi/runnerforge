@@ -147,7 +147,7 @@ under `resource.type="gce_instance"`, not under the orchestrator's Cloud Run res
 
 Every VM also starts with `serial-port-logging-enable=TRUE`, so its serial port output reaches Cloud Logging from
 boot, and the orchestrator turns it off when the VM's job starts: on the `in_progress` webhook, or from the
-reconciler for a VM the webhook missed (`reason: busy`) or a spare past its 10-minute boot window (`reason: aged`).
+reconciler for a VM the webhook missed (`reason: busy`) or a VM past its 10-minute boot window with no recorded job start, usually a spare (`reason: aged`).
 The job's output is the tenant's, so it shouldn't land in Cloud Logging
 ([ADR-020](/docs/design/decisions#hosted-isolation-a-pool-project-for-tenant-vms)). The
 "Serial logging not turned off" alert covers the misses.
