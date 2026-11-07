@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.14.0](https://github.com/rumankazi/runnerforge/compare/web-v1.13.0...web-v1.14.0) (2026-11-07)
+
+
+### Features
+
+* **deps:** update web deps (minor) ([#392](https://github.com/rumankazi/runnerforge/issues/392)) ([f2d257a](https://github.com/rumankazi/runnerforge/commit/f2d257ade9f43dafc15fdf6428d262e192b5d57a))
+* **infra:** admit by the tenant registry in production ([#361](https://github.com/rumankazi/runnerforge/issues/361)) ([80b9e72](https://github.com/rumankazi/runnerforge/commit/80b9e7202aea79837a788dcab569ba1b5f586c60))
+* **infra:** alert when serial logging isn't turned off ([#395](https://github.com/rumankazi/runnerforge/issues/395)) ([0c9937f](https://github.com/rumankazi/runnerforge/commit/0c9937fe83c297e4e8c21da9ac691cf87a464b1f))
+* **infra:** bind the apply account to the prod-infra environment subject ([#384](https://github.com/rumankazi/runnerforge/issues/384)) ([4884f95](https://github.com/rumankazi/runnerforge/commit/4884f95979afd2c6ee8c0fd64348ba51b617aa0c))
+* **infra:** check the control default compute account stays disabled ([#387](https://github.com/rumankazi/runnerforge/issues/387)) ([da14152](https://github.com/rumankazi/runnerforge/commit/da141525b019b75710cfa2b596cc5a93a72c6cf6))
+* **infra:** control Terraform reader role for the plan account ([#388](https://github.com/rumankazi/runnerforge/issues/388)) ([fdc817f](https://github.com/rumankazi/runnerforge/commit/fdc817f45df824eb74c556ced6c88670c89323cc))
+* **infra:** drop the apply account's path-bound WIF binding ([#385](https://github.com/rumankazi/runnerforge/issues/385)) ([2bdea60](https://github.com/rumankazi/runnerforge/commit/2bdea60e1634e653352dda35fec52621708436da))
+* **infra:** orchestrator and CI access to the pool, scope link, audit alerts ([#382](https://github.com/rumankazi/runnerforge/issues/382)) ([5b74545](https://github.com/rumankazi/runnerforge/commit/5b745456ad21a38f5e30ae47a614a1b33fad9c3e))
+* **infra:** pool ceilings, DNS query logging and log-volume alerts ([#380](https://github.com/rumankazi/runnerforge/issues/380)) ([5c58623](https://github.com/rumankazi/runnerforge/commit/5c58623fd5c91a3d19b4be974cf5437b2a8c4d67))
+* **infra:** pool project network in its own Terraform target ([#375](https://github.com/rumankazi/runnerforge/issues/375)) ([571d4a1](https://github.com/rumankazi/runnerforge/commit/571d4a17ff71b50841e84f177d765b6c493076f8))
+* **infra:** remove the pool's hand grants with member_remove ([#386](https://github.com/rumankazi/runnerforge/issues/386)) ([3098ae5](https://github.com/rumankazi/runnerforge/commit/3098ae5922c038ce314f8afe9e2c6e85e22d0ce1))
+* **infra:** the plan account reads control through its reader role only ([#390](https://github.com/rumankazi/runnerforge/issues/390)) ([2002ccd](https://github.com/rumankazi/runnerforge/commit/2002ccd81dd8f2ea076786e3261bd61ecc3b6206))
+* **orchestrator:** clean up after installations GitHub cuts off ([#370](https://github.com/rumankazi/runnerforge/issues/370)) ([225ac3b](https://github.com/rumankazi/runnerforge/commit/225ac3bb6ca30c9f244e493780a3401d8b5ca264))
+
+
+### Bug Fixes
+
+* **deps:** lock file maintenance ([#359](https://github.com/rumankazi/runnerforge/issues/359)) ([b499706](https://github.com/rumankazi/runnerforge/commit/b49970632a5283e7557405d4a994fc75abf49877))
+* **deps:** update web deps (patch) ([#373](https://github.com/rumankazi/runnerforge/issues/373)) ([06ca4b4](https://github.com/rumankazi/runnerforge/commit/06ca4b47acd2a397a1cce106197575b2948f73bf))
+* **deps:** update web deps (patch) to v16.17.9 ([#368](https://github.com/rumankazi/runnerforge/issues/368)) ([debc9bb](https://github.com/rumankazi/runnerforge/commit/debc9bb9ff1e06f5b59b994ace53b59b5fdb2e9c))
+* **deps:** update web deps (patch) to v16.18.1 ([#394](https://github.com/rumankazi/runnerforge/issues/394)) ([01f27d4](https://github.com/rumankazi/runnerforge/commit/01f27d46990c30204181998f526a4745f641eb1f))
+* **deps:** update web deps (patch) to v16.4.5 ([#389](https://github.com/rumankazi/runnerforge/issues/389)) ([d601450](https://github.com/rumankazi/runnerforge/commit/d601450bdf59a140e40168e1211e9bd144c8de28))
+
 ## [1.13.0](https://github.com/rumankazi/runnerforge/compare/web-v1.12.0...web-v1.13.0) (2026-11-01)
 
 
