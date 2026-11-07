@@ -1,0 +1,137 @@
+---
+title: Serial logging not turned off
+description: 'Runbook for "Serial logging not turned off (15m)": a running job''s VM still sending its serial output to Cloud Logging.'
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Symptom
+
+Email from "RunnerForge Alerts": **Serial logging not turned off (15m)**, severity WARNING.
+
+Every runner VM starts with `serial-port-logging-enable=TRUE`, so its boot reaches Cloud Logging, and the
+orchestrator sets it to `FALSE` when the VM's job starts
+([ADR-020](/docs/design/decisions#hosted-isolation-a-pool-project-for-tenant-vms), step 4). Each attempt logs one
+`Serial logging outcome` line (`serial_logging_outcome_count`). The alert fires on either of these in a 15-minute
+window, and closes 30 minutes after they stop:
+
+| Condition | Lines | Means |
+|---|---|---|
+| **Serial logging off failed** | `outcome: failed` | A GCE call failed or took longer than 4 s, from the `in_progress` webhook (`trigger: in_progress`) or the reconciler (`trigger: reconcile`). |
+| **Busy VM turned off by the reconciler** | `trigger: reconcile`, `reason: busy`, `outcome: submitted` | A VM whose job start was recorded more than 2 minutes ago was still logging, so the webhook didn't turn it off: the webhook was lost, its call failed, or its operation didn't take effect. |
+
+`reason: aged` lines don't count: those are VMs past their 10-minute boot window that no open job record shows as
+started. Usually that's a spare VM, or the VM of a job cancelled before it started, but not always (see below).
+
+## Impact
+
+Once a job starts, its output is the tenant's, and with serial logging on it reaches Cloud Logging in the VM's
+project, where anyone with `roles/logging.viewer` can read it for 30 days. Today VMs run in the control project and
+only the owner's jobs run, so the exposure is the owner's own output. After the step 6 cutover it's a tenant's output
+in the pool project, billed as log volume ([Pool log volume](/docs/guides/runbooks/pool-log-volume)).
+
+Jobs are not affected: the change fails open, and nothing is deleted.
+
+Not covered by the alert:
+- `outcome: conflict` (the metadata changed between read and write, twice). It logs a WARNING; the reconciler
+  retries the VM, and a busy VM it turns off then fires the second condition.
+- `Serial logging off failed` (ERROR): an unexpected exception around the call, which is a bug. Search for it in
+  step 1.
+- A running job's VM turned off as `aged`. That happens when the reconciler doesn't know the job started: its
+  `in_progress` webhook was lost and the job started after the reconciler last checked its record, or the reconciler
+  couldn't read the open records (`Job store read failed`, `operation: list_open`) or they ran past 500. The VM is
+  still turned off, within about 5 minutes of the 10-minute mark, but its job's output until then reached Cloud
+  Logging without an alert.
+- Without a job store (`JOB_STORE=none`) the reconciler doesn't run its passes, so a lost webhook isn't caught.
+
+## Diagnose
+
+All commands are read-only.
+
+<Callout type="warn" title="Never describe a runner VM without a --format">
+  A VM's metadata holds its registration token. `gcloud compute instances describe` prints it unless you name the
+  fields you want, and the commands here do. Don't read the VM's serial output either: it is the tenant's.
+</Callout>
+
+**1. List the lines.**
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  (
+    (jsonPayload.message="Serial logging outcome" AND NOT jsonPayload.outcome=("submitted" OR "already_off" OR "vm_gone" OR "not_running"))
+    OR (jsonPayload.message="Serial logging outcome" AND jsonPayload.reason="busy")
+    OR jsonPayload.message="Serial logging off failed"
+    OR jsonPayload.message="Serial logging pass incomplete"
+  )
+' --project=runnerforge --freshness=1h --limit=50 \
+  --format='table(timestamp, severity, jsonPayload.message, jsonPayload.vm_name, jsonPayload.project_id, jsonPayload.trigger, jsonPayload.reason, jsonPayload.outcome, jsonPayload.error_class)'
+```
+
+| `error_class` | Likely cause |
+|---|---|
+| `TimeoutError` | GCE answered slowly; the 4 s bound fired. One-offs are harmless: the reconciler retries a busy VM within 5 minutes. |
+| `PermissionDenied`, `Forbidden` | The orchestrator lost `compute.instances.setMetadata` in the VM's project: `roles/compute.instanceAdmin.v1` in control (`iam.tf`), or the pool's `runnerforgeOrchestratorPool` role (`infra/terraform-pool/iam.tf`). |
+| `RefreshError`, `TransportError` | The orchestrator couldn't get an access token from the metadata server: a platform problem. |
+| `ServiceUnavailable`, `InternalServerError`, `ConnectionError` | GCE is degraded. Check the [Google Cloud status page](https://status.cloud.google.com/) for Compute Engine in `europe-west4`. |
+
+**2. For a busy VM, find out why the webhook didn't turn it off.** Look for the webhook's own line for that VM:
+
+```bash
+gcloud logging read '
+  resource.type="cloud_run_revision"
+  resource.labels.service_name="runnerforge-orchestrator"
+  jsonPayload.message="Serial logging outcome"
+  jsonPayload.vm_name="<VM_NAME>"
+' --project=runnerforge --freshness=1d --limit=10 \
+  --format='table(timestamp, jsonPayload.trigger, jsonPayload.reason, jsonPayload.outcome, jsonPayload.error_class, jsonPayload.operation_id)'
+```
+
+- No `in_progress` line: the webhook didn't reach this code. Check that `Webhook event received` with
+  `event_type: in_progress` arrived for the job, and whether `handle_in_progress` found the VM.
+- An `in_progress` line with `submitted`: the call was accepted but the VM still reads as logging. Look the
+  operation up (step 3).
+
+**3. Check the operation and the VM's state.** Use the VM's project from the line's `project_id`.
+
+```bash
+gcloud compute operations describe <OPERATION_ID> --zone=europe-west4-a --project=<PROJECT_ID> \
+  --format='value(status, error.errors[0].code)'
+```
+
+```bash
+gcloud compute instances describe <VM_NAME> --zone=europe-west4-a --project=<PROJECT_ID> \
+  --format='value(status, resourceStatus.effectiveInstanceMetadata.serialPortLoggingEnableMetadataValue)'
+```
+
+The second value is the setting GCE applies, after project defaults. It can be empty; the orchestrator then goes by
+the VM's own item.
+
+## Mitigate
+
+<Callout type="warn" title="Mutations">
+  These change a running VM. In the pool project they fire "Pool changed outside Terraform" too, as expected.
+</Callout>
+
+- **Transient GCE errors:** nothing to do. The reconciler retries busy VMs every 5 minutes, up to 10 a run.
+- **One VM still logging:** turn it off by hand. `add-metadata` changes only the key you name and keeps the rest:
+
+  ```bash
+  gcloud compute instances add-metadata <VM_NAME> --zone=europe-west4-a --project=<PROJECT_ID> \
+    --metadata=serial-port-logging-enable=FALSE
+  ```
+
+- **Permission errors:** restore the role through Terraform (the files in step 1).
+- **Regression after a release:** roll back with the `rollback` mode of `deploy-orchestrator.yaml` (approval-gated).
+
+## Verify
+
+- The VM reads as off: step 3's `describe` shows `False` (or the VM is gone). The reconciler skips a VM that is
+  already off, so it logs no more `Serial logging outcome` lines for it.
+- No new lines from step 1, and the alert closes 30 minutes after the last one.
+
+## Escalate
+
+If calls keep failing with GCE healthy and IAM unchanged, open a GitHub issue with the `error_class`, `vm_name` and
+`operation_id` values from steps 1 and 2.
