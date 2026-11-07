@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.28.0...orchestrator-v0.28.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **orchestrator:** count a VM busy for serial logging when GitHub says its runner is ([#397](https://github.com/rumankazi/runnerforge/issues/397)) ([496209a](https://github.com/rumankazi/runnerforge/commit/496209a34fc448859b8061ed5ad41b586d1b67ae))
+
 ## [0.28.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.27.0...orchestrator-v0.28.0) (2026-11-06)
 
 
