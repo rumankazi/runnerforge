@@ -358,3 +358,62 @@ resource "google_monitoring_alert_policy" "registry_unavailable" {
   notification_channels = [google_monitoring_notification_channel.email.name]
   depends_on            = [time_sleep.wait_for_log_metrics]
 }
+
+# A running job's VM still sending serial output to Cloud Logging (ADR-020
+# step 4): the job's output is the tenant's once it starts. Two ways it shows:
+# a GCE call that failed (`failed`, from the webhook or the reconciler), or
+# the reconciler finding a busy VM still logging and turning it off itself,
+# which means the in_progress webhook didn't. `aged` (a spare VM past boot)
+# is routine and doesn't count. Rare and each one matters: any in 15 minutes.
+resource "google_monitoring_alert_policy" "serial_logging_not_off" {
+  display_name = "Serial logging not turned off (15m)"
+  combiner     = "OR"
+  severity     = "WARNING"
+
+  conditions {
+    display_name = "Serial logging off failed"
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.serial_logging_outcome_count.name}\" resource.type=\"cloud_run_revision\" metric.label.outcome=\"failed\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      # Fire on the first event. GCP rejects evaluation_missing_data on a
+      # zero duration; with no data the condition simply isn't met.
+      duration = "0s"
+
+      aggregations {
+        alignment_period     = "900s"
+        per_series_aligner   = "ALIGN_DELTA"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  conditions {
+    display_name = "Busy VM turned off by the reconciler"
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.serial_logging_outcome_count.name}\" resource.type=\"cloud_run_revision\" metric.label.trigger=\"reconcile\" metric.label.reason=\"busy\" metric.label.outcome=\"submitted\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+
+      aggregations {
+        alignment_period     = "900s"
+        per_series_aligner   = "ALIGN_DELTA"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  # A sparse counter: close the incident once it stops.
+  alert_strategy {
+    auto_close = "1800s"
+  }
+
+  documentation {
+    content   = "A running job's VM kept sending serial output to Cloud Logging after its job started. Runbook: https://github.com/rumankazi/runnerforge/blob/main/apps/web/content/docs/guides/runbooks/serial-logging.mdx"
+    mime_type = "text/markdown"
+  }
+
+  notification_channels = [google_monitoring_notification_channel.email.name]
+  depends_on            = [time_sleep.wait_for_log_metrics]
+}

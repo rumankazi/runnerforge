@@ -56,6 +56,8 @@ resource "google_monitoring_alert_policy" "pool_out_of_band" {
 # peering, VPN or interconnect, or login and startup metadata on a VM or the
 # project, by anyone, Terraform included (so a reviewed change to metadata.tf
 # fires it too). Keyed on the permissions checked, not the request shape.
+# setMetadata keeps only the items it sends, so a VM losing a key the
+# orchestrator sets at insert, or its startup script, fires it too (step 4).
 # setCommonInstanceMetadata checks iam.serviceAccounts.actAs for any caller,
 # hence that exception; its metadata keys are matched separately.
 resource "google_monitoring_alert_policy" "pool_external_path" {
@@ -76,6 +78,7 @@ resource "google_monitoring_alert_policy" "pool_external_path" {
           OR (protoPayload.methodName=~"\.compute\.instances\.setMetadata$" AND protoPayload.metadata.instanceMetadataDelta.addedMetadataKeys=("serial-port-enable" OR "ssh-keys" OR "sshKeys" OR "enable-oslogin" OR "block-project-ssh-keys" OR "startup-script" OR "startup-script-url" OR "shutdown-script" OR "shutdown-script-url" OR "enable-guest-attributes"))
           OR (protoPayload.methodName=~"\.compute\.projects\.setCommonInstanceMetadata$" AND (protoPayload.metadata.projectMetadataDelta.addedMetadataKeys=("serial-port-enable" OR "ssh-keys" OR "sshKeys" OR "enable-oslogin" OR "block-project-ssh-keys" OR "startup-script" OR "startup-script-url" OR "shutdown-script" OR "shutdown-script-url" OR "enable-guest-attributes") OR protoPayload.metadata.projectMetadataDelta.modifiedMetadataKeys=("serial-port-enable" OR "ssh-keys" OR "sshKeys" OR "enable-oslogin" OR "block-project-ssh-keys" OR "startup-script" OR "startup-script-url" OR "shutdown-script" OR "shutdown-script-url" OR "enable-guest-attributes") OR protoPayload.metadata.projectMetadataDelta.deletedMetadataKeys=("enable-oslogin" OR "serial-port-logging-enable")))
           OR (protoPayload.methodName=~"\.compute\.instances\.setMetadata$" AND protoPayload.metadata.instanceMetadataDelta.modifiedMetadataKeys=("serial-port-enable" OR "ssh-keys" OR "sshKeys" OR "enable-oslogin" OR "block-project-ssh-keys" OR "startup-script" OR "startup-script-url" OR "shutdown-script" OR "shutdown-script-url" OR "enable-guest-attributes"))
+          OR (protoPayload.methodName=~"\.compute\.instances\.setMetadata$" AND protoPayload.metadata.instanceMetadataDelta.deletedMetadataKeys=("enable-oslogin" OR "block-project-ssh-keys" OR "serial-port-logging-enable" OR "startup-script"))
         )
       EOT
       label_extractors = local.pool_audit_labels

@@ -794,6 +794,57 @@ resource "google_logging_metric" "job_store_write_failure_count" {
   }
 }
 
+# ---------------------------------------------------------------------------
+# Serial logging (ADR-020 step 4) — off when the job starts
+# ---------------------------------------------------------------------------
+
+# One per attempt to turn a VM's serial-port-logging-enable off: the
+# in_progress webhook (`trigger` in_progress, `reason` webhook) and the
+# reconciler's catch-up (`trigger` reconcile, `reason` busy or aged).
+# `project_id` tells the control and pool projects apart after the step 6
+# cutover. Labels are set now because adding one later recreates the metric.
+resource "google_logging_metric" "serial_logging_outcome_count" {
+  name   = "serial_logging_outcome_count"
+  filter = <<-EOT
+    ${local.log_metric_resource_filter}
+    jsonPayload.message="Serial logging outcome"
+  EOT
+
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+    labels {
+      key        = "outcome"
+      value_type = "STRING"
+    }
+    labels {
+      key        = "trigger"
+      value_type = "STRING"
+    }
+    labels {
+      key        = "reason"
+      value_type = "STRING"
+    }
+    labels {
+      key        = "project_id"
+      value_type = "STRING"
+    }
+    labels {
+      key        = "error_class"
+      value_type = "STRING"
+    }
+  }
+
+  label_extractors = {
+    "outcome"     = "EXTRACT(jsonPayload.outcome)"
+    "trigger"     = "EXTRACT(jsonPayload.trigger)"
+    "reason"      = "EXTRACT(jsonPayload.reason)"
+    "project_id"  = "EXTRACT(jsonPayload.project_id)"
+    "error_class" = "EXTRACT(jsonPayload.error_class)"
+  }
+}
+
 # Cloud Monitoring SLOs and alert policies that reference a log-based metric
 # validate the metric exists at create time, but log-based metrics take up
 # to ~10 minutes to become queryable after creation. On a fresh apply, that
@@ -830,6 +881,7 @@ resource "time_sleep" "wait_for_log_metrics" {
       google_logging_metric.job_store_write_failure_count.name,
       google_logging_metric.reconcile_stuck_count.name,
       google_logging_metric.reconcile_error_count.name,
+      google_logging_metric.serial_logging_outcome_count.name,
     ])
   }
 

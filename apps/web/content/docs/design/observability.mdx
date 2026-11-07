@@ -87,7 +87,10 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Refusing to delete VM not owned by this installation` | WARNING | `handlers.py` | `vm_installation_id` | |
 | `Submitted VM deletion` | INFO | `compute_client.py` | `vm_name`, `reason` (`webhook`, `sweep`, `reconcile`, `cutoff`) | `vm_deletion_count` |
 | `Job ended due to spot preemption` | WARNING | `compute_client.py` | `vm_name`, `job_id`, `conclusion` | `job_preempted_count` |
-| `VM list scan` | INFO | `compute_client.py` | `runnerforge_vm_count`, `skipped_malformed_count` | `runner_vm_count` |
+| `VM list scan` | INFO | `compute_client.py` | `project_id`, `runnerforge_vm_count`, `skipped_malformed_count` | `runner_vm_count` |
+| `Serial logging outcome` | INFO / WARNING | `compute_client.py` | `vm_name`, `project_id`, `trigger` (`in_progress`, `reconcile`), `reason` (`webhook`, `busy`, `aged`), `outcome` (`submitted`, `already_off`, `vm_gone`, `not_running`, `not_owned`, `conflict`, `failed`; WARNING for the last two), `error_class`, `operation_id`. Never metadata values or error text: the VM's metadata holds its registration token | `serial_logging_outcome_count` |
+| `Serial logging off failed` | ERROR | `handlers.py`, `reconcile.py` | `vm_name`, `error_class` (an unexpected exception around the call) | |
+| `Serial logging pass incomplete` | WARNING | `reconcile.py` | `unchecked` (10-VM cap or 15 s budget reached) | |
 | `Sweep decision` | INFO / WARNING | `sweep.py` | `decision`, `reason`, `vm_name`, `age_minutes` | |
 | `Sweep failed for VM` | ERROR | `sweep.py` | `vm_name`, `error` | |
 | `Sweep completed` | INFO | `main.py` | `checked`, `deleted`, `skipped`, `error_count` | `sweep_*` |
@@ -142,6 +145,13 @@ account has `roles/logging.logWriter`. The startup script tags its lines with `l
 under `resource.type="gce_instance"`, not under the orchestrator's Cloud Run resource. While a VM still exists,
 `gcloud compute instances get-serial-port-output` also shows the boot.
 
+Every VM also starts with `serial-port-logging-enable=TRUE`, so its serial port output reaches Cloud Logging from
+boot, and the orchestrator turns it off when the VM's job starts: on the `in_progress` webhook, or from the
+reconciler for a VM the webhook missed (`reason: busy`) or a spare past its 10-minute boot window (`reason: aged`).
+The job's output is the tenant's, so it shouldn't land in Cloud Logging
+([ADR-020](/docs/design/decisions#hosted-isolation-a-pool-project-for-tenant-vms)). The
+"Serial logging not turned off" alert covers the misses.
+
 ## Traces
 
 `tracing.py` enables OpenTelemetry only on Cloud Run. It samples every request (`ALWAYS_ON`), exports to Cloud Trace,
@@ -152,7 +162,7 @@ GitHub API call). Custom spans add the steps:
 - `webhook.handle_queued`, `webhook.handle_in_progress`, `webhook.handle_completed`
 - `github.get_installation_token`, `github.get_registration_token`, `github.get_runner`
 - `compute.create_vm`, `compute.wait_for_vm_creation`, `compute.delete_vm`, `compute.get_vm_labels_by_job`,
-  `compute.get_vm_labels_by_name`, `compute.list_runnerforge_vms`
+  `compute.get_vm_by_name`, `compute.list_runnerforge_vms`, `compute.active_vm_names`
 
 Handler spans carry `repo`, `sender`, `job_id`, `installation_id`, `labels`, `run_id` and `run_attempt`.
 
@@ -169,7 +179,7 @@ If the VM is missing or its labels are malformed, `webhook.handle_in_progress` s
 
 ## Log-based metrics
 
-All 25 are in `observability_metrics.tf`. All but one scope to `resource.type="cloud_run_revision"` and
+All 26 are in `observability_metrics.tf`. All but one scope to `resource.type="cloud_run_revision"` and
 `service_name="runnerforge-orchestrator"`.
 
 | Metric | Kind | Source | Labels |
@@ -194,6 +204,7 @@ All 25 are in `observability_metrics.tf`. All but one scope to `resource.type="c
 | `job_preempted_count` | counter | `Job ended due to spot preemption` | `conclusion` |
 | `vm_preemption_count` | counter | GCE audit log `compute.instances.preempted` on `instances/runnerforge-*` | `zone` |
 | `job_store_write_failure_count` | counter | `Job store write failed`, except the background `record_fact:vm` and `record_fact:preempted` | `operation`, `error_class` |
+| `serial_logging_outcome_count` | counter | `Serial logging outcome` | `outcome`, `trigger`, `reason`, `project_id`, `error_class` |
 
 What the latency metrics measure (from `handlers.handle_in_progress`):
 
@@ -250,9 +261,9 @@ samples in that range can't be split exactly at 300 s.
 
 ## Alert policies
 
-Ten policies in `observability_alerts.tf`, all sent to one email notification channel, "RunnerForge Alerts"
-(`observability_channels.tf`). Only the policy-rejection, job-store and registry-unavailable alerts have a `documentation` block linking their runbook; for the
-others, use the runbook column.
+Eleven policies in `observability_alerts.tf`, all sent to one email notification channel, "RunnerForge Alerts"
+(`observability_channels.tf`). Only the policy-rejection, job-store, registry-unavailable and serial-logging alerts
+have a `documentation` block linking their runbook; for the others, use the runbook column.
 
 | Policy (display name) | Fires when | Severity | Runbook |
 |---|---|---|---|
@@ -263,6 +274,7 @@ others, use the runbook column.
 | Every queued job rejected by label policy (1h) | PromQL: ≥ 3 `machine_policy_reject_count` in 1 h `unless` any `vm_creation_count` in that hour. Evaluated every 60 s. | WARNING | [Policy rejection storm](/docs/guides/runbooks/policy-rejections) |
 | Job store write failures >= 3 (15m) | More than 2 `job_store_write_failure_count` in a 15-minute window: webhook writes, plus the reconciler's `patch`, `completed`/`in_progress` facts and `delete_by_installation` (the purge after an uninstall, retried each run until it succeeds). `record_fact:vm` and `record_fact:preempted` are excluded from every caller (the reconciler's stuck verdicts included; it retries those), and so are reconciler reads. | WARNING | [Job store write failures](/docs/guides/runbooks/job-store-writes) |
 | Queued job rejected: registry unavailable (15m) | Any `queued_rejection_count` with `outcome` `rejected` and `reason` `registry_unavailable` in a 15-minute window. Each is a job lost for good: no record, no redelivery, re-run by hand. Allow-listed installations never read the registry. Auto-closes after 30 min. | WARNING | [Registry unavailable](/docs/guides/runbooks/registry-unavailable) |
+| Serial logging not turned off (15m) | Any `serial_logging_outcome_count` with `outcome` `failed`, or with `trigger` `reconcile`, `reason` `busy` and `outcome` `submitted` (the reconciler found a running job's VM still logging), in a 15-minute window. `aged` doesn't count. Auto-closes after 30 min. | WARNING | [Serial logging](/docs/guides/runbooks/serial-logging) |
 | Webhook rejections > 5/min (10m) | More than 50 `webhook_rejection_count` in a 10-minute window, held 10 min | WARNING | [Webhook rejections](/docs/guides/runbooks/webhook-rejections) |
 | Cold-start latency p95 > 30s (5m) | Cloud Run `container/startup_latencies` p95 > 30 000 ms, 5-minute alignment, held 5 min. Inactive when there's no data. | WARNING | [Cold-start latency](/docs/guides/runbooks/cold-start-latency) |
 | Cloud Run instance count > 40 (80% of max=50) | Cloud Run `container/instance_count` max > 40, 1-minute alignment, held 10 min | WARNING | [Instance saturation](/docs/guides/runbooks/instance-saturation) |

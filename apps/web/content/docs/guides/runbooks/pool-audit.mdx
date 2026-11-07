@@ -11,7 +11,7 @@ Email from "RunnerForge pool alerts" with one of:
 
 | Alert | Severity | Fires on |
 |---|---|---|
-| **Pool VM path out of the sandbox** | CRITICAL | any request in the pool that checks a permission for an external IP, a VM service account, another network interface, a peering, a VPN or an interconnect, by anyone (Terraform included); `actAs` on anything but a project-metadata update; a VM's or the project's metadata gaining or changing a login, startup or shutdown key (`ssh-keys`, `serial-port-enable`, `enable-oslogin`, `startup-script` and similar), or the project losing `enable-oslogin` or `serial-port-logging-enable`. A reviewed Terraform change to the project metadata fires it too |
+| **Pool VM path out of the sandbox** | CRITICAL | any request in the pool that checks a permission for an external IP, a VM service account, another network interface, a peering, a VPN or an interconnect, by anyone (Terraform included); `actAs` on anything but a project-metadata update; a VM's or the project's metadata gaining or changing a login, startup or shutdown key (`ssh-keys`, `serial-port-enable`, `enable-oslogin`, `startup-script` and similar), a VM losing `enable-oslogin`, `block-project-ssh-keys`, `serial-port-logging-enable` or `startup-script` (keys the orchestrator sets, which a metadata update that leaves them out deletes), or the project losing `enable-oslogin` or `serial-port-logging-enable`. A reviewed Terraform change to the project metadata fires it too |
 | **Pool changed outside Terraform** | WARNING | any Admin Activity entry in the pool by a principal other than `ci-terraform-apply` or the orchestrator creating, deleting or updating the metadata of VMs |
 
 Both read the pool's Admin Activity audit log
