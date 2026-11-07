@@ -556,7 +556,14 @@ def test_limits_fill_a_field_added_after_the_row_was_written(monkeypatch):
 
 def test_required_limit_fields_are_the_first_five():
     # A literal, not derived from Limits: a field added later stays optional.
-    assert registry._REQUIRED_LIMIT_FIELDS == registry._LIMIT_FIELDS
+    assert registry._REQUIRED_LIMIT_FIELDS == {
+        "max_concurrent_vms",
+        "max_size",
+        "spot_only",
+        "max_runtime_minutes",
+        "literal_machine_types",
+    }
+    assert registry._REQUIRED_LIMIT_FIELDS <= registry._LIMIT_FIELDS
 
 
 @pytest.mark.parametrize(

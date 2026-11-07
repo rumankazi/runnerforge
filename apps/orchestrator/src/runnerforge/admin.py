@@ -3,7 +3,7 @@
     uv run runnerforge-admin list [--state pending]
     uv run runnerforge-admin approve <id> [--unlimited] [--pool-cap N]
     uv run runnerforge-admin suspend <id>
-    uv run runnerforge-admin set-limits <id> [--max-concurrent-vms N] ...
+    uv run runnerforge-admin set-limits <id> [--max-concurrent-vms N] ... [--pool-cap N]
 
 It runs on the owner's machine with their own gcloud credentials
 (`gcloud auth application-default login`). It shares the registry's schema
@@ -93,13 +93,20 @@ def _vm_limit(raw: Any) -> int | None:
     return None if limits.unlimited else limits.max_concurrent_vms
 
 
-def _refuse_unknown_fields(raw: Any) -> None:
-    # A write from here would drop fields a newer version stored.
-    if unknown := unknown_limit_fields(raw):
-        raise AdminError(
-            "This row has limit fields this version doesn't know: "
-            f"{', '.join(unknown)}. Use a newer checkout."
-        )
+def _check_unknown_fields(raw: Any, *, replace_all: bool) -> None:
+    """Refuse to keep or merge limits with fields this version doesn't
+    know: the write would drop them. Replacing every limit may drop them."""
+    if not (unknown := unknown_limit_fields(raw)):
+        return
+    names = ", ".join(unknown)
+    if replace_all:
+        print(f"warning: dropping limit fields {names}.", file=sys.stderr)
+        return
+    raise AdminError(
+        f"This row has limit fields this version doesn't know: {names}. A newer "
+        "version or a hand edit wrote them. Use a newer checkout, or replace "
+        "every limit with `--defaults` or `--unlimited`."
+    )
 
 
 def _warn_over_pool_cap(
@@ -111,7 +118,8 @@ def _warn_over_pool_cap(
     pool_cap: int,
 ) -> None:
     """Warn when the row's limit, or the sum of every approved row's after
-    this write, is more than the pool holds. Unlimited rows aren't counted."""
+    this write, is more than the pool holds. Unlimited rows aren't counted.
+    Only a warning: a failed listing doesn't stop the write."""
     own = _vm_limit(limits)
     if own is not None and own > pool_cap:
         print(
@@ -122,15 +130,22 @@ def _warn_over_pool_cap(
     if state != "approved":
         return
     total = own or 0
-    for snapshot in client.collection(INSTALLATIONS_COLLECTION).stream(
-        timeout=CALL_TIMEOUT_SECONDS
-    ):
-        if int(snapshot.id) == installation_id:
-            continue
-        data = snapshot.to_dict() or {}
-        entry = entry_from_doc(int(snapshot.id), data)
-        if entry.state == "approved" and entry.github_status != "deleted":
-            total += _vm_limit(data.get("limits")) or 0
+    try:
+        for snapshot in client.collection(INSTALLATIONS_COLLECTION).stream(
+            timeout=CALL_TIMEOUT_SECONDS
+        ):
+            if int(snapshot.id) == installation_id:
+                continue
+            data = snapshot.to_dict() or {}
+            entry = entry_from_doc(int(snapshot.id), data)
+            if entry.state == "approved" and entry.github_status != "deleted":
+                total += _vm_limit(data.get("limits")) or 0
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"warning: couldn't add up the approved limits ({type(exc).__name__}).",
+            file=sys.stderr,
+        )
+        return
     if total > pool_cap:
         print(
             f"warning: approved limits add up to {total} VMs, more than the "
@@ -282,7 +297,7 @@ def approve(
     data = snapshot.to_dict() or {}
     entry = entry_from_doc(installation_id, data)
     _refuse_deleted(installation_id, entry.github_status)
-    _refuse_unknown_fields(data.get("limits"))
+    _check_unknown_fields(data.get("limits"), replace_all=unlimited)
     if entry.github_status == "suspended":
         print(
             "warning: GitHub has suspended this installation. It is admitted "
@@ -346,7 +361,7 @@ def set_limits(
     data = snapshot.to_dict() or {}
     entry = entry_from_doc(installation_id, data)
     _refuse_deleted(installation_id, entry.github_status)
-    _refuse_unknown_fields(data.get("limits"))
+    _check_unknown_fields(data.get("limits"), replace_all=unlimited or defaults)
     if unlimited:
         limits = UNLIMITED
     elif defaults:

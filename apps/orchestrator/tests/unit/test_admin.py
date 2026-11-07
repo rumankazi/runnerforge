@@ -492,22 +492,32 @@ def test_list_names_fields_it_does_not_know(client, capsys):
 
 
 @pytest.mark.parametrize(
-    "argv",
-    [
-        ["approve", "7"],
-        ["approve", "7", "--unlimited"],
-        ["set-limits", "7", "--max-size", "small"],
-        ["set-limits", "7", "--defaults"],
-        ["set-limits", "7", "--unlimited"],
-    ],
+    "argv", [["approve", "7"], ["set-limits", "7", "--max-size", "small"]]
 )
-def test_writes_refuse_rows_with_fields_it_does_not_know(client, capsys, argv):
+def test_keeping_limits_refuses_fields_it_does_not_know(client, capsys, argv):
     snap = _serve(client, _snap(7, _row(limits=NEWER)))
     assert admin.main([*argv, "--yes"]) == 1
-    assert (
-        "limit fields this version doesn't know: max_vcpus" in capsys.readouterr().err
-    )
+    err = capsys.readouterr().err
+    assert "limit fields this version doesn't know: max_vcpus" in err
+    assert "--defaults" in err
     snap.reference.update.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["approve", "7", "--unlimited"], {"unlimited": True}),
+        (["set-limits", "7", "--defaults"], BETA_DEFAULTS.to_dict()),
+        (["set-limits", "7", "--unlimited"], {"unlimited": True}),
+    ],
+)
+def test_replacing_every_limit_drops_fields_it_does_not_know(
+    client, capsys, argv, expected
+):
+    snap = _serve(client, _snap(7, _row(limits=NEWER)))
+    assert admin.main([*argv, "--yes"]) == 0
+    assert "dropping limit fields max_vcpus" in capsys.readouterr().err
+    assert _written(snap)["limits"] == expected
 
 
 def test_suspend_keeps_fields_it_does_not_know(client, capsys):
@@ -522,7 +532,9 @@ def test_set_limits_warns_above_the_pool_cap(client, capsys, cap, warns):
     argv = ["set-limits", "7", "--max-concurrent-vms", "12", *cap, "--yes"]
     assert admin.main(argv) == 0
     err = capsys.readouterr().err
-    assert ("a limit of 12 VMs is more than the pool cap of 10 VMs" in err) is warns
+    # 12 of 12 is the boundary: a limit equal to the cap doesn't warn.
+    assert ("a limit of 12 VMs" in err) is warns
+    assert ("more than the pool cap of 10 VMs" in err) is warns
     assert _written(snap)["limits"]["max_concurrent_vms"] == 12
     # A pending row's limit isn't added to the approved ones.
     client.collection.return_value.stream.assert_not_called()
@@ -563,3 +575,27 @@ def test_pool_cap_must_be_positive(client, capsys):
     with pytest.raises(SystemExit):
         admin.main(["approve", "7", "--pool-cap", "0"])
     assert "--pool-cap must be at least 1" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("vms", "warns"), [("6", False), ("7", True)])
+def test_set_limits_counts_its_new_limit_in_the_approved_sum(
+    client, capsys, vms, warns
+):
+    _serve(client, _snap(7, _row(state="approved", limits=LIMITED)))
+    client.collection.return_value.stream.return_value = [
+        _snap(7, _row(state="approved", limits=LIMITED)),  # its stored 4: not counted
+        _snap(8, _row(state="approved", limits=LIMITED)),  # 4
+    ]
+    argv = ["set-limits", "7", "--max-concurrent-vms", vms, "--yes"]
+    assert admin.main(argv) == 0
+    assert ("approved limits add up to 11 VMs" in capsys.readouterr().err) is warns
+
+
+def test_a_failed_listing_does_not_stop_the_write(client, capsys):
+    snap = _serve(client, _snap(7, _row()))
+    client.collection.return_value.stream.side_effect = TimeoutError("slow")
+    assert admin.main(["approve", "7", "--yes"]) == 0
+    assert (
+        "couldn't add up the approved limits (TimeoutError)" in capsys.readouterr().err
+    )
+    assert _written(snap)["state"] == "approved"
