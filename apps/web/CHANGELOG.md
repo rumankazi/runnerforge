@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.15.0](https://github.com/rumankazi/runnerforge/compare/web-v1.14.0...web-v1.15.0) (2026-11-07)
+
+
+### Features
+
+* **orchestrator:** read tenant limits written by other versions ([#402](https://github.com/rumankazi/runnerforge/issues/402)) ([82325e3](https://github.com/rumankazi/runnerforge/commit/82325e35fb190420d92863329577826a936c7891))
+
+
+### Bug Fixes
+
+* **orchestrator:** count a VM busy for serial logging when GitHub says its runner is ([#397](https://github.com/rumankazi/runnerforge/issues/397)) ([496209a](https://github.com/rumankazi/runnerforge/commit/496209a34fc448859b8061ed5ad41b586d1b67ae))
+
 ## [1.14.0](https://github.com/rumankazi/runnerforge/compare/web-v1.13.0...web-v1.14.0) (2026-11-07)
 
 
