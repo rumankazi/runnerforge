@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.28.1...orchestrator-v0.29.0) (2026-11-08)
+
+
+### Features
+
+* **orchestrator:** read tenant limits written by other versions ([#402](https://github.com/rumankazi/runnerforge/issues/402)) ([82325e3](https://github.com/rumankazi/runnerforge/commit/82325e35fb190420d92863329577826a936c7891))
+
 ## [0.28.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.28.0...orchestrator-v0.28.1) (2026-11-07)
 
 
