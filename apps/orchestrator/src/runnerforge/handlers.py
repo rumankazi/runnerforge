@@ -2,7 +2,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from google.cloud import compute_v1
@@ -27,6 +27,7 @@ from runnerforge.compute_client import (
     get_vm_labels_by_job,
     get_vm_labels_by_name,
     is_valid_machine_type,
+    machine_type_vcpus,
     turn_off_serial_logging,
 )
 from runnerforge.config import STARTUP_SCRIPT
@@ -41,6 +42,14 @@ from runnerforge.job_store import (
 )
 from runnerforge.machine_policy import MachinePolicyError, resolve_labels
 from runnerforge.models import RunnerForgeVmLabels, WorkflowJobEvent
+from runnerforge.slots import (
+    EXPIRY_SLACK,
+    NO_CAPS,
+    Outcome,
+    SlotRequest,
+    get_slot_ledger,
+    machine_vcpus,
+)
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -326,10 +335,29 @@ async def handle_queued(
                 )
                 deferral_unrecorded = True
         span.set_attribute("policy.spot", spot)
+        ledger = get_slot_ledger()
+        slot = await _acquire_slot(
+            SlotRequest(
+                vm_name,
+                installation_id,
+                key,
+                machine_vcpus(
+                    policy.machine_type, machine_type_vcpus(policy.machine_type)
+                ),
+                None if limits is None else limits.max_concurrent_vms,
+                datetime.now(UTC) + max_run_duration + EXPIRY_SLACK,
+                "webhook",
+            ),
+            store_degraded=created is CreateResult.UNKNOWN,
+        )
 
         async def record_errored(stage: Literal["token", "gce_insert"], exc) -> None:
             # Still a 500 with no outcome line; the record says why.
             await _record_errored(store, key, base, stage, exc)
+            if stage == "token" and slot == "granted":
+                # No VM was made. A `gce_insert` error keeps the slot: GCE may
+                # have made it anyway, and repair drops the slot if not.
+                await ledger.release(vm_name, installation_id, owned=True)
 
         operation = await submit_runner_vm(
             RunnerVmSpec(
@@ -367,6 +395,30 @@ async def handle_queued(
             return None
         # The watcher records the `vm` fact with these.
         return replace(operation, job_key=key, job_base=base)
+
+
+async def _acquire_slot(req: SlotRequest, *, store_degraded: bool) -> Outcome:
+    """Take a slot for the VM about to be made (ADR-020 step 5). Release 1 is
+    shadow mode: the outcome is logged and released on failure, never acted
+    on, and the GCE count above still enforces limits."""
+    ledger = get_slot_ledger()
+    if not ledger.enabled:
+        return "skipped"  # JOB_STORE=none: no ledger
+    if store_degraded:
+        # Firestore just failed or timed out for this request: don't spend
+        # another bound on it. The next repair adopts the VM.
+        logger.info(
+            "Slot decision",
+            extra={
+                "outcome": "skipped",
+                "source": req.source,
+                "installation_id": req.installation_id,
+                "vm_name": req.vm_name,
+                "reason": "store_unavailable",
+            },
+        )
+        return "skipped"
+    return (await ledger.acquire(req, NO_CAPS)).outcome
 
 
 async def _runner_vm(
@@ -580,12 +632,17 @@ def _log_readiness(
     logger.info("Runner registration outcome", extra=extras)
 
 
-async def handle_completed(event: WorkflowJobEvent) -> PreemptionCheckRequest | None:
+async def handle_completed(
+    event: WorkflowJobEvent, *, record: bool = False
+) -> PreemptionCheckRequest | None:
     """Process a `workflow_job.completed` webhook: deletes the runner VM and
     returns a `PreemptionCheckRequest` when the job ended in failure or
     cancellation — the caller (main.py) schedules the audit-log cross-check
     in a BackgroundTask. Symmetric with `handle_queued` returning an
     `OperationHandle` for `wait_for_vm_creation` to consume.
+
+    `record`: the installation gets job records (allow-listed, or approved
+    once), so it may have slots to release.
 
     Completion is intentionally a separate trace from queued+in_progress —
     the wall-clock gap (the job running on the VM, can be hours) would
@@ -648,6 +705,11 @@ async def handle_completed(event: WorkflowJobEvent) -> PreemptionCheckRequest | 
                 "VM already deleted",
                 extra={"vm_name": runner_name, "reason": "webhook"},
             )
+            # The name alone proves nothing: the ledger releases only a slot
+            # it holds for this installation, and only installations that
+            # could have one are asked.
+            if record:
+                await get_slot_ledger().release(runner_name, event.installation.id)
         elif (
             target_labels.get("runner") != "runnerforge"
             or target_labels.get("installation_id") != installation_id
@@ -664,6 +726,10 @@ async def handle_completed(event: WorkflowJobEvent) -> PreemptionCheckRequest | 
             logger.info(
                 "VM deletion submitted",
                 extra={"runner_name": runner_name, "operation_id": operation_id},
+            )
+            # Keyed by the VM that ran the job, whichever job it was made for.
+            await get_slot_ledger().release(
+                runner_name, event.installation.id, owned=True
             )
 
         # On failure/cancellation, surface a PreemptionCheckRequest so main.py

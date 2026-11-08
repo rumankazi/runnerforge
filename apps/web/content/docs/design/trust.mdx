@@ -80,6 +80,10 @@ When you install the App, GitHub tells RunnerForge, and the database `runnerforg
 
 No tokens are stored there.
 
+**In Firestore, the slot ledger:**
+
+The database `runnerforge` also counts which runner VMs hold a slot, so every orchestrator instance applies the same concurrency limits ([ADR-020](/docs/design/decisions#hosted-isolation-a-pool-project-for-tenant-vms), step 5). For each VM it holds the VM name, its installation ID, its job's `{run_id}-{job_id}-{run_attempt}`, its vCPU count and timestamps, in one shared document and one per installation. An entry is removed when its VM is deleted; a released VM's name, installation ID and vCPU count stay in the shared document for 15 to 20 minutes. The per-installation document is named after your installation ID; the reconciler deletes it within a run (5 minutes) of it holding nothing, uninstalls included. Point-in-time recovery keeps 7 days of earlier versions. No tokens or repository names are stored there.
+
 **In Cloud Logging:**
 
 - The orchestrator's log lines for a RunnerForge job carry `repo`, `owner`, `sender` (the GitHub login that triggered the job), `job_id`, `run_id`, `run_attempt`, `runner_name`, `runner_id` and `installation_id`. Some lines also include your job's labels and timing values (`logger.py`, `main.py`, `handlers.py`).

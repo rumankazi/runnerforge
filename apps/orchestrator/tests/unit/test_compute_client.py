@@ -291,6 +291,7 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
     mock_vm_1.name = "runnerforge-1"
     mock_vm_1.creation_timestamp = "2026-05-31T10:00:00Z"
     mock_vm_1.status = "RUNNING"
+    mock_vm_1.machine_type = ""
     mock_vm_1.labels = {
         "runner": "runnerforge",
         "repo": "rumankazi_runnerforge",
@@ -306,6 +307,10 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
     mock_vm_2.name = "runnerforge-2"
     mock_vm_2.creation_timestamp = "2026-05-31T12:00:00Z"
     mock_vm_2.status = "RUNNING"
+    mock_vm_2.machine_type = (
+        "https://www.googleapis.com/compute/v1/projects/p/zones/z/"
+        "machineTypes/n2-standard-4"
+    )
     mock_vm_2.labels = {
         "runner": "runnerforge",
         "repository_id": "42",
@@ -353,6 +358,7 @@ def test_list_runnerforge_vms(monkeypatch, caplog):
             ),
             repo_full_name="RumanKazi/Foo.js",
             status="RUNNING",
+            machine_type="n2-standard-4",
         ),
     ]
 
@@ -368,6 +374,7 @@ def test_list_runnerforge_vms_with_malformed_labels(monkeypatch, caplog):
     mock_vm_1.name = "runnerforge-1"
     mock_vm_1.creation_timestamp = "2026-05-31T10:00:00Z"
     mock_vm_1.status = "RUNNING"
+    mock_vm_1.machine_type = ""
     mock_vm_1.labels = {
         "runner": "runnerforge",
         "repo": "rumankazi/runnerforge",
@@ -380,6 +387,7 @@ def test_list_runnerforge_vms_with_malformed_labels(monkeypatch, caplog):
     mock_vm_2.name = "runnerforge-2"
     mock_vm_2.creation_timestamp = "2026-05-31T12:00:00Z"
     mock_vm_2.status = "RUNNING"
+    mock_vm_2.machine_type = ""
     mock_vm_2.labels = {
         "runner": "runnerforge",
         "repo": "rumankazi/runnerforge",
@@ -432,6 +440,7 @@ def test_list_runnerforge_vms_marks_repo_unknown_when_repo_url_unusable(
     mock_vm.name = "runnerforge-1"
     mock_vm.creation_timestamp = "2026-05-31T10:00:00Z"
     mock_vm.status = "RUNNING"
+    mock_vm.machine_type = ""
     mock_vm.labels = {
         "runner": "runnerforge",
         "repository_id": "42",
@@ -1392,6 +1401,7 @@ def test_list_runnerforge_vms_reads_runner_labels(monkeypatch):
     vm.name = "runnerforge-3-2-1"
     vm.creation_timestamp = "2026-10-30T12:00:00Z"
     vm.status = "RUNNING"
+    vm.machine_type = ""
     vm.labels = {
         "runner": "runnerforge",
         "job_id": "2",

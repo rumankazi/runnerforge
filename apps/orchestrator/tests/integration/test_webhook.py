@@ -289,7 +289,7 @@ def test_webhook_queued_event_rejects_when_machine_type_not_in_cache(
     # cache-populated-but-missing branch.
     monkeypatch.setattr(
         "runnerforge.compute_client._KNOWN_MACHINE_TYPES",
-        {"n2-standard-2", "n2-standard-4", "n2-standard-8"},
+        {"n2-standard-2": 2, "n2-standard-4": 4, "n2-standard-8": 8},
     )
     create_mock = AsyncMock()
     monkeypatch.setattr("runnerforge.handlers.create_vm", create_mock)
@@ -536,7 +536,7 @@ def test_webhook_queued_accepts_github_default_labels(
     )
     monkeypatch.setattr(
         "runnerforge.compute_client._KNOWN_MACHINE_TYPES",
-        {"n2-standard-2", "n2-standard-4", "n2-standard-8"},
+        {"n2-standard-2": 2, "n2-standard-4": 4, "n2-standard-8": 8},
     )
     create_vm_mock = AsyncMock(return_value=None)
     monkeypatch.setattr("runnerforge.handlers.create_vm", create_vm_mock)

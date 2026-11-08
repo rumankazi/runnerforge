@@ -47,6 +47,7 @@ apps/orchestrator/src/runnerforge/  FastAPI app
   registry.py        tenant registry rows + Limits (ADR-019) admission.py   installation events, shadow admission, registry backfill
   config.py          env-driven settings                machine_policy.py label → machine type
   job_store.py       per-job record store (ADR-018; Firestore or no-op, fail-open)
+  slots.py           slot ledger (ADR-020 step 5; `capacity` docs, shadow: logged, not enforced)
   admin.py           `runnerforge-admin` owner CLI for the registry (never imports config)
   validation.py / models.py / logger.py / tracing.py (OpenTelemetry)
 apps/orchestrator/tests/  unit/ (mocked), integration/ (TestClient + respx), fixtures/
@@ -57,8 +58,9 @@ infra/packer/        runner VM image (Debian 12) — own release stream
 infra/policies/      OPA rego policies + *_test.rego, applied to terraform plans in CI
 .github/workflows/   qualify.yaml = PR gate (path-filtered → _qualify-{orchestrator,web,infra}.yaml + gate)
 ```
-No relational database. State lives in GCP (VMs, Secret Manager, GCS), plus per-job records in the Firestore
-database `runnerforge` (ADR-018), written only when `JOB_STORE=firestore`.
+No relational database. State lives in GCP (VMs, Secret Manager, GCS), plus per-job records, the tenant registry
+and the slot ledger (`capacity/pool`, `capacity/inst-<id>`) in the Firestore database `runnerforge`. The orchestrator
+writes them only when `JOB_STORE=firestore`; `runnerforge-admin` writes the registry with the owner's credentials.
 
 ## Environment
 

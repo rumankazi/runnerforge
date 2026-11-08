@@ -775,7 +775,7 @@ async def get_vm_labels_by_job(
 
 async def delete_vm(
     instance_name: str,
-    reason: Literal["webhook", "sweep", "reconcile", "cutoff"],
+    reason: Literal["webhook", "sweep", "reconcile", "cutoff", "terminated"],
     zone: str = GCP_ZONE,
     project_id: str | None = None,
 ) -> str | None:
@@ -868,6 +868,8 @@ async def list_runnerforge_vms(
                         "runner_labels": runner_labels,
                         "status": i.status,
                         "serial_logging": serial_logging_state(i),
+                        # A zonal URL; the type is its last segment.
+                        "machine_type": (i.machine_type or "").rsplit("/", 1)[-1],
                     }
                 )
             )

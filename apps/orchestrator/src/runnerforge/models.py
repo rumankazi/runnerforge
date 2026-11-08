@@ -144,6 +144,8 @@ class VmInfo(BaseModel):
     status: str = ""
     # Whether its serial port goes to Cloud Logging; None when unknown.
     serial_logging: bool | None = None
+    # Machine type name (n2-standard-4), for the slot ledger's vCPU count.
+    machine_type: str = ""
 
 
 class SweepResult(BaseModel):
@@ -168,4 +170,5 @@ class ReconcileResult(BaseModel):
     # ADR-019 step 4: installations GitHub suspended or uninstalled
     cutoff_vms_deleted: int = 0
     cutoff_records_deleted: int = 0  # job records of uninstalled installations
+    terminated_deleted: int = 0  # VMs left TERMINATED (ADR-020 step 5)
     errors: list[str]  # per-record failures (one record never aborts a run)
