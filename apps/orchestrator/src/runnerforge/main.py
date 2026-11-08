@@ -9,7 +9,7 @@ from typing import Annotated
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from opentelemetry import trace
 
-from runnerforge import compute_client, github_client, job_store, registry
+from runnerforge import compute_client, github_client, job_store, registry, slots
 from runnerforge.admission import (
     ALLOWLISTED,
     decide_admission,
@@ -86,6 +86,7 @@ async def lifespan(app: FastAPI):
     compute_client.init_logging_client()
     await job_store.init_job_store()
     registry.init_registry(job_store.get_client())
+    slots.init_slot_ledger(job_store.get_client())
     # After the registry, so registry mode can say whether it has one.
     log_admission_mode()
     logger.info("Clients initialized")
@@ -308,7 +309,7 @@ async def webhook(
                         "runner_name": event.workflow_job.runner_name,
                     },
                 )
-            preempt_req = await handle_completed(event)
+            preempt_req = await handle_completed(event, record=record_job)
             # The cross-check queries audit logs by a runner name taken from the
             # payload, and the VM may already be gone (so ownership can't be
             # checked). Only allow-listed installations can have our VMs, so
@@ -398,6 +399,7 @@ async def reconcile(
             "orphans_deleted": result.orphans_deleted,
             "cutoff_vms_deleted": result.cutoff_vms_deleted,
             "cutoff_records_deleted": result.cutoff_records_deleted,
+            "terminated_deleted": result.terminated_deleted,
             "more_due": result.more_due,
             "error_count": len(result.errors),
         },

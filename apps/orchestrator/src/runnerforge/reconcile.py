@@ -11,7 +11,9 @@ which VMs exist.
 
 Each run first cleans up after installations GitHub cut off (suspended or
 uninstalled, ADR-019 step 4), then deletes orphan VMs: runners GitHub no
-longer lists, or lists as idle with no job they could take. With
+longer lists, or lists as idle with no job they could take. It then deletes
+VMs left TERMINATED and repairs the slot ledger against the listing (ADR-020
+step 5). With
 ADMISSION=registry, it then starts VMs for jobs waiting under an
 installation's limit (ADR-019, the capacity pass). Last, it checks due
 records.
@@ -40,10 +42,12 @@ from runnerforge.admission import (
 from runnerforge.compute_client import (
     ACTIVE_STATUSES,
     ACTIVE_VMS_TIMEOUT_SECONDS,
+    MAX_VM_RUN_DURATION,
     OperationHandle,
     active_vm_names,
     delete_vm,
     list_runnerforge_vms,
+    machine_type_vcpus,
     preemption_status,
     turn_off_serial_logging,
 )
@@ -70,6 +74,13 @@ from runnerforge.job_store import (
 from runnerforge.machine_policy import MachinePolicyError, resolve_labels
 from runnerforge.models import GitHubJob, ReconcileResult, VmInfo
 from runnerforge.registry import DELETED_RETENTION, RegistryEntry, get_registry
+from runnerforge.slots import (
+    EXPIRY_SLACK,
+    NO_CAPS,
+    SlotRequest,
+    get_slot_ledger,
+    machine_vcpus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +175,15 @@ SERIAL_BOOT_WINDOW = timedelta(minutes=10)
 # in_progress webhook was lost before a record check wrote the fact, or the
 # open records couldn't all be read. One timeout for all of a run's checks.
 SERIAL_RUNNER_CHECK_TIMEOUT_SECONDS = 5.0
+# A VM left TERMINATED (its guest powered off, or GCE stopped it) holds a slot
+# and bills its disks: deleted once it is this old (ADR-020 step 5, D5).
+TERMINATED_MIN_AGE = timedelta(minutes=15)
+MAX_TERMINATED_DELETES = 10
+TERMINATED_BUDGET_SECONDS = 10.0
+TERMINATED_CALL_TIMEOUT_SECONDS = 5.0
+# Skipped in a run already this far in, so it can't push the run past the
+# Scheduler's attempt deadline; the next run deletes them.
+TERMINATED_LATEST_START_SECONDS = 60.0
 
 
 class _InstallationGone(Exception):
@@ -207,6 +227,8 @@ async def run_reconcile(
     due = await store.list_due(now, BATCH_SIZE + 1)
     more_due = len(due) > BATCH_SIZE
     due = due[:BATCH_SIZE]
+    # Before the call: a release after this may not show in the listing.
+    listed_at = datetime.now(UTC)
     vms = await list_runnerforge_vms()
     listed = await store.list_open(OPEN_LIMIT)
     open_records = listed or []
@@ -258,7 +280,17 @@ async def run_reconcile(
         errors,
         rows,
     )
+    if time.monotonic() - started < TERMINATED_LATEST_START_SECONDS:
+        deleted |= await _delete_terminated(
+            now, [vm for vm in vms if vm.name not in deleted], counts, errors
+        )
+    else:
+        logger.warning("Terminated cleanup skipped", extra={"reason": "run_budget"})
     vms = [vm for vm in vms if vm.name not in deleted]
+    # After every delete of the run, so their slots are released with it.
+    await get_slot_ledger().apply_repair(
+        vms, deleted, listed_at, vcpus_of=_vcpus, vm_lifetime=MAX_VM_RUN_DURATION
+    )
     await _serial_logging_pass(now, vms, open_records, tokens, errors)
     # Before the batch, so a slow batch can't starve it.
     managed: set[int] = set()
@@ -319,7 +351,59 @@ async def run_reconcile(
         orphans_deleted=counts["orphans_deleted"],
         cutoff_vms_deleted=counts["cutoff_vms_deleted"],
         cutoff_records_deleted=counts["cutoff_records_deleted"],
+        terminated_deleted=counts["terminated_deleted"],
     )
+
+
+def _vcpus(machine_type: str) -> int:
+    return machine_vcpus(machine_type, machine_type_vcpus(machine_type))
+
+
+async def _delete_terminated(
+    now: datetime, vms: list[VmInfo], counts: Counter[str], errors: list[str]
+) -> set[str]:
+    """Delete RunnerForge VMs left TERMINATED. Nothing runs on one, but its
+    slot would stay taken (a tenant could power its VM off to free a slot and
+    keep the VM), and its disks still bill. Returns the VMs deleted."""
+    deleted: set[str] = set()
+    candidates = [
+        vm
+        for vm in vms
+        if vm.status == "TERMINATED"
+        and now - vm.creation_timestamp > TERMINATED_MIN_AGE
+    ]
+    deadline = time.monotonic() + TERMINATED_BUDGET_SECONDS
+    for attempted, vm in enumerate(candidates):
+        if attempted >= MAX_TERMINATED_DELETES or time.monotonic() > deadline:
+            logger.warning(
+                "Terminated cleanup incomplete",
+                extra={"left": len(candidates) - attempted},
+            )
+            break
+        try:
+            async with asyncio.timeout(TERMINATED_CALL_TIMEOUT_SECONDS):
+                operation = await delete_vm(instance_name=vm.name, reason="terminated")
+        # Deliberately broad: the VM is kept for the next run, and the run goes on.
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{vm.name}: {type(e).__name__}")
+            logger.error(
+                "Terminated VM delete failed",
+                extra={"vm_name": vm.name, "error_class": type(e).__name__},
+            )
+            continue
+        deleted.add(vm.name)
+        if operation is None:
+            continue  # already gone
+        counts["terminated_deleted"] += 1
+        logger.info(
+            "Terminated VM deleted",
+            extra={
+                "vm_name": vm.name,
+                "installation_id": vm.labels.installation_id,
+                "age_minutes": int((now - vm.creation_timestamp).total_seconds() / 60),
+            },
+        )
+    return deleted
 
 
 async def _backfill(store: JobStore, vms: list[VmInfo], open_keys: set[str]) -> int:
@@ -622,6 +706,8 @@ class _Pass:
     stocked_out: set[str | None] = field(default_factory=set)
     spares_used: set[str] = field(default_factory=set)
     stopped: bool = False
+    # The slot ledger didn't answer this run: later starts don't ask it.
+    slots_unavailable: bool = False
 
 
 async def _capacity_pass(
@@ -892,6 +978,21 @@ async def _consider(run: _Pass, queue: _Queue, key: str, rec: dict[str, Any]) ->
     # made its VM.
     queue.free -= 1
     run.attempts += 1
+    # Its record changed with the claim, whatever happens next.
+    run.started_keys.add(key)
+    slot = await _acquire_slot(
+        run,
+        SlotRequest(
+            vm_name,
+            iid,
+            key,
+            _vcpus(policy.machine_type),
+            None if limits is None else limits.max_concurrent_vms,
+            datetime.now(UTC) + max_run_duration + EXPIRY_SLACK,
+            "reconcile",
+        ),
+    )
+    ledger = get_slot_ledger()
 
     async def record_errored(stage, exc: Exception) -> None:
         await run.store.record_fact(
@@ -901,8 +1002,11 @@ async def _consider(run: _Pass, queue: _Queue, key: str, rec: dict[str, Any]) ->
             {"stage": stage, "error_class": type(exc).__name__},
             source="reconcile",
         )
+        if stage == "token" and slot == "granted":
+            # No VM was made. A `gce_insert` error keeps the slot: GCE may
+            # have made it anyway, and repair drops the slot if not.
+            await ledger.release(vm_name, iid, owned=True)
 
-    run.started_keys.add(key)
     handle = await submit_runner_vm(
         RunnerVmSpec(
             vm_name=vm_name,
@@ -930,6 +1034,29 @@ async def _consider(run: _Pass, queue: _Queue, key: str, rec: dict[str, Any]) ->
         "Reconcile started job",
         extra={"job_key": key, "vm_name": vm_name, "start": n, "installation_id": iid},
     )
+
+
+async def _acquire_slot(run: _Pass, req: SlotRequest) -> str:
+    """ADR-020 step 5, release 1 (shadow): the slot is taken and logged, not
+    yet a condition of the start. Once the ledger fails in a run, later
+    starts skip it rather than each spending its bound; repair adopts their
+    VMs."""
+    if run.slots_unavailable:
+        logger.info(
+            "Slot decision",
+            extra={
+                "outcome": "skipped",
+                "source": req.source,
+                "installation_id": req.installation_id,
+                "vm_name": req.vm_name,
+                "reason": "ledger_unavailable",
+            },
+        )
+        return "skipped"
+    outcome = (await get_slot_ledger().acquire(req, NO_CAPS)).outcome
+    if outcome == "unavailable":
+        run.slots_unavailable = True
+    return outcome
 
 
 def _take_spare(run: _Pass, queue: _Queue, rec: dict[str, Any], repo: str) -> bool:

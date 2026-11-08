@@ -182,3 +182,45 @@ def fake_job_store(monkeypatch) -> FakeJobStore:
     store = FakeJobStore()
     monkeypatch.setattr("runnerforge.job_store._store", store)
     return store
+
+
+class FakeSlotLedger:
+    """In-memory slot ledger (ADR-020 step 5): records every call; `outcome`
+    sets what acquire reports."""
+
+    enabled = True
+
+    def __init__(self) -> None:
+        self.outcome = "granted"
+        self.acquired: list[tuple] = []
+        # (vm_name, installation_id, owned)
+        self.released: list[tuple[str, int, bool]] = []
+        self.repairs: list[dict] = []
+
+    async def acquire(self, req, caps):
+        from runnerforge.slots import SlotResult
+
+        self.acquired.append((req, caps))
+        return SlotResult(self.outcome)
+
+    async def release(self, vm_name, installation_id, *, owned=False):
+        self.released.append((vm_name, installation_id, owned))
+
+    async def apply_repair(self, vms, deleted, listed_at, *, vcpus_of, vm_lifetime):
+        self.repairs.append(
+            {
+                "vms": [vm.name for vm in vms],
+                "deleted": set(deleted),
+                "listed_at": listed_at,
+                "vcpus_of": vcpus_of,
+                "vm_lifetime": vm_lifetime,
+            }
+        )
+
+
+@pytest.fixture
+def fake_slot_ledger(monkeypatch) -> FakeSlotLedger:
+    """Swap the process-wide slot ledger for an in-memory fake."""
+    ledger = FakeSlotLedger()
+    monkeypatch.setattr("runnerforge.slots._ledger", ledger)
+    return ledger

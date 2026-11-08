@@ -865,3 +865,93 @@ async def test_the_batch_marks_jobs_the_pass_wont_start_stuck(
 
     assert result.stuck == 1
     world.preempted.assert_awaited_once_with("runnerforge-100-1-1")
+
+
+# --- slot ledger (ADR-020 step 5, release 1: shadow) ---
+
+
+async def test_a_start_takes_a_slot_after_its_claim(world, fake_slot_ledger):
+    world.store.by_installation[IID] = [_deferred(1)]
+
+    await run_reconcile(NOW)
+
+    [(req, caps)] = fake_slot_ledger.acquired
+    assert (req.vm_name, req.installation_id, req.job_key, req.source) == (
+        "runnerforge-100-1-1",
+        IID,
+        _key(1),
+        "reconcile",
+    )
+    # small: 2 vCPUs; BETA_DEFAULTS allows 2 VMs.
+    assert (req.vcpus, req.per_installation) == (2, BETA_DEFAULTS.max_concurrent_vms)
+    assert caps == reconcile.NO_CAPS
+    assert world.submit.await_count == 1
+
+
+async def test_an_unlimited_start_asks_without_a_limit(
+    world, fake_slot_ledger, monkeypatch
+):
+    world.admission[IID] = UNLIMITED
+    world.store.by_installation[IID] = [_deferred(1)]
+
+    await run_reconcile(NOW)
+
+    [(req, _)] = fake_slot_ledger.acquired
+    assert req.per_installation is None
+
+
+@pytest.mark.parametrize("outcome", ["installation_full", "unavailable"])
+async def test_slot_outcomes_dont_stop_a_start_yet(world, fake_slot_ledger, outcome):
+    fake_slot_ledger.outcome = outcome
+    world.store.by_installation[IID] = [_deferred(1)]
+
+    result = await run_reconcile(NOW)
+
+    assert result.started == 1
+
+
+@pytest.mark.parametrize(
+    ("stage", "outcome", "released"),
+    [
+        ("token", "granted", True),
+        ("token", "held", False),
+        ("gce_insert", "granted", False),
+    ],
+)
+async def test_a_failed_start_releases_only_a_slot_it_took_before_any_vm(
+    world, fake_slot_ledger, stage, outcome, released
+):
+    fake_slot_ledger.outcome = outcome
+
+    async def fail(spec, on_error):
+        exc = RuntimeError("down")
+        await on_error(stage, exc)
+        raise exc
+
+    world.submit.side_effect = fail
+    world.store.by_installation[IID] = [_deferred(1)]
+
+    await run_reconcile(NOW)
+
+    expected = [("runnerforge-100-1-1", IID, True)] if released else []
+    assert fake_slot_ledger.released == expected
+
+
+async def test_after_the_ledger_fails_later_starts_skip_it(
+    world, fake_slot_ledger, caplog
+):
+    fake_slot_ledger.outcome = "unavailable"
+    world.active = set()
+    world.store.by_installation[IID] = [_deferred(1), _deferred(2)]
+
+    with caplog.at_level(logging.INFO):
+        result = await run_reconcile(NOW)
+
+    assert result.started == 2
+    assert len(fake_slot_ledger.acquired) == 1
+    [record] = [r for r in caplog.records if r.message == "Slot decision"]
+    assert (record.outcome, record.reason, record.vm_name) == (
+        "skipped",
+        "ledger_unavailable",
+        "runnerforge-100-2-1",
+    )

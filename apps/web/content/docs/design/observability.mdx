@@ -78,6 +78,10 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Job deferred` | INFO | `handlers.py` | `active_vms` (the reconciler's capacity pass starts it later) | |
 | `Concurrency check failed, admitting` | WARNING | `handlers.py` | `error_class` | |
 | `Deferral not recorded, admitting` | WARNING | `handlers.py` | `active_vms` | |
+| `Slot decision` | INFO / WARNING | `slots.py`, `handlers.py` | `outcome` (`granted`, `held`, `installation_full`, `pool_full`, `unavailable` as WARNING, or `skipped` with `reason` `store_unavailable` when the job store just failed for the request, or `ledger_unavailable` for the capacity pass's later starts after the ledger failed in that run; nothing is logged with `JOB_STORE=none`), `source` (`webhook`, `reconcile`), `installation_id`, `vm_name`, `vcpus`, `holders` and `vcpus_held` (the pool's, released VMs in their 2-minute hold included), `installation_holders` (limited installations only), `duration_ms`, `error_class`. ADR-020 step 5 release 1 is shadow mode: the outcome is logged, not acted on | |
+| `Slot release failed` | WARNING | `slots.py` | `vm_name`, `installation_id`, `error_class` (the next repair releases it) | |
+| `Slot repair` | INFO | `slots.py` | `holders` (compare with `runnerforge_vm_count`), `counted_vms`, `vcpus_held`, `dropped`, `adopted` (VMs nobody held: made by an older revision, or their acquire failed), `installations_changed`, `duration_ms` | |
+| `Slot repair failed` | WARNING | `slots.py` | `error_class` (holders stay stale until the next run) | |
 | `Machine policy rejected` | WARNING | `handlers.py` | `reason`, `offending_tokens` | `machine_policy_reject_count` |
 | `Submitted VM creation` | INFO | `compute_client.py` | `vm_name`, `operation_id`, `machine_type`, `spot`, `image_version` | `vm_creation_count` |
 | `VM already exists` | WARNING | `compute_client.py` | `instance_name` | |
@@ -86,7 +90,7 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Runner readiness unknown` | WARNING | `handlers.py` | `reason` (`started_at_ahead`, `started_at_before_admission`, `created_at_unusable`), `started_at_offset_seconds`, `created_at_offset_seconds` | |
 | `Time for runner to be picked up by github` | INFO | `handlers.py` | `time_to_runner_seconds` | `time_to_runner_seconds` |
 | `Refusing to delete VM not owned by this installation` | WARNING | `handlers.py` | `vm_installation_id` | |
-| `Submitted VM deletion` | INFO | `compute_client.py` | `vm_name`, `reason` (`webhook`, `sweep`, `reconcile`, `cutoff`) | `vm_deletion_count` |
+| `Submitted VM deletion` | INFO | `compute_client.py` | `vm_name`, `reason` (`webhook`, `sweep`, `reconcile`, `cutoff`, `terminated`) | `vm_deletion_count` |
 | `Job ended due to spot preemption` | WARNING | `compute_client.py` | `vm_name`, `job_id`, `conclusion` | `job_preempted_count` |
 | `VM list scan` | INFO | `compute_client.py` | `project_id`, `runnerforge_vm_count`, `skipped_malformed_count` | `runner_vm_count` |
 | `Serial logging outcome` | INFO / WARNING | `compute_client.py` | `vm_name`, `project_id`, `trigger` (`in_progress`, `reconcile`), `reason` (`webhook`, `busy`, `aged`, `runner_busy`), `outcome` (`submitted`, `already_off`, `vm_gone`, `not_running`, `not_owned`, `conflict`, `failed`; WARNING for the last two), `error_class`, `operation_id`. Never metadata values or error text: the VM's metadata holds its registration token | `serial_logging_outcome_count` |
@@ -96,12 +100,16 @@ The lines operators filter on. Fields marked with a metric feed that log-based m
 | `Sweep decision` | INFO / WARNING | `sweep.py` | `decision`, `reason`, `vm_name`, `age_minutes` | |
 | `Sweep failed for VM` | ERROR | `sweep.py` | `vm_name`, `error` | |
 | `Sweep completed` | INFO | `main.py` | `checked`, `deleted`, `skipped`, `error_count` | `sweep_*` |
-| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `registry_changes`, `started`, `orphans_deleted`, `cutoff_vms_deleted`, `cutoff_records_deleted`, `more_due`, `error_count` | `reconcile_run_count`, `reconcile_stuck_count`, `reconcile_error_count`, `reconcile_started_count`, `reconcile_orphans_deleted_count` |
+| `Reconcile completed` | INFO | `main.py` | `checked`, `closed`, `facts`, `stuck`, `backfilled`, `registry_changes`, `started`, `orphans_deleted`, `cutoff_vms_deleted`, `cutoff_records_deleted`, `terminated_deleted`, `more_due`, `error_count` | `reconcile_run_count`, `reconcile_stuck_count`, `reconcile_error_count`, `reconcile_started_count`, `reconcile_orphans_deleted_count` |
 | `Reconcile failed for record` | ERROR | `reconcile.py` | `job_key`, `error` | |
 | `Orphan VM deleted` | INFO | `reconcile.py` | `vm_name`, `installation_id`, `reason` (`runner_gone`, `runner_idle`), `age_minutes` | |
 | `Orphan check failed` | ERROR | `reconcile.py` | `vm_name`, `error_class` (the VM is kept) | |
 | `Orphan cleanup skipped` | WARNING | `reconcile.py` | `reason` (`store_unavailable`, `too_many_open`) | |
 | `Orphan cleanup incomplete` | WARNING | `reconcile.py` | `unchecked` (10-check cap or 30 s budget reached) | |
+| `Terminated VM deleted` | INFO | `reconcile.py` | `vm_name`, `installation_id`, `age_minutes` (a VM left TERMINATED, at least 15 minutes old) | |
+| `Terminated VM delete failed` | ERROR | `reconcile.py` | `vm_name`, `error_class` (kept for the next run) | |
+| `Terminated cleanup incomplete` | WARNING | `reconcile.py` | `left` (10-delete cap or 10 s budget reached) | |
+| `Terminated cleanup skipped` | WARNING | `reconcile.py` | `reason` (`run_budget`: the run was already 60 s in; the next run deletes them) | |
 | `Cut-off VM deleted` | INFO | `reconcile.py` | `vm_name`, `installation_id`, `github_status` (`suspended`, `deleted`), `busy`, `age_minutes` | |
 | `Cut-off VM delete failed` | ERROR | `reconcile.py` | `vm_name`, `error_class` | |
 | `Cut-off records deleted` | INFO | `reconcile.py` | `installation_id`, `count`, `more` (a full page: more next run) | |
