@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.15.0](https://github.com/rumankazi/runnerforge/compare/web-v1.14.0...web-v1.15.0) (2026-11-13)
+
+
+### Features
+
+* **orchestrator:** read tenant limits written by other versions ([#402](https://github.com/rumankazi/runnerforge/issues/402)) ([82325e3](https://github.com/rumankazi/runnerforge/commit/82325e35fb190420d92863329577826a936c7891))
+* **orchestrator:** slot ledger in shadow mode ([#408](https://github.com/rumankazi/runnerforge/issues/408)) ([aabe3d6](https://github.com/rumankazi/runnerforge/commit/aabe3d635b202de4a9b292cd41bd7e4e0786e808))
+
+
+### Bug Fixes
+
+* **deps:** lock file maintenance ([#411](https://github.com/rumankazi/runnerforge/issues/411)) ([7acd5df](https://github.com/rumankazi/runnerforge/commit/7acd5dfee28cb2edde5ca8cfd725879da5f4230f))
+* **deps:** update web deps (patch) ([#407](https://github.com/rumankazi/runnerforge/issues/407)) ([671586f](https://github.com/rumankazi/runnerforge/commit/671586fd7a9baa9e6fd187c9b10255a3fbda920f))
+* **deps:** update web deps (patch) ([#410](https://github.com/rumankazi/runnerforge/issues/410)) ([5eb2724](https://github.com/rumankazi/runnerforge/commit/5eb2724c38dd020c5d883f4c8fa1d59d8c68d728))
+* **deps:** update web deps (patch) ([#412](https://github.com/rumankazi/runnerforge/issues/412)) ([ece6e7b](https://github.com/rumankazi/runnerforge/commit/ece6e7b50c3c772ed3f9bab9f9dad246a041f5f5))
+* **orchestrator:** count a VM busy for serial logging when GitHub says its runner is ([#397](https://github.com/rumankazi/runnerforge/issues/397)) ([496209a](https://github.com/rumankazi/runnerforge/commit/496209a34fc448859b8061ed5ad41b586d1b67ae))
+
 ## [1.14.0](https://github.com/rumankazi/runnerforge/compare/web-v1.13.0...web-v1.14.0) (2026-11-07)
 
 
