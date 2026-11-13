@@ -63,26 +63,26 @@ jobs:
           permission-actions: read
 
       - name: Set up
-        uses: suzuki-shunsuke/tfaction@e892f1d582adb0c401caee0e768c9bd7b063e86e # v2.3.4
+        uses: suzuki-shunsuke/tfaction@7e6ae7e4e2aa17f869f970f7fec8aa4b9de19138 # v2.3.5
         with:
           action: setup
           github_token: ${{ steps.app-token.outputs.token }}
 
       - name: Init
-        uses: suzuki-shunsuke/tfaction@e892f1d582adb0c401caee0e768c9bd7b063e86e # v2.3.4
+        uses: suzuki-shunsuke/tfaction@7e6ae7e4e2aa17f869f970f7fec8aa4b9de19138 # v2.3.5
         with:
           action: terraform-init
           github_token: ${{ steps.app-token.outputs.token }}
 
       - name: Lint
-        uses: suzuki-shunsuke/tfaction@e892f1d582adb0c401caee0e768c9bd7b063e86e # v2.3.4
+        uses: suzuki-shunsuke/tfaction@7e6ae7e4e2aa17f869f970f7fec8aa4b9de19138 # v2.3.5
         with:
           action: test
           github_token: ${{ steps.app-token.outputs.token }}
 
       - name: Plan
         id: plan
-        uses: suzuki-shunsuke/tfaction@e892f1d582adb0c401caee0e768c9bd7b063e86e # v2.3.4
+        uses: suzuki-shunsuke/tfaction@7e6ae7e4e2aa17f869f970f7fec8aa4b9de19138 # v2.3.5
         with:
           action: plan
           github_token: ${{ steps.app-token.outputs.token }}
