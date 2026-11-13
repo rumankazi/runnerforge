@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.30.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.29.0...orchestrator-v0.30.0) (2026-11-13)
+
+
+### Features
+
+* **orchestrator:** slot ledger in shadow mode ([#408](https://github.com/rumankazi/runnerforge/issues/408)) ([aabe3d6](https://github.com/rumankazi/runnerforge/commit/aabe3d635b202de4a9b292cd41bd7e4e0786e808))
+
+
+### Bug Fixes
+
+* **deps:** lock file maintenance ([#411](https://github.com/rumankazi/runnerforge/issues/411)) ([7acd5df](https://github.com/rumankazi/runnerforge/commit/7acd5dfee28cb2edde5ca8cfd725879da5f4230f))
+* **deps:** update uv to v0.13.8 ([#415](https://github.com/rumankazi/runnerforge/issues/415)) ([2e30e29](https://github.com/rumankazi/runnerforge/commit/2e30e292c853be8595b8090d1825d4d225c8e7aa))
+
 ## [0.29.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.28.1...orchestrator-v0.29.0) (2026-11-08)
 
 
