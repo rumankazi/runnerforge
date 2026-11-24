@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.3](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.30.2...orchestrator-v0.30.3) (2026-11-24)
+
+
+### Bug Fixes
+
+* **deps:** update uv to v0.13.10 ([#425](https://github.com/rumankazi/runnerforge/issues/425)) ([09c042a](https://github.com/rumankazi/runnerforge/commit/09c042a80ddbc236e915311c10a4533018cdb0a6))
+
 ## [0.30.2](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.30.1...orchestrator-v0.30.2) (2026-11-24)
 
 
