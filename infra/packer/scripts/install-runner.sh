@@ -6,7 +6,8 @@
 #
 # Order of operations:
 #   1. Create the unprivileged `runner` user.
-#   2. Install system packages the runner depends on.
+#   2. Install system packages the runner depends on, and (2b) the essential
+#      libraries and tools jobs need but can't install without sudo.
 #   3. Download + extract the GitHub Actions runner binary.
 #   4. Run the runner's own dependency installer (still root).
 #   5. Hand off ownership of /home/runner to the runner user.
@@ -42,6 +43,35 @@ apt-get install --yes \
   curl ca-certificates \
   git \
   libicu-dev
+
+# --- 2b. Essential libraries and tools for jobs ---
+# Rule: the image carries the system libraries and CLI tools that prebuilt
+# toolchains (setup-* actions, mise, version managers) need to START, plus a
+# compiler, because `runner` has no sudo and can't apt-get them in a job. It
+# does NOT carry the toolchains themselves.
+# Some of these are in the debian-12 base today; they are listed anyway so a
+# base-image change can't drop them silently. Keep this list in sync with
+# ESSENTIAL_PACKAGES in .github/workflows/scripts/smoke-test.sh.
+#   libatomic1      official Node builds (v25+) link libatomic.so.1
+#   unzip           @actions/tool-cache refuses .zip archives without it (setup-bun)
+#   zstd            @actions/cache falls back to gzip without it and misses zstd caches
+#   xz-utils bzip2  .tar.xz / .tar.bz2 toolchain archives
+#   jq              JSON in run: steps and composite actions
+#   python3 python3-venv  system Python; venv is the only pip route without sudo (PEP 668)
+#   build-essential gcc/g++/make: node-gyp, Python sdists, cgo, Rust linking
+#   git-lfs         actions/checkout with lfs: true
+#   openssh-client  git over SSH, deploy keys
+#   gnupg           signature checks; today only present via the Ops Agent script
+# --no-install-recommends keeps X libraries (xauth) and docs out.
+apt-get install --yes --no-install-recommends \
+  libatomic1 \
+  unzip zstd xz-utils bzip2 \
+  jq \
+  python3 python3-venv \
+  build-essential \
+  git-lfs \
+  openssh-client \
+  gnupg
 
 # --- 3. Download + extract the runner binary ---
 RUNNER_DIR="/home/runner/actions-runner"
@@ -96,5 +126,14 @@ rm add-google-cloud-ops-agent-repo.sh
 
 # Allow the runner user to run docker without sudo.
 usermod --append --groups docker runner
+
+# --- 8. Shrink the image ---
+# Downloaded .debs and package lists aren't needed at runtime; the boot disk
+# is 10 GB and also holds /var/lib/docker.
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+
+# Free space on the boot disk, for tracking image growth in the Packer log.
+df -h /
 
 echo "Provisioning complete. Runner version: $RUNNER_VERSION"

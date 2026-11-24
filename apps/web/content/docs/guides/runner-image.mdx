@@ -14,7 +14,8 @@ It's a small base, not a copy of GitHub's hosted `ubuntu-latest` image.
 | GitHub Actions runner | `2.338.2`, linux-x64 | `RUNNER_VERSION` in `scripts/install-runner.sh` |
 | Docker Engine | Installed with Docker's `get.docker.com` script at build time | `scripts/install-runner.sh` |
 | Google Cloud Ops Agent | Ships VM logs to Cloud Logging for the maintainer | `scripts/install-runner.sh` |
-| Packages | `git`, `curl`, `ca-certificates`, `libicu-dev`, plus the runner's own dependencies | `scripts/install-runner.sh` |
+| Runner packages | `git`, `curl`, `ca-certificates`, `libicu-dev`, plus the runner's own dependencies | `scripts/install-runner.sh` |
+| Libraries and tools for jobs | `libatomic1`, `unzip`, `zstd`, `xz-utils`, `bzip2`, `jq`, `python3` (3.11) with `python3-venv`, `build-essential` (gcc, g++, make), `git-lfs`, `openssh-client`, `gnupg` | `scripts/install-runner.sh`, step 2b |
 
 The current image release is `0.4.2` (see `infra/packer/CHANGELOG.md`).
 
@@ -23,8 +24,15 @@ Jobs run as the unprivileged `runner` user:
 - **Docker works without sudo.** `runner` is in the `docker` group, so `docker` commands,
   `container:` jobs, and service containers work.
 - **`sudo` does not.** `runner` has no sudo rights, so steps like `sudo apt-get install` fail.
-- **Other tools aren't preinstalled.** Bring them with a setup action or run the job in a container
-  image that already has them.
+- **Toolchains aren't preinstalled.** Bring Node, Go, Java, Bun and the like with a setup action or
+  mise, or run the job in a container image that already has them.
+- **What they need to start is.** Because jobs can't install system packages, the image carries
+  the shared libraries and tools that prebuilt toolchains load or call (for example `libatomic1`
+  for official Node builds, `unzip` for actions that unpack `.zip` releases, `zstd` for
+  `actions/cache`), and a C compiler for native modules. The image smoke test checks each of them
+  and starts the official Node build as `runner` before an image is promoted.
+- **Python packages go in a virtual environment.** Debian's system Python is marked externally
+  managed, so `pip install` outside a venv fails. Use `python3 -m venv`, or a tool such as uv.
 
 ## One VM, one job
 
@@ -47,8 +55,11 @@ runner versions. Releasing a version runs `.github/workflows/deploy-runner-image
    candidate image.
 2. **Smoke test.** A VM boots from the candidate
    (`.github/workflows/scripts/smoke-test.sh`). The test checks that the runner's `run.sh` and
-   `config.sh` are present and that `config.sh --help` runs as `runner`, and that the Ops Agent
-   delivers logs, each within 5 minutes. On failure the candidate is deleted.
+   `config.sh` are present and that `config.sh --help` runs as `runner`; that every package,
+   shared library and command from the list above is there; that `docker compose`, `git lfs`, a
+   Python venv with pip and the C compiler work as `runner`; and that the latest official Node v26
+   build downloads, matches its checksum and starts. It also checks that the Ops Agent delivers
+   logs, each within 5 minutes. On failure the candidate is deleted.
 3. **Promote.** The candidate is copied into the `runnerforge-runner` image family, with the version's
    dots replaced by dashes (for example `runnerforge-runner-image-0-4-2`).
 4. **Retain.** Every image older than the 5 newest in the family is deprecated and scheduled for
@@ -63,8 +74,11 @@ when they next start.
 
 ## Need something on the image?
 
-Prefer installing tools inside your job. If something is missing that most jobs would need, open an
-[issue](https://github.com/rumankazi/runnerforge/issues/new).
+Prefer installing tools inside your job. The image takes a system package when a common prebuilt
+toolchain or action can't start without it, since a job has no way to add one. If you hit one of
+those, open an [issue](https://github.com/rumankazi/runnerforge/issues/new) with the error and the
+action or tool that needs it. Toolchains themselves, and libraries only one project needs, belong in
+the job or its container image.
 
 See also: [Runner labels](/docs/guides/runner-labels) for VM sizes and
 [Limits](/docs/guides/limits) for disk and runtime limits.
