@@ -34,6 +34,10 @@ RUNNER_DIR={tmp_path}
 log() {{ :; }}
 install() {{ : > "${{@: -1}}"; chmod 600 "${{@: -1}}"; }}
 sudo() {{ printf "%s\\n" "$@" >> {tmp_path}/sudo-argv; shift; "$@"; }}
+# The docker-ready wait after configuring; the daemon is "up" at once.
+docker() {{ :; }}
+# The real timeout would exec the real docker, not the stub above.
+timeout() {{ shift; "$@"; }}
 {step}
 # Before the EXIT trap: the file must be gone before run.sh starts the job.
 if [ -e {tmp_path}/token ]; then : > {tmp_path}/token-left; fi

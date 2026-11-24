@@ -41,11 +41,12 @@ off at the VM cap.
 
 | Disk | Size | Mounted at | Holds |
 |---|---|---|---|
-| Boot | 10 GB | `/` | OS, runner, Docker's data (`/var/lib/docker`) |
-| Work | 50 GB `pd-balanced` | `/home/runner/actions-runner/_work` | Checkouts, build output, tool caches |
+| Boot | 10 GB | `/` | OS, runner, `/tmp` and the `runner` home directory's caches (npm, pip, Go) |
+| Work | 50 GB `pd-balanced` | `/mnt/runnerforge`, bound onto `/home/runner/actions-runner/_work`, `/var/lib/docker` and `/var/lib/containerd` | Checkouts, build output, tool caches, Docker images, layers and containers |
 
-Your workspace has 50 GB. Docker images and layers are stored on the 10 GB boot disk, because the
-image doesn't move Docker's data directory, so jobs that pull large images can run out of space.
+Your workspace, Docker's images and layers, and the containers your job runs share the 50 GB work
+disk. The 10 GB boot disk has about 5 GB free; caches written outside the workspace (for example
+`~/.npm` or `~/.cache`) and `/tmp` use it, so point large caches into `$RUNNER_TEMP` or the workspace.
 Both disks are created fresh for each job and deleted with the VM. Nothing carries over between jobs.
 
 ## Network
