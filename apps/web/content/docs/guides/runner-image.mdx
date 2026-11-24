@@ -65,12 +65,13 @@ runner versions. Releasing a version runs `.github/workflows/deploy-runner-image
 4. **Retain.** Every image older than the 5 newest in the family is deprecated and scheduled for
    deletion 30 days later.
 
-Each time an orchestrator instance starts, it looks up the newest image in the family and uses that
-exact image for the VMs it creates.
+When an orchestrator instance starts, and again on each 5-minute reconcile run, it looks up the
+newest image in the family and uses that exact image for the VMs it creates. A newly promoted image
+reaches new VMs within about 5 minutes.
 
 **Rollback** is a manual run of the same workflow with `action: rollback`. It deprecates the bad
 image, so the family falls back to the next-newest one, and orchestrator instances pick that one up
-when they next start.
+on their next reconcile run.
 
 ## Need something on the image?
 

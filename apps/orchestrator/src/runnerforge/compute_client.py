@@ -210,6 +210,53 @@ def init_runner_image():
     )
 
 
+# Bounds the family lookup so a slow API can't eat the reconcile budget.
+_IMAGE_REFRESH_TIMEOUT_SECONDS = 10.0
+
+
+async def refresh_runner_image() -> None:
+    """Re-resolve the image family, so a newly promoted image reaches new VMs
+    without waiting for an orchestrator instance to restart: the scheduler's
+    calls keep an instance warm for days. Called from /reconcile, off the
+    webhook path. A failed lookup keeps the current image."""
+    global _RUNNER_IMAGE_NAME, _RUNNER_IMAGE_VERSION
+    if _images_client is None:
+        return
+    try:
+        image = await asyncio.to_thread(
+            _images_client.get_from_family,
+            project=RUNNER_IMAGE_PROJECT,
+            family=_RUNNER_IMAGE_FAMILY,
+            # timeout bounds one attempt; the client's default retry would
+            # keep trying 503s for up to 600 s, past the scheduler's 180 s.
+            retry=None,
+            timeout=_IMAGE_REFRESH_TIMEOUT_SECONDS,
+        )
+    except (GoogleAPIError, GoogleAuthError, RequestException) as e:
+        logger.warning(
+            "Runner image refresh failed, keeping the current image",
+            extra={
+                "image_name": _RUNNER_IMAGE_NAME,
+                "error_class": type(e).__name__,
+                "reason": str(e),
+            },
+        )
+        return
+    if image.name == _RUNNER_IMAGE_NAME:
+        return
+    previous = _RUNNER_IMAGE_NAME
+    _RUNNER_IMAGE_NAME = image.name
+    _RUNNER_IMAGE_VERSION = _parse_image_version(image.name)
+    logger.info(
+        "Runner image changed",
+        extra={
+            "previous_image_name": previous,
+            "image_name": _RUNNER_IMAGE_NAME,
+            "image_version": _RUNNER_IMAGE_VERSION,
+        },
+    )
+
+
 def init_machine_types_cache(zone: str = GCP_ZONE) -> None:
     """Populate the in-process cache of valid GCE machine type in the given zone. Tolerant of startup failures - leaves cache at None to fall back to 'trust the parser' if the API call doesn't succeed"""
     global _KNOWN_MACHINE_TYPES
@@ -378,9 +425,13 @@ async def create_vm(
     # otherwise fall back to the family alias (which is already qualified).
     # The image lives in RUNNER_IMAGE_PROJECT, not necessarily project_id
     # (the project the VM is created in).
+    # Read once, together: /reconcile's refresh_runner_image can move the pin
+    # while insert is awaited, and the VM must be labelled with the image it
+    # actually booted from.
+    image_name, image_version = _RUNNER_IMAGE_NAME, _RUNNER_IMAGE_VERSION
     source_image = (
-        f"projects/{RUNNER_IMAGE_PROJECT}/global/images/{_RUNNER_IMAGE_NAME}"
-        if _RUNNER_IMAGE_NAME
+        f"projects/{RUNNER_IMAGE_PROJECT}/global/images/{image_name}"
+        if image_name
         else _BOOT_IMAGE_FAMILY
     )
     with tracer.start_as_current_span("compute.create_vm") as span:
@@ -488,7 +539,7 @@ async def create_vm(
                 "operation_id": operation.name,
                 "machine_type": machine_type,
                 "spot": spot,
-                "image_version": _RUNNER_IMAGE_VERSION,
+                "image_version": image_version,
             },
         )
         return OperationHandle(
@@ -497,7 +548,7 @@ async def create_vm(
             zone=zone,
             machine_type=machine_type,
             spot=spot,
-            image_version=_RUNNER_IMAGE_VERSION,
+            image_version=image_version,
             vm_name=instance_name,
         )
 

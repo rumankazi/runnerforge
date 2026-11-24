@@ -6,8 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import requests
 from google.api_core.exceptions import AlreadyExists, GoogleAPIError
-from google.auth.exceptions import DefaultCredentialsError
+from google.auth.exceptions import DefaultCredentialsError, GoogleAuthError
 from google.cloud import compute_v1
+from requests.exceptions import RequestException
 
 from runnerforge import compute_client
 from runnerforge.compute_client import (
@@ -894,6 +895,169 @@ def test_init_runner_image_handles_api_error(monkeypatch, caplog):
     )
     assert warning is not None
     assert "family not found" in warning.reason
+
+
+# -----------------------------------------------------------------------------
+# refresh_runner_image
+# -----------------------------------------------------------------------------
+
+
+def _images_client_returning(monkeypatch, name: str) -> MagicMock:
+    mock_image = MagicMock()
+    mock_image.name = name
+    mock_images_client = MagicMock()
+    mock_images_client.get_from_family.return_value = mock_image
+    monkeypatch.setattr("runnerforge.compute_client._images_client", mock_images_client)
+    return mock_images_client
+
+
+def test_refresh_runner_image_switches_to_a_newly_promoted_image(monkeypatch, caplog):
+    """A warm instance resolved 0.4.2 at start; after 0.5.0 is promoted the
+    refresh makes new VMs boot from it without an instance restart."""
+    images = _images_client_returning(monkeypatch, "runnerforge-runner-image-0-5-0")
+    monkeypatch.setattr(
+        "runnerforge.compute_client._RUNNER_IMAGE_NAME",
+        "runnerforge-runner-image-0-4-2",
+    )
+    monkeypatch.setattr("runnerforge.compute_client._RUNNER_IMAGE_VERSION", "0.4.2")
+
+    with caplog.at_level(logging.INFO):
+        asyncio.run(compute_client.refresh_runner_image())
+
+    assert compute_client._RUNNER_IMAGE_NAME == "runnerforge-runner-image-0-5-0"
+    assert compute_client._RUNNER_IMAGE_VERSION == "0.5.0"
+    log = next(r for r in caplog.records if r.message == "Runner image changed")
+    assert log.previous_image_name == "runnerforge-runner-image-0-4-2"
+    assert log.image_name == "runnerforge-runner-image-0-5-0"
+    assert log.image_version == "0.5.0"
+    images.get_from_family.assert_called_once_with(
+        project="test-project",
+        family="runnerforge-runner",
+        retry=None,
+        timeout=compute_client._IMAGE_REFRESH_TIMEOUT_SECONDS,
+    )
+
+
+def test_refresh_runner_image_is_quiet_when_unchanged(monkeypatch, caplog):
+    _images_client_returning(monkeypatch, "runnerforge-runner-image-0-5-0")
+    monkeypatch.setattr(
+        "runnerforge.compute_client._RUNNER_IMAGE_NAME",
+        "runnerforge-runner-image-0-5-0",
+    )
+    monkeypatch.setattr("runnerforge.compute_client._RUNNER_IMAGE_VERSION", "0.5.0")
+
+    with caplog.at_level(logging.INFO):
+        asyncio.run(compute_client.refresh_runner_image())
+
+    assert compute_client._RUNNER_IMAGE_NAME == "runnerforge-runner-image-0-5-0"
+    assert compute_client._RUNNER_IMAGE_VERSION == "0.5.0"
+    assert not any("Runner image" in r.message for r in caplog.records)
+
+
+def test_refresh_runner_image_adopts_an_image_after_a_failed_start(monkeypatch):
+    """An instance whose start-up resolve failed boots VMs from the family
+    alias; the first successful refresh pins a specific image."""
+    _images_client_returning(monkeypatch, "runnerforge-runner-image-0-5-0")
+    monkeypatch.setattr("runnerforge.compute_client._RUNNER_IMAGE_NAME", None)
+    monkeypatch.setattr("runnerforge.compute_client._RUNNER_IMAGE_VERSION", None)
+
+    asyncio.run(compute_client.refresh_runner_image())
+
+    assert compute_client._RUNNER_IMAGE_NAME == "runnerforge-runner-image-0-5-0"
+    assert compute_client._RUNNER_IMAGE_VERSION == "0.5.0"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        GoogleAPIError("boom"),
+        GoogleAuthError("no token"),
+        RequestException("connection reset"),
+    ],
+)
+def test_refresh_runner_image_keeps_the_current_image_on_failure(
+    monkeypatch, caplog, error
+):
+    images = MagicMock()
+    images.get_from_family.side_effect = error
+    monkeypatch.setattr("runnerforge.compute_client._images_client", images)
+    monkeypatch.setattr(
+        "runnerforge.compute_client._RUNNER_IMAGE_NAME",
+        "runnerforge-runner-image-0-4-2",
+    )
+    monkeypatch.setattr("runnerforge.compute_client._RUNNER_IMAGE_VERSION", "0.4.2")
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(compute_client.refresh_runner_image())
+
+    assert compute_client._RUNNER_IMAGE_NAME == "runnerforge-runner-image-0-4-2"
+    assert compute_client._RUNNER_IMAGE_VERSION == "0.4.2"
+    warning = next(
+        r
+        for r in caplog.records
+        if r.message == "Runner image refresh failed, keeping the current image"
+    )
+    assert warning.image_name == "runnerforge-runner-image-0-4-2"
+    assert warning.error_class == type(error).__name__
+
+
+def test_refresh_runner_image_skips_without_images_client(monkeypatch, caplog):
+    monkeypatch.setattr("runnerforge.compute_client._images_client", None)
+    monkeypatch.setattr(
+        "runnerforge.compute_client._RUNNER_IMAGE_NAME",
+        "runnerforge-runner-image-0-4-2",
+    )
+
+    with caplog.at_level(logging.INFO):
+        asyncio.run(compute_client.refresh_runner_image())
+
+    assert compute_client._RUNNER_IMAGE_NAME == "runnerforge-runner-image-0-4-2"
+    assert not any("Runner image" in r.message for r in caplog.records)
+
+
+def test_create_vm_labels_the_image_it_booted_from_when_a_refresh_lands_mid_insert(
+    monkeypatch, caplog
+):
+    """/reconcile can move the pin while a webhook's insert is in flight:
+    the VM boots from the image read before the insert, and its log and
+    handle must say that version, not the new one."""
+    monkeypatch.setattr(
+        "runnerforge.compute_client._RUNNER_IMAGE_NAME",
+        "runnerforge-runner-image-0-4-2",
+    )
+    monkeypatch.setattr("runnerforge.compute_client._RUNNER_IMAGE_VERSION", "0.4.2")
+
+    def insert(request):
+        monkeypatch.setattr(
+            "runnerforge.compute_client._RUNNER_IMAGE_NAME",
+            "runnerforge-runner-image-0-5-0",
+        )
+        monkeypatch.setattr("runnerforge.compute_client._RUNNER_IMAGE_VERSION", "0.5.0")
+        op = MagicMock()
+        op.name = "op-mid-refresh"
+        return op
+
+    mock_client = MagicMock()
+    mock_client.insert.side_effect = insert
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
+
+    with caplog.at_level(logging.INFO):
+        handle = asyncio.run(
+            create_vm(
+                instance_name="x",
+                machine_type="e2-micro",
+                labels={"runner": "runnerforge"},
+            )
+        )
+
+    request = mock_client.insert.call_args.kwargs["request"]
+    assert request.instance_resource.disks[0].initialize_params.source_image.endswith(
+        "/runnerforge-runner-image-0-4-2"
+    )
+    assert handle is not None
+    assert handle.image_version == "0.4.2"
+    log = next(r for r in caplog.records if r.message == "Submitted VM creation")
+    assert log.image_version == "0.4.2"
 
 
 # -----------------------------------------------------------------------------

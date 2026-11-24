@@ -64,7 +64,8 @@ minute by outcome", and Spot & Policy, "VM creation rate by spot".
 - **Spot capacity:** temporary. Users can drop `spot` from `runs-on` for urgent jobs.
 - **Bad image:** roll back with **Deploy Runner Image** (`deploy-runner-image.yaml`), `action=rollback`,
   `target=<bad image name>`. It deprecates that image so the family points at the next-newest one. Running
-  orchestrator instances keep the image they resolved at startup.
+  orchestrator instances switch to it at their next reconcile run, within about 5 minutes; until then they
+  keep creating VMs from the bad image. A failed lookup keeps the current image.
 - **Stuck jobs:** after the cause is fixed, redeliver the jobs' `queued` deliveries from the GitHub App's Recent
   Deliveries, or ask users to re-run them. A redelivery creates a VM.
 
