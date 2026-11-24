@@ -95,7 +95,9 @@ Every VM (`compute_client.create_vm`):
 - **Networking:** no external IP. Egress goes through Cloud NAT (`runnerforge-nat`, auto-allocated IPs;
   `network.tf`, ADR-009).
 - **Disks:** a 10 GB boot disk from the runner image, and a 50 GB `pd-balanced` data disk mounted at
-  `/home/runner/actions-runner/_work`. Both auto-delete with the VM.
+  `/mnt/runnerforge`. The startup script binds three directories on it onto the runner's `_work`,
+  `/var/lib/docker` and `/var/lib/containerd`, after stopping Docker and containerd, so images and
+  build output never fill the boot disk. Both disks auto-delete with the VM.
 - **Runtime cap:** GCE deletes the VM after 6 h 15 min of running (`max_run_duration`, termination action
   `DELETE`). That is GitHub's default 6 h job timeout plus 15 min for boot.
 - **Service account:** `runnerforge-runner-vm`, which has only `roles/logging.logWriter`.

@@ -107,6 +107,26 @@ def test_only_work_belongs_to_the_runner(calls):
     assert "--recursive" not in STEP
 
 
+def test_the_disk_is_mounted_before_its_directories_are_made(calls):
+    """Directories made before the data-root mount would land on the boot
+    disk, hidden under the mount, and every bind would then fail."""
+    tmp, log = calls
+    data = tmp / "data"
+    order = [c for c in log if c.startswith(("systemctl", "mount", "install"))]
+    assert [c.split(" ", 2)[:2] for c in order] == [
+        ["systemctl", "stop"],
+        ["mount", "/dev/fake-data-disk"],
+        ["install", "--directory"],
+        ["install", "--directory"],
+        ["install", "--directory"],
+        ["mount", "--bind"],
+        ["mount", "--bind"],
+        ["mount", "--bind"],
+        ["systemctl", "start"],
+    ]
+    assert order[1].endswith(str(data))
+
+
 def test_a_second_run_mounts_nothing_again(tmp_path):
     _run(tmp_path)
     (tmp_path / "calls").unlink()
@@ -118,3 +138,34 @@ def test_a_failed_stop_aborts_before_any_mount(tmp_path):
     log = _run(tmp_path, stop_fails=True)
     assert log[-1] == "systemctl stop docker.socket docker.service containerd.service"
     assert not [c for c in log if c.startswith("mount")]
+
+
+WAIT = STARTUP_SCRIPT[
+    STARTUP_SCRIPT.index("# Not fatal") : STARTUP_SCRIPT.index('log "Starting runner"')
+]
+
+
+@pytest.mark.parametrize("docker_rc", [0, 1, 124])
+def test_the_docker_wait_always_lets_the_runner_start(tmp_path, docker_rc):
+    """A dockerd that is down, or stalled behind its socket (timeout's 124),
+    only costs a warning: the runner still starts for non-container jobs."""
+    calls = tmp_path / "calls"
+    harness = f"""
+set -euo pipefail
+log() {{ echo "log $*" >> {calls}; }}
+sleep() {{ :; }}
+timeout() {{ echo "timeout $1" >> {calls}; shift; "$@"; }}
+docker() {{ return {docker_rc}; }}
+{WAIT}
+echo reached-runner >> {calls}
+"""
+    bash = shutil.which("bash")
+    assert bash is not None
+    subprocess.run([bash, "-c", harness], check=True)
+    log = calls.read_text().splitlines()
+    assert log[-1] == "reached-runner"
+    probes = [c for c in log if c.startswith("timeout")]
+    assert probes and all(c == "timeout 3" for c in probes)
+    warned = any("WARNING: docker not ready" in c for c in log)
+    assert warned is (docker_rc != 0)
+    assert len(probes) == (2 if docker_rc == 0 else 31)

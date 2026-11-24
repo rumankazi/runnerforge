@@ -136,12 +136,14 @@ sudo --user=runner bash -c "
 rm -f "$TOKEN_FILE"
 
 # Not fatal: jobs without containers still run. A clear line here beats a
-# job failing on "Cannot connect to the Docker daemon" with no cause.
+# job failing on "Cannot connect to the Docker daemon" with no cause. Each
+# probe is timed: docker.socket accepts connections a stalled dockerd never
+# answers, and `docker info` has no deadline of its own.
 for _ in {1..30}; do
-    docker info >/dev/null 2>&1 && break
+    timeout 3 docker info >/dev/null 2>&1 && break
     sleep 1
 done
-docker info >/dev/null 2>&1 || log "WARNING: docker not ready; container jobs will fail"
+timeout 3 docker info >/dev/null 2>&1 || log "WARNING: docker not ready; container jobs will fail"
 
 log "Starting runner"
 sudo --user=runner bash -c "cd $RUNNER_DIR && ./run.sh"

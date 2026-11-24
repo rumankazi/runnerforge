@@ -104,7 +104,7 @@ returns 500.
   alone). A rejection of an installation never approved is logged, not recorded.
 </Callout>
 
-The VM's startup script then mounts the data disk, runs `config.sh --ephemeral` with the VM name as the
+The VM's startup script then mounts the data disk (holding `_work` and Docker's storage), runs `config.sh --ephemeral` with the VM name as the
 runner name, and starts the runner. The runner registers with GitHub, and GitHub assigns it a matching
 queued job.
 

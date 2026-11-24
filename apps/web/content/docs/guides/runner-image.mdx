@@ -38,7 +38,8 @@ Jobs run as the unprivileged `runner` user:
 
 Runners are **ephemeral**. At boot, the VM's startup script (`startup_script.sh` in the orchestrator):
 
-1. formats the blank 50 GB work disk and mounts it at `/home/runner/actions-runner/_work`;
+1. formats the blank 50 GB work disk, and puts `/home/runner/actions-runner/_work` and Docker's
+   storage (`/var/lib/docker`, `/var/lib/containerd`) on it, restarting Docker;
 2. reads a single-use registration token and your repository URL from the VM metadata;
 3. registers the runner on your repository with `--ephemeral` and the labels from your `runs-on`;
 4. runs exactly one job.
