@@ -1,39 +1,61 @@
 name: Test Jobs
 
+# THROWAWAY PROBE BRANCH, never merged. Dispatched with --ref to check, on
+# runner image 0.5.0: (1) does actions/setup-python work on Debian 12,
+# (2) does official Node 26 start, (3) which disk does a docker pull fill.
+
 on:
   workflow_dispatch:
     inputs:
       timeout:
-        description: "Sleep timeout in seconds"
+        description: "unused on this branch"
         default: "10"
         type: string
         required: false
 
-  push:
-    branches: [main]
-
-
 permissions: {}
 
 jobs:
-  stress-test:
-    name: Stress Test
+  probe:
+    name: Image probe
     runs-on: [runnerforge, small, spot]
-    strategy:
-      matrix:
-        req: [1, 2, 3]
     steps:
-      - name: Job info
+      - name: Environment
         run: |
-          echo "Hostname: $(hostname)"
-          echo "CPU cores: $(nproc)"
-          echo "Memory: $(free -h | grep Mem | awk '{print $2}')"
-          echo "============================================"
+          set -x
+          cat /etc/os-release
+          ls -l /etc/lsb-release || echo "no /etc/lsb-release"
+          df -h / /home/runner/actions-runner/_work
+          docker version --format 'client {{.Client.Version}} server {{.Server.Version}}'
+          docker info --format 'root={{.DockerRootDir}} driver={{.Driver}} status={{json .DriverStatus}}'
+          ls -ld /var/lib/docker /var/lib/containerd || true
 
-      - name: Simulate work
+      - name: setup-node 26
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+
+      - name: Node starts
+        run: node --version && ldd "$(command -v node)" | grep -E 'atomic|not found' || true
+
+      - name: setup-python 3.13
+        id: py
+        continue-on-error: true
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: setup-python outcome
         env:
-          SLEEP_TIME_SECONDS: ${{ inputs.timeout || '10' }}
+          OUTCOME: ${{ steps.py.outcome }}
         run: |
-          echo "Starting work simulation..."
-          sleep "$SLEEP_TIME_SECONDS"
-          echo "Work completed!"
+          echo "setup-python outcome: $OUTCOME"
+          command -v python3 && python3 --version
+
+      - name: Which disk a docker pull fills
+        run: |
+          df -B1M --output=target,used / /home/runner/actions-runner/_work
+          docker pull --quiet node:26
+          docker image ls
+          df -B1M --output=target,used / /home/runner/actions-runner/_work
+          docker system df
