@@ -100,7 +100,46 @@ def test_reconcile_endpoint_watches_started_vms(monkeypatch):
     watcher.assert_awaited_once_with(handle)
 
 
-def test_reconcile_endpoint_rejects_invalid_token(monkeypatch):
+def test_reconcile_endpoint_refreshes_runner_image_before_the_run(
+    monkeypatch, runner_image_refresh
+):
+    """A newly promoted image reaches VMs without an instance restart, and
+    VMs this run's capacity pass starts already get it."""
+    order: list[str] = []
+    runner_image_refresh.side_effect = lambda: order.append("refresh")
+
+    async def run(on_started):
+        order.append("reconcile")
+        return ReconcileResult(
+            checked=0,
+            closed=0,
+            facts=0,
+            stuck=0,
+            backfilled=0,
+            more_due=False,
+            errors=[],
+        )
+
+    monkeypatch.setattr("runnerforge.main.run_reconcile", run)
+    monkeypatch.setattr(
+        "runnerforge.security.id_token.verify_oauth2_token",
+        MagicMock(
+            return_value={
+                "email": "test-scheduler@example.iam.gserviceaccount.com",
+                "email_verified": True,
+            }
+        ),
+    )
+
+    response = client.post(
+        "/reconcile", headers={"Authorization": "Bearer fake.jwt.token"}
+    )
+
+    assert response.status_code == 200
+    assert order == ["refresh", "reconcile"]
+
+
+def test_reconcile_endpoint_rejects_invalid_token(monkeypatch, runner_image_refresh):
     run_mock = AsyncMock()
     monkeypatch.setattr("runnerforge.main.run_reconcile", run_mock)
     monkeypatch.setattr(
@@ -114,6 +153,7 @@ def test_reconcile_endpoint_rejects_invalid_token(monkeypatch):
 
     assert response.status_code == 401
     run_mock.assert_not_awaited()
+    runner_image_refresh.assert_not_awaited()
 
 
 @respx.mock

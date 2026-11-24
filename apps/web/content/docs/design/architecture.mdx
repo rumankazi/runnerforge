@@ -116,10 +116,12 @@ family. It then deprecates
 everything older than the five newest images, with deletion after 30 days. A rollback deprecates the bad
 image, and the family falls back to the next newest.
 
-**Pinning:** each orchestrator instance resolves the family to a concrete image once, at startup
-(`init_runner_image`), and creates every VM from that image. So a newly promoted image is used only by
-orchestrator instances that start after it: after a deploy, a scale-out, or a scale from zero. If the
-lookup fails, VMs boot from the family alias. The image lives in `RUNNER_IMAGE_PROJECT`, which defaults to
+**Pinning:** each orchestrator instance resolves the family to a concrete image at startup
+(`init_runner_image`) and creates every VM from that image. Each `/reconcile` call (every 5 minutes)
+resolves it again (`refresh_runner_image`), so a newly promoted image reaches new VMs within minutes
+without a restart; the scheduler's calls keep an instance warm for days, so waiting for a restart
+could take that long. If the startup lookup fails, VMs boot from the family alias until a refresh
+succeeds; a failed refresh keeps the current image. The image lives in `RUNNER_IMAGE_PROJECT`, which defaults to
 `GCP_PROJECT_ID`.
 
 ### Terraform

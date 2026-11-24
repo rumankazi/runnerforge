@@ -496,13 +496,14 @@ Runner images are built by Packer and published into the image family `runnerfor
 
 - On startup (since orchestrator 0.11.0), `compute_client.init_runner_image` calls `get_from_family` for `runnerforge-runner` in `RUNNER_IMAGE_PROJECT` (defaults to `GCP_PROJECT_ID`) and boots every VM from `projects/<project>/global/images/<name>`. The parsed version is logged and becomes the `image_version` label on `vm_creation_count` and `vm_creation_outcome_count`.
 - If the lookup fails, VMs boot from the family alias and a warning is logged.
+- Since orchestrator 0.30.1 (revised 2026-11-24), each `/reconcile` call also re-resolves the family (`compute_client.refresh_runner_image`, bounded to 10 s, logged as `Runner image changed` when it moves). The scheduler calls `/reconcile` every 5 minutes, which keeps an instance warm for days, so a promoted image (0.5.0) went unused until the instance restarted. A failed refresh keeps the current image.
 - The `Retention` step of `.github/workflows/deploy-runner-image.yaml` keeps the five newest non-deprecated images in the family and deprecates the rest with `delete-on` 30 days out. Rollback also deprecates (with the same 30-day `delete-on`) instead of deleting; the family then serves the next-newest non-deprecated image.
 - The `ci-runner-image-build` SA uses the custom role `runnerImageManager` (8 `compute.images.*` permissions, `infra/terraform/runner_image.tf`) instead of `roles/compute.storageAdmin`.
 
 ### Consequences
 
 - Every VM from one orchestrator instance uses one known image, and failures can be sliced by `image_version`.
-- A newly promoted image reaches an orchestrator instance only when that instance starts (new revision, scale-up, or restart). Long-lived instances keep the older pin until then.
+- A newly promoted image reaches an orchestrator instance at its next `/reconcile` call, within about 5 minutes. An instance that gets no scheduler call (one of several, scaled out) keeps the older pin until it does, or until it stops.
 - Deprecated images stay available for 30 days for forensics and rollback.
 - The retention step is `continue-on-error`, so a failure there doesn't fail an image release; it needs a look at the workflow log.
 

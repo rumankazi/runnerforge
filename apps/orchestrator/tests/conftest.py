@@ -70,6 +70,16 @@ async def _shared_clients():
 
 
 @pytest.fixture(autouse=True)
+def runner_image_refresh(monkeypatch) -> AsyncMock:
+    """/reconcile's image refresh, stubbed so endpoint tests don't resolve
+    the shared ImagesClient mock into the image globals. Its own tests
+    import it from compute_client."""
+    stub = AsyncMock(return_value=None)
+    monkeypatch.setattr("runnerforge.main.refresh_runner_image", stub)
+    return stub
+
+
+@pytest.fixture(autouse=True)
 def serial_off(monkeypatch) -> AsyncMock:
     """Serial logging off (ADR-020), as the webhook and the reconciler call
     it: a stub, so their tests don't reach the shared GCE mock. Its own

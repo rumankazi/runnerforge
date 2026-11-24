@@ -16,7 +16,11 @@ from runnerforge.admission import (
     handle_installation_event,
     log_shadow_admission,
 )
-from runnerforge.compute_client import cross_check_preemption, wait_for_vm_creation
+from runnerforge.compute_client import (
+    cross_check_preemption,
+    refresh_runner_image,
+    wait_for_vm_creation,
+)
 from runnerforge.config import (
     ADMISSION,
     ALLOWED_INSTALLATION_IDS,
@@ -385,6 +389,9 @@ async def reconcile(
             with_log_context, get_context(), wait_for_vm_creation, handle
         )
 
+    # Before the run, so VMs its capacity pass starts get a newly promoted
+    # image too. Runs even when the job store is off.
+    await refresh_runner_image()
     result = await run_reconcile(on_started=watch)
     logger.info(
         "Reconcile completed",
