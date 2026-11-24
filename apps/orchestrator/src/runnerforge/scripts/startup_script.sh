@@ -5,7 +5,8 @@
 # as root, before any user logs in.
 #
 # Responsibilities:
-#   1. Format + mount the data disk at /home/runner/actions-runner/_work
+#   1. Format + mount the data disk, and put the runner's _work directory and
+#      Docker's and containerd's storage on it (the boot disk is only 10 GB)
 #   2. Fetch per-VM metadata (registration token, repo URL, runner labels)
 #   3. Configure + start the GitHub Actions runner as the `runner` user
 
@@ -45,13 +46,37 @@ else
     log "Data disk already formatted, skipping mkfs"
 fi
 
-# --- 3. Mount and chown ---
-DATA_DISK_MOUNT_LOCATION="/home/runner/actions-runner/_work"
-mkdir --parents "$DATA_DISK_MOUNT_LOCATION"
-mount "$DATA_DISK_DEVICE" "$DATA_DISK_MOUNT_LOCATION"
-# transfer ownership so that runner has permissions to execute the jobs/steps
-chown --recursive runner:runner "$DATA_DISK_MOUNT_LOCATION"
-log "Data disk mounted at $DATA_DISK_MOUNT_LOCATION"
+# --- 3. Mount, and move the runner's and the container engine's storage ---
+# The data disk is mounted at a neutral root, and three directories on it are
+# bound onto the paths that fill up: the runner's _work, /var/lib/docker and
+# /var/lib/containerd (Docker 29 keeps images in containerd's store). Bind
+# mounts keep every default path, so no daemon config changes, and this works
+# on any runner image.
+DATA_ROOT=/mnt/runnerforge
+WORK_DIR=/home/runner/actions-runner/_work
+# containerd starts before this script and dockerd races it, so stop both
+# (the socket first, so nothing reactivates dockerd) before their storage is
+# swapped. Nothing is copied: no image ships pre-pulled images, and both
+# start cleanly on an empty root. timeout: never bind under a live daemon.
+timeout 60 systemctl stop docker.socket docker.service containerd.service
+mkdir --parents "$DATA_ROOT"
+mountpoint --quiet "$DATA_ROOT" || mount "$DATA_DISK_DEVICE" "$DATA_ROOT"
+# Only work/ belongs to runner; the engine's directories stay root's, as
+# owning them would be root-equivalent.
+install --directory --owner=runner --group=runner --mode=0755 "$DATA_ROOT/work"
+install --directory --owner=root --group=root --mode=0710 "$DATA_ROOT/docker"
+install --directory --owner=root --group=root --mode=0711 "$DATA_ROOT/containerd"
+bind_dir() {
+    mkdir --parents "$2"
+    mountpoint --quiet "$2" || mount --bind "$1" "$2"
+}
+bind_dir "$DATA_ROOT/work" "$WORK_DIR"
+bind_dir "$DATA_ROOT/docker" /var/lib/docker
+bind_dir "$DATA_ROOT/containerd" /var/lib/containerd
+# --no-block: dockerd comes up while the runner configures. The socket queues
+# early clients instead of refusing them.
+systemctl start --no-block docker.socket docker.service
+log "Data disk at $DATA_ROOT; _work, /var/lib/docker and /var/lib/containerd on it"
 
 # --- 4. Fetch metadata ---
 # GCE's metadata server requires the Metadata-Flavor header (security check
@@ -109,6 +134,14 @@ sudo --user=runner bash -c "
         --unattended
 "
 rm -f "$TOKEN_FILE"
+
+# Not fatal: jobs without containers still run. A clear line here beats a
+# job failing on "Cannot connect to the Docker daemon" with no cause.
+for _ in {1..30}; do
+    docker info >/dev/null 2>&1 && break
+    sleep 1
+done
+docker info >/dev/null 2>&1 || log "WARNING: docker not ready; container jobs will fail"
 
 log "Starting runner"
 sudo --user=runner bash -c "cd $RUNNER_DIR && ./run.sh"
