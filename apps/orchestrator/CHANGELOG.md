@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.30.0...orchestrator-v0.30.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* **orchestrator:** pick up a newly promoted runner image without a restart ([#421](https://github.com/rumankazi/runnerforge/issues/421)) ([79f4fef](https://github.com/rumankazi/runnerforge/commit/79f4fef90991f9ea26e3500a4412d64725aeb306))
+
 ## [0.30.0](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.29.0...orchestrator-v0.30.0) (2026-11-23)
 
 
