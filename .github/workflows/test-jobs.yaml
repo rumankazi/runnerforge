@@ -23,6 +23,7 @@ jobs:
       - name: Environment
         run: |
           set -x
+          curl -s -H 'Metadata-Flavor: Google' 'http://metadata.google.internal/computeMetadata/v1/instance/disks/?recursive=true' | grep -o '"deviceName":"[^"]*"' || true
           cat /etc/os-release
           ls -l /etc/lsb-release || echo "no /etc/lsb-release"
           df -h / /home/runner/actions-runner/_work
@@ -31,11 +32,14 @@ jobs:
           ls -ld /var/lib/docker /var/lib/containerd || true
 
       - name: setup-node 26
+        id: node
+        continue-on-error: true
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
 
       - name: Node starts
+        continue-on-error: true
         run: node --version && ldd "$(command -v node)" | grep -E 'atomic|not found' || true
 
       - name: setup-python 3.13
@@ -46,6 +50,7 @@ jobs:
           python-version: "3.13"
 
       - name: setup-python outcome
+        if: always()
         env:
           OUTCOME: ${{ steps.py.outcome }}
         run: |
@@ -53,6 +58,7 @@ jobs:
           command -v python3 && python3 --version
 
       - name: Which disk a docker pull fills
+        if: always()
         run: |
           df -B1M --output=target,used / /home/runner/actions-runner/_work
           docker pull --quiet node:26
