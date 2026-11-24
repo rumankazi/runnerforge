@@ -933,6 +933,7 @@ def test_refresh_runner_image_switches_to_a_newly_promoted_image(monkeypatch, ca
     images.get_from_family.assert_called_once_with(
         project="test-project",
         family="runnerforge-runner",
+        retry=None,
         timeout=compute_client._IMAGE_REFRESH_TIMEOUT_SECONDS,
     )
 
@@ -1012,6 +1013,51 @@ def test_refresh_runner_image_skips_without_images_client(monkeypatch, caplog):
 
     assert compute_client._RUNNER_IMAGE_NAME == "runnerforge-runner-image-0-4-2"
     assert not any("Runner image" in r.message for r in caplog.records)
+
+
+def test_create_vm_labels_the_image_it_booted_from_when_a_refresh_lands_mid_insert(
+    monkeypatch, caplog
+):
+    """/reconcile can move the pin while a webhook's insert is in flight:
+    the VM boots from the image read before the insert, and its log and
+    handle must say that version, not the new one."""
+    monkeypatch.setattr(
+        "runnerforge.compute_client._RUNNER_IMAGE_NAME",
+        "runnerforge-runner-image-0-4-2",
+    )
+    monkeypatch.setattr("runnerforge.compute_client._RUNNER_IMAGE_VERSION", "0.4.2")
+
+    def insert(request):
+        monkeypatch.setattr(
+            "runnerforge.compute_client._RUNNER_IMAGE_NAME",
+            "runnerforge-runner-image-0-5-0",
+        )
+        monkeypatch.setattr("runnerforge.compute_client._RUNNER_IMAGE_VERSION", "0.5.0")
+        op = MagicMock()
+        op.name = "op-mid-refresh"
+        return op
+
+    mock_client = MagicMock()
+    mock_client.insert.side_effect = insert
+    monkeypatch.setattr("runnerforge.compute_client._compute_client", mock_client)
+
+    with caplog.at_level(logging.INFO):
+        handle = asyncio.run(
+            create_vm(
+                instance_name="x",
+                machine_type="e2-micro",
+                labels={"runner": "runnerforge"},
+            )
+        )
+
+    request = mock_client.insert.call_args.kwargs["request"]
+    assert request.instance_resource.disks[0].initialize_params.source_image.endswith(
+        "/runnerforge-runner-image-0-4-2"
+    )
+    assert handle is not None
+    assert handle.image_version == "0.4.2"
+    log = next(r for r in caplog.records if r.message == "Submitted VM creation")
+    assert log.image_version == "0.4.2"
 
 
 # -----------------------------------------------------------------------------

@@ -227,6 +227,9 @@ async def refresh_runner_image() -> None:
             _images_client.get_from_family,
             project=RUNNER_IMAGE_PROJECT,
             family=_RUNNER_IMAGE_FAMILY,
+            # timeout bounds one attempt; the client's default retry would
+            # keep trying 503s for up to 600 s, past the scheduler's 180 s.
+            retry=None,
             timeout=_IMAGE_REFRESH_TIMEOUT_SECONDS,
         )
     except (GoogleAPIError, GoogleAuthError, RequestException) as e:
@@ -422,9 +425,13 @@ async def create_vm(
     # otherwise fall back to the family alias (which is already qualified).
     # The image lives in RUNNER_IMAGE_PROJECT, not necessarily project_id
     # (the project the VM is created in).
+    # Read once, together: /reconcile's refresh_runner_image can move the pin
+    # while insert is awaited, and the VM must be labelled with the image it
+    # actually booted from.
+    image_name, image_version = _RUNNER_IMAGE_NAME, _RUNNER_IMAGE_VERSION
     source_image = (
-        f"projects/{RUNNER_IMAGE_PROJECT}/global/images/{_RUNNER_IMAGE_NAME}"
-        if _RUNNER_IMAGE_NAME
+        f"projects/{RUNNER_IMAGE_PROJECT}/global/images/{image_name}"
+        if image_name
         else _BOOT_IMAGE_FAMILY
     )
     with tracer.start_as_current_span("compute.create_vm") as span:
@@ -532,7 +539,7 @@ async def create_vm(
                 "operation_id": operation.name,
                 "machine_type": machine_type,
                 "spot": spot,
-                "image_version": _RUNNER_IMAGE_VERSION,
+                "image_version": image_version,
             },
         )
         return OperationHandle(
@@ -541,7 +548,7 @@ async def create_vm(
             zone=zone,
             machine_type=machine_type,
             spot=spot,
-            image_version=_RUNNER_IMAGE_VERSION,
+            image_version=image_version,
             vm_name=instance_name,
         )
 

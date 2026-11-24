@@ -21,7 +21,7 @@ The code is the source of truth. If an ADR here disagrees with `apps/orchestrato
 | [010](#spot-vms-and-the-runs-on-label-grammar) | Spot VMs and the `runs-on` label grammar | accepted |
 | [011](#cloud-nat-egress-with-no-external-ips) | Cloud NAT egress, no external IPs | accepted |
 | [012](#opentelemetry-traces-exported-to-cloud-trace) | OpenTelemetry traces to Cloud Trace | accepted |
-| [013](#runner-image-pinned-at-startup-with-deprecate-then-delete-retention) | Runner image pinned at startup, deprecate-then-delete retention | accepted |
+| [013](#runner-image-pinned-by-name-with-deprecate-then-delete-retention) | Runner image pinned by name, deprecate-then-delete retention | accepted |
 | [014](#gce-enforced-runtime-cap-with-delete) | GCE-enforced runtime cap with DELETE | accepted |
 | [015](#installation-allow-list-as-a-stop-gap-admission-control) | Installation allow-list as stop-gap admission control | accepted, revised |
 | [016](#multi-tenancy-scope-installation-as-tenant) | Multi-tenancy scope: installation = tenant | accepted, revised |
@@ -57,7 +57,7 @@ Cloud Run. The zero-idle-cost model is the deciding factor for sporadic usage. T
 ### Consequences
 
 - Zero compute cost when idle (`min_instance_count = 0` in `infra/terraform/cloud_run.tf`; see [ADR-008](#scale-to-zero-orchestrator-with-skip-fast-on-non-runnerforge-webhooks) for the cold-start trade-off).
-- Instances are **not** one-request-per-container. `max_instance_request_concurrency = 10`, so up to 10 webhooks share one Python process, and the service scales between 0 and 50 instances. What a process holds is limited to API clients and startup caches (the GCE machine-type list and the pinned runner image, see [ADR-013](#runner-image-pinned-at-startup-with-deprecate-then-delete-retention)). No job state lives in the process, so any instance can handle any event.
+- Instances are **not** one-request-per-container. `max_instance_request_concurrency = 10`, so up to 10 webhooks share one Python process, and the service scales between 0 and 50 instances. What a process holds is limited to API clients and startup caches (the GCE machine-type list and the pinned runner image, see [ADR-013](#runner-image-pinned-by-name-with-deprecate-then-delete-retention)). No job state lives in the process, so any instance can handle any event.
 - No long-lived background loops. Work that must outlive a request is either a FastAPI `BackgroundTasks` job tied to that request (the VM-creation watcher and the preemption cross-check) or the `/sweep` endpoint, which Cloud Scheduler calls once a day (`12 0 * * *` UTC in `infra/terraform/scheduler.tf`).
 
 ---
@@ -478,7 +478,7 @@ Logs say what happened; they don't show where the time went inside a webhook (Gi
 
 <Record type="adr" id="013" status="accepted" date="2026-06-10" />
 
-## Runner image pinned at startup with deprecate-then-delete retention
+## Runner image pinned by name with deprecate-then-delete retention
 
 ### Context
 
@@ -488,7 +488,7 @@ Runner images are built by Packer and published into the image family `runnerfor
 
 - **Boot every VM from the family alias**: always newest, but no stable per-instance version and nothing to attribute failures to.
 - **Pin an image in config**: exact, but every image release would need an orchestrator change.
-- **Resolve the family once per orchestrator instance, then pin by name** (chosen).
+- **Resolve the family per orchestrator instance, then pin by name** (chosen): at startup, and since 0.30.1 again on each `/reconcile` call.
 - **Retention by hard delete**: simple, but irreversible.
 - **Deprecate first, delete later** (chosen).
 
@@ -502,7 +502,7 @@ Runner images are built by Packer and published into the image family `runnerfor
 
 ### Consequences
 
-- Every VM from one orchestrator instance uses one known image, and failures can be sliced by `image_version`.
+- Every VM is created from a named image recorded as its `image_version`, so failures can be sliced by image. One instance can move to a newer image between reconcile runs.
 - A newly promoted image reaches an orchestrator instance at its next `/reconcile` call, within about 5 minutes. An instance that gets no scheduler call (one of several, scaled out) keeps the older pin until it does, or until it stops.
 - Deprecated images stay available for 30 days for forensics and rollback.
 - The retention step is `continue-on-error`, so a failure there doesn't fail an image release; it needs a look at the workflow log.
