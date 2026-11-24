@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/rumankazi/runnerforge/compare/runner-image-v0.4.2...runner-image-v0.5.0) (2026-11-24)
+
+
+### Features
+
+* **runner-image:** ship essential libraries and tools for jobs ([#419](https://github.com/rumankazi/runnerforge/issues/419)) ([adce8fa](https://github.com/rumankazi/runnerforge/commit/adce8faae9b18c05c68b88c883239fdac386a29c))
+
 ## [0.4.2](https://github.com/rumankazi/runnerforge/compare/runner-image-v0.4.1...runner-image-v0.4.2) (2026-10-27)
 
 
