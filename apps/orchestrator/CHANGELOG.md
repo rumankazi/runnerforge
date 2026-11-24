@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.2](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.30.1...orchestrator-v0.30.2) (2026-11-24)
+
+
+### Bug Fixes
+
+* **orchestrator:** keep Docker and containerd storage on the data disk ([#423](https://github.com/rumankazi/runnerforge/issues/423)) ([df2d2b9](https://github.com/rumankazi/runnerforge/commit/df2d2b982fa5bbb7579cfc479bbab775cbb93cb1))
+
 ## [0.30.1](https://github.com/rumankazi/runnerforge/compare/orchestrator-v0.30.0...orchestrator-v0.30.1) (2026-11-24)
 
 
