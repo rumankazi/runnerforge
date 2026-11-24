@@ -1961,7 +1961,7 @@ wheels = [
 
 [[package]]
 name = "runnerforge"
-version = "0.30.0"
+version = "0.30.1"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
